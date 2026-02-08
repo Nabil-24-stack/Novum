@@ -44,9 +44,18 @@ export function SandpackFileSync({ files }: SandpackFileSyncProps) {
     pendingUpdatesRef.current = {};
     deletedPathsRef.current = new Set();
 
-    // Apply updates without triggering preview yet (false = don't update preview per file)
-    Object.entries(updates).forEach(([path, content]) => {
-      sandpack.updateFile(path, content, false);
+    // Determine if we need a full reset vs just HMR
+    const hasNewFiles = updatePaths.some(path => !(path in prevFilesRef.current));
+    const hasManyChanges = updatePaths.length > 3;
+    const hasPackageJson = updatePaths.includes("/package.json");
+    const needsFullRestart = hasNewFiles || hasManyChanges || hasPackageJson;
+
+    // Apply updates - for minor changes, trigger preview on the last file
+    // to ensure HMR fires. For structural changes, defer to runSandpack().
+    const updateEntries = Object.entries(updates);
+    updateEntries.forEach(([path, content], i) => {
+      const isLast = i === updateEntries.length - 1;
+      sandpack.updateFile(path, content, isLast && !needsFullRestart);
     });
 
     // Apply deletes
@@ -54,12 +63,7 @@ export function SandpackFileSync({ files }: SandpackFileSyncProps) {
       sandpack.deleteFile(path);
     });
 
-    // Determine if we need a full reset vs just HMR
-    const hasNewFiles = updatePaths.some(path => !(path in prevFilesRef.current));
-    const hasManyChanges = updatePaths.length > 3;
-    const hasPackageJson = updatePaths.includes("/package.json");
-
-    if (hasNewFiles || hasManyChanges || hasPackageJson) {
+    if (needsFullRestart) {
       console.log("[SandpackSync] Structural change detected, running full reset", {
         hasNewFiles,
         hasManyChanges,
@@ -67,9 +71,7 @@ export function SandpackFileSync({ files }: SandpackFileSyncProps) {
       });
       sandpack.runSandpack();
     } else {
-      // For smaller changes, trigger a single preview update
-      // This is handled by Sandpack's internal HMR after file updates
-      console.log("[SandpackSync] Minor change, relying on HMR");
+      console.log("[SandpackSync] Minor change, triggered HMR via updateFile");
     }
   }, [sandpack]);
 

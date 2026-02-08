@@ -81,6 +81,8 @@ interface RightPanelProps {
   onSelectedElementSourceUpdate?: (source: SourceLocation) => void;
   /** Called when keyboard delete removes the selected element */
   onClearSelection?: () => void;
+  /** Current canvas mode - used to flush pending edits on view switch */
+  canvasMode?: string;
 }
 
 export function RightPanel({
@@ -93,6 +95,7 @@ export function RightPanel({
   onTabChange,
   onSelectedElementSourceUpdate,
   onClearSelection,
+  canvasMode,
 }: RightPanelProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [internalActiveTab, setInternalActiveTab] = useState<TabType>("chat");
@@ -211,6 +214,19 @@ export function RightPanel({
 
     lastInspectionMode.current = isInspecting;
   }, [inspectionMode, draftEditor]);
+
+  // Trigger 3: Commit when canvas mode changes (e.g., Flow → Prototype)
+  // Without this, the debounce timer may fire after the SandpackWrapper remounts,
+  // causing the edit to be written to VFS but not recompiled into the preview.
+  const lastCanvasMode = useRef<string | undefined>(canvasMode);
+  useEffect(() => {
+    if (canvasMode !== lastCanvasMode.current) {
+      if (lastCanvasMode.current !== undefined) {
+        draftEditor.flush();
+      }
+      lastCanvasMode.current = canvasMode;
+    }
+  }, [canvasMode, draftEditor]);
 
   // Handler for manual tab switches
   const handleTabChange = (tab: TabType) => {

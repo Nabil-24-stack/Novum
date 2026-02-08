@@ -499,6 +499,7 @@ export default function Home() {
           onTabChange={setRightPanelTab}
           onSelectedElementSourceUpdate={inspection.updateSelectedElementSource}
           onClearSelection={inspection.clearSelection}
+          canvasMode={canvasMode}
           className={`shrink-0 ${viewMode !== "app" ? "hidden" : ""}`}
         />
 
