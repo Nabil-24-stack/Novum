@@ -1,10 +1,11 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { useEffect, useRef, useState, useCallback, DragEvent, ClipboardEvent, FormEvent } from "react";
-import { Send, Loader2, X, ImagePlus, ChevronDown } from "lucide-react";
+import { useEffect, useRef, useState, useCallback, useMemo, DragEvent, ClipboardEvent, FormEvent } from "react";
+import { Send, Loader2, X, ImagePlus, ChevronDown, ArrowRight, Check, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { useChatContextStore } from "@/hooks/useChatContextStore";
+import { useStrategyStore, type StrategyPhase } from "@/hooks/useStrategyStore";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
 import type { FileUIPart } from "ai";
 
@@ -23,11 +24,29 @@ const MODEL_OPTIONS: { id: ModelId; label: string; provider: string }[] = [
 interface ChatTabProps {
   writeFile: (path: string, content: string) => void;
   files: Record<string, string>;
+  strategyPhase?: StrategyPhase;
+  onPhaseAction?: (action: "approve-manifesto" | "approve-flow") => void;
+  /** Called when user sends their first message in hero phase (phase transition to manifesto) */
+  onHeroSubmit?: () => void;
 }
 
 // Regex to match code blocks with file attribute
 // Matches: ```lang file="path" or ```lang file="/path"
 const CODE_BLOCK_REGEX = /```(\w+)?\s+file="([^"]+)"\n([\s\S]*?)```/g;
+
+// Regex to match strategy JSON blocks
+const MANIFESTO_REGEX = /```json\s+type="manifesto"\n([\s\S]*?)```/g;
+const FLOW_REGEX = /```json\s+type="flow"\n([\s\S]*?)```/g;
+const OPTIONS_REGEX = /```json\s+type="options"\n([\s\S]*?)```/g;
+
+interface OptionBlock {
+  question: string;
+  options: string[];
+}
+
+// Module-scoped sets to survive component remounts (e.g., docked → floating switch)
+const processedBlocksSet = new Set<string>();
+const processedStrategyBlocksSet = new Set<string>();
 
 function extractCodeBlocks(text: string): Array<{ path: string; content: string }> {
   const blocks: Array<{ path: string; content: string }> = [];
@@ -45,15 +64,143 @@ function extractCodeBlocks(text: string): Array<{ path: string; content: string 
   return blocks;
 }
 
-export function ChatTab({ writeFile, files }: ChatTabProps) {
+// --- Partial overview extraction for real-time streaming ---
+
+function extractJsonStringValue(content: string, key: string): string | undefined {
+  const keyPattern = `"${key}"`;
+  const keyIdx = content.indexOf(keyPattern);
+  if (keyIdx === -1) return undefined;
+
+  // Find the colon after the key
+  let i = keyIdx + keyPattern.length;
+  while (i < content.length && content[i] !== ':') i++;
+  if (i >= content.length) return undefined;
+  i++; // skip colon
+
+  // Find opening quote
+  while (i < content.length && content[i] !== '"') i++;
+  if (i >= content.length) return undefined;
+  i++; // skip opening quote
+
+  // Read until closing quote or end of content
+  let value = '';
+  while (i < content.length) {
+    if (content[i] === '\\' && i + 1 < content.length) {
+      const next = content[i + 1];
+      if (next === '"') value += '"';
+      else if (next === 'n') value += '\n';
+      else if (next === '\\') value += '\\';
+      else value += next;
+      i += 2;
+    } else if (content[i] === '"') {
+      return value; // complete value
+    } else {
+      value += content[i];
+      i++;
+    }
+  }
+  // No closing quote — partial value still being streamed
+  return value;
+}
+
+function extractJsonArrayItems(content: string, key: string): string[] | undefined {
+  const keyPattern = `"${key}"`;
+  const keyIdx = content.indexOf(keyPattern);
+  if (keyIdx === -1) return undefined;
+
+  let i = keyIdx + keyPattern.length;
+  while (i < content.length && content[i] !== '[') i++;
+  if (i >= content.length) return undefined;
+  i++; // skip [
+
+  const items: string[] = [];
+  while (i < content.length) {
+    while (i < content.length && /[\s,]/.test(content[i])) i++;
+    if (i >= content.length || content[i] === ']') break;
+
+    if (content[i] === '"') {
+      i++; // skip opening quote
+      let value = '';
+      let closed = false;
+      while (i < content.length) {
+        if (content[i] === '\\' && i + 1 < content.length) {
+          const next = content[i + 1];
+          if (next === '"') value += '"';
+          else if (next === 'n') value += '\n';
+          else if (next === '\\') value += '\\';
+          else value += next;
+          i += 2;
+        } else if (content[i] === '"') {
+          closed = true;
+          i++;
+          break;
+        } else {
+          value += content[i];
+          i++;
+        }
+      }
+      items.push(value);
+      if (!closed) break; // partial item — stop here
+    } else {
+      i++;
+    }
+  }
+  return items.length > 0 ? items : undefined;
+}
+
+function extractPartialOverview(text: string): Partial<import("@/hooks/useStrategyStore").ManifestoData> | null {
+  const marker = '```json type="manifesto"';
+  const blockStart = text.indexOf(marker);
+  if (blockStart === -1) return null;
+
+  const content = text.slice(blockStart + marker.length);
+  const result: Partial<import("@/hooks/useStrategyStore").ManifestoData> = {};
+
+  const title = extractJsonStringValue(content, 'title');
+  if (title !== undefined) result.title = title;
+
+  const problemStatement = extractJsonStringValue(content, 'problemStatement');
+  if (problemStatement !== undefined) result.problemStatement = problemStatement;
+
+  const targetUser = extractJsonStringValue(content, 'targetUser');
+  if (targetUser !== undefined) result.targetUser = targetUser;
+
+  const jtbd = extractJsonArrayItems(content, 'jtbd');
+  if (jtbd !== undefined) result.jtbd = jtbd;
+
+  const solution = extractJsonStringValue(content, 'solution');
+  if (solution !== undefined) result.solution = solution;
+
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function extractOptionBlocks(text: string): OptionBlock[] {
+  const blocks: OptionBlock[] = [];
+  let match;
+  while ((match = OPTIONS_REGEX.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (parsed.question && Array.isArray(parsed.options) && parsed.options.length >= 2) {
+        blocks.push({ question: parsed.question, options: parsed.options });
+      }
+    } catch {
+      // Skip invalid JSON
+    }
+  }
+  OPTIONS_REGEX.lastIndex = 0;
+  return blocks;
+}
+
+export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHeroSubmit }: ChatTabProps) {
   const [input, setInput] = useState("");
   const [selectedModel, setSelectedModel] = useState<ModelId>("gemini-2.5-pro");
   const [stagedImages, setStagedImages] = useState<FileUIPart[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const processedBlocksRef = useRef<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { pinnedElements, unpinElement, clearPinnedElements } = useChatContextStore();
+  const manifestoData = useStrategyStore((s) => s.manifestoData);
+  const flowData = useStrategyStore((s) => s.flowData);
 
   const { messages, sendMessage, status, error } = useChat({
     onError: (err) => {
@@ -62,6 +209,74 @@ export function ChatTab({ writeFile, files }: ChatTabProps) {
   });
 
   const isLoading = status === "submitted" || status === "streaming";
+
+  // --- Question Tabs State ---
+  const [questionAnswers, setQuestionAnswers] = useState<Record<number, string>>({});
+  const [questionActiveTab, setQuestionActiveTab] = useState(0);
+  const [questionWriteOwn, setQuestionWriteOwn] = useState<number | null>(null);
+  const lastOptionsMsgId = useRef<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Compute current option blocks from last assistant message
+  const currentOptionBlocks = useMemo(() => {
+    if (isLoading) return [];
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return [];
+    const text =
+      lastAssistant.parts
+        ?.filter((p): p is { type: "text"; text: string } => p.type === "text")
+        .map((p) => p.text)
+        .join("") ||
+      ("content" in lastAssistant && typeof lastAssistant.content === "string"
+        ? lastAssistant.content
+        : "");
+    return extractOptionBlocks(text);
+  }, [messages, isLoading]);
+
+  // Only show question tabs before manifesto is generated (clarifying phase)
+  const hasActiveQuestions = currentOptionBlocks.length > 0 && !manifestoData;
+
+  // Reset question state when a new set of options arrives
+  useEffect(() => {
+    if (!hasActiveQuestions) return;
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (lastAssistant && lastAssistant.id !== lastOptionsMsgId.current) {
+      lastOptionsMsgId.current = lastAssistant.id;
+      setQuestionAnswers({});
+      setQuestionActiveTab(0);
+      setQuestionWriteOwn(null);
+    }
+  }, [messages, hasActiveQuestions]);
+
+  // --- Stream partial overview data to the canvas in real-time ---
+  useEffect(() => {
+    if (!isLoading) {
+      // When streaming ends, clear streaming state (full parse in the extraction effect sets manifestoData)
+      if (useStrategyStore.getState().streamingOverview) {
+        useStrategyStore.getState().setStreamingOverview(null);
+      }
+      return;
+    }
+
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return;
+
+    let textContent = "";
+    if (lastAssistant.parts && Array.isArray(lastAssistant.parts)) {
+      textContent = lastAssistant.parts
+        .filter((p): p is { type: "text"; text: string } => p.type === "text")
+        .map((p) => p.text)
+        .join("");
+    }
+    if (!textContent && "content" in lastAssistant && typeof lastAssistant.content === "string") {
+      textContent = lastAssistant.content;
+    }
+
+    const partial = extractPartialOverview(textContent);
+    if (partial) {
+      useStrategyStore.getState().setStreamingOverview(partial);
+    }
+  }, [messages, isLoading]);
 
   // Log for debugging
   useEffect(() => {
@@ -94,8 +309,8 @@ export function ChatTab({ writeFile, files }: ChatTabProps) {
           const blockKey = `${message.id}-${block.path}-${block.content.length}`;
 
           // Only write if we haven't processed this exact block before
-          if (!processedBlocksRef.current.has(blockKey)) {
-            processedBlocksRef.current.add(blockKey);
+          if (!processedBlocksSet.has(blockKey)) {
+            processedBlocksSet.add(blockKey);
             const gated = runGatekeeper(block.content, files, block.path);
             if (gated.report.hadChanges) {
               const total = gated.report.colorViolations.length
@@ -111,6 +326,60 @@ export function ChatTab({ writeFile, files }: ChatTabProps) {
       }
     });
   }, [messages, writeFile]);
+
+  // Extract strategy JSON (manifesto/flow) from AI responses
+  useEffect(() => {
+    messages.forEach((message) => {
+      if (message.role !== "assistant") return;
+
+      let textContent = "";
+      if (message.parts && Array.isArray(message.parts)) {
+        textContent = message.parts
+          .filter((part): part is { type: "text"; text: string } => part.type === "text")
+          .map((part) => part.text)
+          .join("");
+      }
+      if (!textContent && "content" in message && typeof message.content === "string") {
+        textContent = message.content;
+      }
+      if (!textContent) return;
+
+      // Extract manifesto blocks
+      let match;
+      while ((match = MANIFESTO_REGEX.exec(textContent)) !== null) {
+        const blockKey = `manifesto-${message.id}-${match.index}`;
+        if (!processedStrategyBlocksSet.has(blockKey)) {
+          processedStrategyBlocksSet.add(blockKey);
+          try {
+            const parsed = JSON.parse(match[1]);
+            if (parsed.title && parsed.problemStatement && parsed.targetUser && Array.isArray(parsed.jtbd) && parsed.solution) {
+              useStrategyStore.getState().setManifestoData(parsed);
+            }
+          } catch (e) {
+            console.warn("[Strategy] Failed to parse manifesto JSON:", e);
+          }
+        }
+      }
+      MANIFESTO_REGEX.lastIndex = 0;
+
+      // Extract flow blocks
+      while ((match = FLOW_REGEX.exec(textContent)) !== null) {
+        const blockKey = `flow-${message.id}-${match.index}`;
+        if (!processedStrategyBlocksSet.has(blockKey)) {
+          processedStrategyBlocksSet.add(blockKey);
+          try {
+            const parsed = JSON.parse(match[1]);
+            if (Array.isArray(parsed.nodes) && Array.isArray(parsed.connections)) {
+              useStrategyStore.getState().setFlowData(parsed);
+            }
+          } catch (e) {
+            console.warn("[Strategy] Failed to parse flow JSON:", e);
+          }
+        }
+      }
+      FLOW_REGEX.lastIndex = 0;
+    });
+  }, [messages]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -220,6 +489,66 @@ export function ChatTab({ writeFile, files }: ChatTabProps) {
     setStagedImages((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
+  // --- Quick reply (option click) ---
+
+  const sendQuickReply = useCallback(
+    (text: string) => {
+      if (isLoading) return;
+
+      // Build context (same as manifesto/flow phases)
+      const storeState = useStrategyStore.getState();
+      const parts: string[] = [];
+      if (storeState.manifestoData) {
+        parts.push(`## Current Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
+      }
+      if (storeState.flowData) {
+        parts.push(`## Current Flow Architecture\n\n${JSON.stringify(storeState.flowData, null, 2)}`);
+      }
+      const vfsContext = parts.join("\n\n");
+
+      sendMessage(
+        { text },
+        { body: { vfsContext, modelId: selectedModel, strategyPhase } }
+      );
+    },
+    [isLoading, sendMessage, selectedModel, strategyPhase]
+  );
+
+  // --- Question Tab Handlers ---
+
+  const handleOptionSelect = useCallback(
+    (questionIdx: number, answer: string) => {
+      setQuestionAnswers((prev) => ({ ...prev, [questionIdx]: answer }));
+      setQuestionWriteOwn(null);
+      // Auto-advance to next tab (including Submit tab at the end)
+      const nextTab = questionIdx + 1;
+      if (nextTab <= currentOptionBlocks.length) {
+        setQuestionActiveTab(nextTab);
+      }
+    },
+    [currentOptionBlocks.length]
+  );
+
+  const handleWriteOwnSelect = useCallback((questionIdx: number) => {
+    setQuestionWriteOwn(questionIdx);
+    setQuestionActiveTab(questionIdx);
+    // Focus the main input after a tick
+    setTimeout(() => inputRef.current?.focus(), 50);
+  }, []);
+
+  const handleSubmitAllAnswers = useCallback(() => {
+    const parts = currentOptionBlocks.map((block, idx) => {
+      const answer = questionAnswers[idx];
+      return `**${block.question}**\n${answer || "(skipped)"}`;
+    });
+    sendQuickReply(parts.join("\n\n"));
+    // Reset state
+    setQuestionAnswers({});
+    setQuestionActiveTab(0);
+    setQuestionWriteOwn(null);
+    lastOptionsMsgId.current = null;
+  }, [currentOptionBlocks, questionAnswers, sendQuickReply]);
+
   // --- Submit ---
 
   const handleSubmit = async (e: FormEvent) => {
@@ -233,50 +562,105 @@ export function ChatTab({ writeFile, files }: ChatTabProps) {
     const messageText = input.trim();
     const imagesToSend = [...stagedImages];
 
+    // If "Write my own" is active, capture text as the answer for that question
+    if (hasActiveQuestions && questionWriteOwn !== null && hasText) {
+      setInput("");
+      handleOptionSelect(questionWriteOwn, messageText);
+      return;
+    }
+
     // Clear input state immediately
     setInput("");
     setStagedImages([]);
 
-    // Build context from current VFS files so AI knows what exists
-    // Note: We don't send tokens.json directly - the system prompt explains semantic tokens
-    const contextFiles = ["/design-system.tsx", "/App.tsx", "/components/ui/index.ts"];
-    const fileContextParts = contextFiles
-      .filter((path) => files[path])
-      .map((path) => `Current ${path}:\n\`\`\`tsx\n${files[path]}\n\`\`\``);
+    // Hero phase: transition to manifesto before sending
+    let effectivePhase = strategyPhase;
+    if (strategyPhase === "hero") {
+      useStrategyStore.getState().setUserPrompt(messageText);
+      useStrategyStore.getState().setPhase("manifesto");
+      effectivePhase = "manifesto";
+      onHeroSubmit?.();
+    }
 
-    // Add a reminder about semantic tokens
-    const tokenReminder = `## IMPORTANT: Color Usage Reminder
+    // Build context based on strategy phase
+    let vfsContext: string | Record<string, string> = "";
+
+    if (effectivePhase === "manifesto" || effectivePhase === "flow") {
+      // In strategy phases, send manifesto/flow data as context instead of VFS
+      const storeState = useStrategyStore.getState();
+      const parts: string[] = [];
+      if (storeState.manifestoData) {
+        parts.push(`## Current Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
+      }
+      if (storeState.flowData) {
+        parts.push(`## Current Flow Architecture\n\n${JSON.stringify(storeState.flowData, null, 2)}`);
+      }
+      vfsContext = parts.join("\n\n");
+    } else if (effectivePhase === "building") {
+      // In build phase, send full VFS context plus strategy context
+      const storeState = useStrategyStore.getState();
+      const contextFiles = ["/design-system.tsx", "/App.tsx", "/components/ui/index.ts"];
+      const fileContextParts = contextFiles
+        .filter((path) => files[path])
+        .map((path) => `Current ${path}:\n\`\`\`tsx\n${files[path]}\n\`\`\``);
+
+      const tokenReminder = `## IMPORTANT: Color Usage Reminder
 Use ONLY semantic token classes (bg-primary, bg-card, text-foreground, text-muted-foreground, border-border, etc.).
 NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as they break the user's theme customization.`;
 
-    let vfsContext =
-      fileContextParts.length > 0
+      const vfs = fileContextParts.length > 0
         ? `## Current VFS State (use this as your source of truth)\n\n${fileContextParts.join("\n\n")}\n\n${tokenReminder}`
         : tokenReminder;
 
-    // Include pinned element context
-    const elementContextParts = pinnedElements
-      .map((el) => {
-        const fileContent = files[el.source.fileName];
-        if (!fileContent) return null;
+      vfsContext = {
+        vfs,
+        manifestoContext: storeState.manifestoData
+          ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\nWhat ${storeState.manifestoData.targetUser} Need To Get Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}\nSolution: ${storeState.manifestoData.solution}`
+          : "",
+        flowContext: storeState.flowData
+          ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`
+          : "",
+      };
+    } else {
+      // Default: existing VFS context behavior
+      const contextFiles = ["/design-system.tsx", "/App.tsx", "/components/ui/index.ts"];
+      const fileContextParts = contextFiles
+        .filter((path) => files[path])
+        .map((path) => `Current ${path}:\n\`\`\`tsx\n${files[path]}\n\`\`\``);
 
-        const lines = fileContent.split("\n");
-        const annotated = lines
-          .map((line, i) => {
-            const num = i + 1;
-            const marker = num === el.source.line ? ">>> " : "    ";
-            return `${marker}${String(num).padStart(4)}| ${line}`;
-          })
-          .join("\n");
+      const tokenReminder = `## IMPORTANT: Color Usage Reminder
+Use ONLY semantic token classes (bg-primary, bg-card, text-foreground, text-muted-foreground, border-border, etc.).
+NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as they break the user's theme customization.`;
 
-        return `### Selected Element: ${el.displayLabel}\nFile: ${el.source.fileName} (line ${el.source.line})\nTag: <${el.tagName}>\n${el.className ? `Classes: ${el.className}` : ""}\n${el.textContent ? `Text: "${el.textContent}"` : ""}\n\n\`\`\`tsx\n${annotated}\n\`\`\``;
-      })
-      .filter(Boolean);
+      vfsContext =
+        fileContextParts.length > 0
+          ? `## Current VFS State (use this as your source of truth)\n\n${fileContextParts.join("\n\n")}\n\n${tokenReminder}`
+          : tokenReminder;
 
-    if (elementContextParts.length > 0) {
-      vfsContext +=
-        "\n\n## Selected Elements (user pinned these for context - focus edits on these)\n\n" +
-        elementContextParts.join("\n\n");
+      // Include pinned element context
+      const elementContextParts = pinnedElements
+        .map((el) => {
+          const fileContent = files[el.source.fileName];
+          if (!fileContent) return null;
+
+          const lines = fileContent.split("\n");
+          const annotated = lines
+            .map((line, i) => {
+              const num = i + 1;
+              const marker = num === el.source.line ? ">>> " : "    ";
+              return `${marker}${String(num).padStart(4)}| ${line}`;
+            })
+            .join("\n");
+
+          return `### Selected Element: ${el.displayLabel}\nFile: ${el.source.fileName} (line ${el.source.line})\nTag: <${el.tagName}>\n${el.className ? `Classes: ${el.className}` : ""}\n${el.textContent ? `Text: "${el.textContent}"` : ""}\n\n\`\`\`tsx\n${annotated}\n\`\`\``;
+        })
+        .filter(Boolean);
+
+      if (elementContextParts.length > 0) {
+        vfsContext +=
+          "\n\n## Selected Elements (user pinned these for context - focus edits on these)\n\n" +
+          elementContextParts.join("\n\n");
+      }
     }
 
     // Build the message payload
@@ -288,7 +672,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
     // Pass context via request-level body option (hidden from UI, sent to API)
     await sendMessage(
       messagePayload as { text: string; files?: FileUIPart[] },
-      { body: { vfsContext, modelId: selectedModel } }
+      { body: { vfsContext, modelId: selectedModel, strategyPhase: effectivePhase } }
     );
 
     // Clear pinned elements after sending
@@ -330,35 +714,128 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className={`flex-1 p-4 space-y-4 ${messages.length === 0 ? "overflow-hidden" : "overflow-y-auto"}`}>
         {messages.length === 0 && (
-          <div className="text-center text-neutral-500 text-base py-8">
-            <p>Ask me to modify your UI!</p>
-            <p className="mt-2 text-sm text-neutral-400">
-              Try: &quot;Change the button to red&quot;
-            </p>
+          <div className="text-center text-neutral-500 text-base flex flex-col items-center justify-center h-full">
+            {strategyPhase === "hero" ? (
+              <>
+                <h2 className="text-2xl font-semibold text-neutral-900 text-center leading-tight">
+                  What problem do you want to solve?
+                </h2>
+                <p className="mt-3 text-sm text-neutral-500 text-center max-w-sm">
+                  Describe the problem, and I&apos;ll help you design and build a web app to solve it.
+                </p>
+              </>
+            ) : strategyPhase === "manifesto" ? (
+              <>
+                <p>I&apos;m analyzing your problem...</p>
+                <p className="mt-2 text-sm text-neutral-400">
+                  I&apos;ll help you define a clear product overview.
+                </p>
+              </>
+            ) : strategyPhase === "flow" ? (
+              <>
+                <p>Let&apos;s design the architecture...</p>
+                <p className="mt-2 text-sm text-neutral-400">
+                  I&apos;ll map out the pages and flows for your app.
+                </p>
+              </>
+            ) : (
+              <>
+                <p>Ask me to modify your UI!</p>
+                <p className="mt-2 text-sm text-neutral-400">
+                  Try: &quot;Change the button to red&quot;
+                </p>
+              </>
+            )}
           </div>
         )}
 
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex ${
-              message.role === "user" ? "justify-end" : "justify-start"
-            }`}
-          >
-            <div
-              className={`max-w-[85%] rounded-lg px-3 py-2 text-base ${
-                message.role === "user"
-                  ? "bg-neutral-900 text-white"
-                  : "bg-neutral-100 text-neutral-800"
-              }`}
-            >
-              <MessageImages parts={message.parts} isUser={message.role === "user"} />
-              <MessageContent content={getMessageText(message)} />
+        {messages.map((message, messageIndex) => {
+          const text = getMessageText(message);
+          const isLastAssistant =
+            message.role === "assistant" &&
+            messageIndex === messages.length - 1;
+
+          return (
+            <div key={message.id}>
+              <div
+                className={`flex ${
+                  message.role === "user" ? "justify-end" : "justify-start"
+                }`}
+              >
+                <div
+                  className={`max-w-[85%] rounded-lg px-3 py-2 text-base ${
+                    message.role === "user"
+                      ? "bg-neutral-900 text-white"
+                      : "bg-neutral-100 text-neutral-800"
+                  }`}
+                >
+                  <MessageImages parts={message.parts} isUser={message.role === "user"} />
+                  <MessageContent content={text} />
+                </div>
+              </div>
+
+              {/* Tabbed question interface — only for the last assistant message */}
+              {isLastAssistant && !isLoading && currentOptionBlocks.length > 0 && (
+                <QuestionTabs
+                  blocks={currentOptionBlocks}
+                  answers={questionAnswers}
+                  activeTab={questionActiveTab}
+                  writeOwnIdx={questionWriteOwn}
+                  onTabChange={setQuestionActiveTab}
+                  onSelectOption={handleOptionSelect}
+                  onWriteOwn={handleWriteOwnSelect}
+                  onSubmit={handleSubmitAllAnswers}
+                />
+              )}
             </div>
+          );
+        })}
+
+        {/* Strategy phase approve buttons */}
+        {strategyPhase === "manifesto" && manifestoData && !isLoading && (
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={() => {
+                onPhaseAction?.("approve-manifesto");
+                // Send follow-up message to trigger flow generation
+                const storeState = useStrategyStore.getState();
+                const context = `## Approved Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`;
+                sendMessage(
+                  { text: "The overview is approved. Now design the app architecture as a logical flow of pages, actions, and decisions." },
+                  { body: { vfsContext: context, modelId: selectedModel, strategyPhase: "flow" } }
+                );
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
+            >
+              Approve Overview & Design Architecture
+              <ArrowRight className="w-4 h-4" />
+            </button>
           </div>
-        ))}
+        )}
+
+        {strategyPhase === "flow" && flowData && !isLoading && (
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={() => {
+                onPhaseAction?.("approve-flow");
+                // Send follow-up message to trigger building
+                const storeState = useStrategyStore.getState();
+                const pageNodes = storeState.flowData?.nodes.filter((n) => n.type === "page") || [];
+                const pageList = pageNodes.map((n) => `- ${n.label}: ${n.description || "No description"}`).join("\n");
+                sendMessage(
+                  { text: `The architecture is approved. Start building the app page by page. Here are the pages to build:\n${pageList}\n\nStart with the home/landing page ("/").` },
+                  { body: { vfsContext: "", modelId: selectedModel, strategyPhase: "building" } }
+                );
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
+            >
+              Approve Architecture & Start Building
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         {isLoading && (
           <div className="flex justify-start">
@@ -449,13 +926,26 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
             <ImagePlus className="w-5 h-5" />
           </button>
           <input
+            ref={inputRef}
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onPaste={handlePaste}
-            placeholder={hasImages ? "Add a message or send images..." : "Ask me to modify your UI..."}
-            className="flex-1 px-3 py-2 text-base border border-neutral-200 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:border-transparent"
-            disabled={isLoading}
+            placeholder={
+              hasActiveQuestions && questionWriteOwn !== null
+                ? "Type your answer..."
+                : hasImages
+                ? "Add a message or send images..."
+                : strategyPhase === "hero"
+                ? "e.g. My team wastes hours coordinating who's working on what..."
+                : strategyPhase === "manifesto"
+                ? "Refine the vision..."
+                : strategyPhase === "flow"
+                ? "Adjust the architecture..."
+                : "Ask me to modify your UI..."
+            }
+            className="flex-1 px-3 py-2 text-base border border-neutral-200 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:border-transparent disabled:bg-neutral-50 disabled:text-neutral-400"
+            disabled={isLoading || (hasActiveQuestions && questionWriteOwn === null)}
           />
           <button
             type="submit"
@@ -488,6 +978,173 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
   );
 }
 
+// Tabbed question interface for strategy clarifying questions
+function QuestionTabs({
+  blocks,
+  answers,
+  activeTab,
+  writeOwnIdx,
+  onTabChange,
+  onSelectOption,
+  onWriteOwn,
+  onSubmit,
+}: {
+  blocks: OptionBlock[];
+  answers: Record<number, string>;
+  activeTab: number;
+  writeOwnIdx: number | null;
+  onTabChange: (tab: number) => void;
+  onSelectOption: (questionIdx: number, answer: string) => void;
+  onWriteOwn: (questionIdx: number) => void;
+  onSubmit: () => void;
+}) {
+  const isSubmitTab = activeTab === blocks.length;
+  const answeredCount = Object.keys(answers).length;
+  const allAnswered = answeredCount === blocks.length;
+
+  return (
+    <div className="mt-3">
+      {/* Tab bar */}
+      <div className="flex border-b border-neutral-200 overflow-x-auto">
+        {blocks.map((_, idx) => (
+          <button
+            key={idx}
+            onClick={() => onTabChange(idx)}
+            className={`shrink-0 px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === idx
+                ? "border-neutral-900 text-neutral-900"
+                : answers[idx]
+                ? "border-transparent text-neutral-500 hover:text-neutral-700"
+                : "border-transparent text-neutral-400 hover:text-neutral-600"
+            }`}
+          >
+            Question {idx + 1}
+            {answers[idx] !== undefined && (
+              <Check className="inline-block w-3 h-3 ml-1 text-green-500" />
+            )}
+          </button>
+        ))}
+        <button
+          onClick={() => onTabChange(blocks.length)}
+          className={`shrink-0 px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+            isSubmitTab
+              ? "border-neutral-900 text-neutral-900"
+              : "border-transparent text-neutral-400 hover:text-neutral-600"
+          }`}
+        >
+          Submit
+        </button>
+      </div>
+
+      {/* Tab content */}
+      <div className="pt-4 pb-1">
+        {!isSubmitTab ? (
+          <div>
+            <p className="text-sm font-medium text-neutral-900 mb-3">
+              {blocks[activeTab].question}
+            </p>
+            <div className="space-y-2">
+              {blocks[activeTab].options.map((option, optIdx) => {
+                const isSelected = answers[activeTab] === option;
+                return (
+                  <button
+                    key={optIdx}
+                    onClick={() => onSelectOption(activeTab, option)}
+                    className={`flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                      isSelected
+                        ? "border-neutral-900 bg-neutral-50"
+                        : "border-neutral-200 hover:border-neutral-300 hover:bg-neutral-50"
+                    }`}
+                  >
+                    <div
+                      className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                        isSelected ? "border-neutral-900" : "border-neutral-300"
+                      }`}
+                    >
+                      {isSelected && (
+                        <div className="w-2 h-2 rounded-full bg-neutral-900" />
+                      )}
+                    </div>
+                    <span className="text-sm text-neutral-700">{option}</span>
+                  </button>
+                );
+              })}
+
+              {/* Write my own option */}
+              <button
+                onClick={() => onWriteOwn(activeTab)}
+                className={`flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                  writeOwnIdx === activeTab
+                    ? "border-neutral-900 bg-neutral-50"
+                    : "border-dashed border-neutral-300 hover:border-neutral-400 hover:bg-neutral-50"
+                }`}
+              >
+                <div
+                  className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                    writeOwnIdx === activeTab
+                      ? "border-neutral-900"
+                      : "border-neutral-300"
+                  }`}
+                >
+                  {writeOwnIdx === activeTab && (
+                    <div className="w-2 h-2 rounded-full bg-neutral-900" />
+                  )}
+                </div>
+                <span className="text-sm text-neutral-500">Write my own</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Submit / Review tab */
+          <div>
+            <p className="text-sm font-medium text-neutral-900 mb-3">
+              Review your answers
+            </p>
+
+            {!allAnswered && (
+              <div className="mb-3 flex items-start gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  {answeredCount} of {blocks.length} questions answered.
+                  Unanswered questions are marked below.
+                </span>
+              </div>
+            )}
+
+            <div className="space-y-3 mb-4">
+              {blocks.map((block, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => onTabChange(idx)}
+                  className="w-full text-left group"
+                >
+                  <p className="text-xs text-neutral-500">{block.question}</p>
+                  <p
+                    className={`mt-0.5 text-sm ${
+                      answers[idx]
+                        ? "text-neutral-900"
+                        : "text-amber-500 italic"
+                    } group-hover:underline`}
+                  >
+                    {answers[idx] || "Not answered — click to answer"}
+                  </p>
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={onSubmit}
+              className="w-full px-4 py-2.5 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors"
+            >
+              Submit Answers
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Component to render inline image thumbnails from message parts
 function MessageImages({ parts, isUser }: { parts: Array<{ type: string; [key: string]: unknown }>; isUser: boolean }) {
   const fileParts = parts.filter(
@@ -513,6 +1170,7 @@ function MessageImages({ parts, isUser }: { parts: Array<{ type: string; [key: s
 }
 
 // Component to render message content with code block highlighting
+// Hides strategy JSON blocks (options, manifesto, flow) — those are rendered as UI elements
 function MessageContent({ content }: { content: string }) {
   if (!content) return null;
 
@@ -523,8 +1181,18 @@ function MessageContent({ content }: { content: string }) {
     <div className="space-y-2">
       {parts.map((part, index) => {
         if (part.startsWith("```")) {
-          // Extract language and file info
           const firstLine = part.split("\n")[0];
+
+          // Hide strategy JSON blocks — rendered as UI elements instead
+          if (
+            firstLine.includes('type="options"') ||
+            firstLine.includes('type="manifesto"') ||
+            firstLine.includes('type="flow"')
+          ) {
+            return null;
+          }
+
+          // Extract file info for code blocks
           const fileMatch = firstLine.match(/file="([^"]+)"/);
           const fileName = fileMatch ? fileMatch[1] : null;
 

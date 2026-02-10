@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect, useRef, Component, type ReactNode } from "react";
-import { PanelRightClose, PanelRight, MessageSquare, Palette, AlertCircle } from "lucide-react";
+import { PanelRightClose, PanelRight, MessageSquare, Palette, AlertCircle, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { ChatTab } from "./ChatTab";
+import { FloatingChatPanel } from "./FloatingChatPanel";
 import { PropertiesTab } from "./PropertiesTab";
 import { GroupPropertiesTab } from "./GroupPropertiesTab";
 import { useWriter } from "@/hooks/useWriter";
@@ -13,6 +14,7 @@ import { useKeyboardMove } from "@/hooks/useKeyboardMove";
 import { useKeyboardDelete } from "@/hooks/useKeyboardDelete";
 import { useMouseMove } from "@/hooks/useMouseMove";
 import type { SelectedElement, OptimisticMovePayload, SourceLocation } from "@/lib/inspection/types";
+import type { StrategyPhase } from "@/hooks/useStrategyStore";
 
 // Error boundary to catch PropertiesTab rendering errors
 interface ErrorBoundaryState {
@@ -83,6 +85,26 @@ interface RightPanelProps {
   onClearSelection?: () => void;
   /** Current canvas mode - used to flush pending edits on view switch */
   canvasMode?: string;
+  /** Current strategy phase */
+  strategyPhase?: StrategyPhase;
+  /** Called when user clicks approve buttons in chat */
+  onPhaseAction?: (action: "approve-manifesto" | "approve-flow") => void;
+  /** Whether chat is currently in a floating panel */
+  chatFloating?: boolean;
+  /** Called when user clicks the pop-out button */
+  onPopOut?: () => void;
+  /** Called when user clicks dock from the floating placeholder */
+  onDock?: () => void;
+  /** Floating panel rect (managed by parent for animation control) */
+  floatingRect?: { x: number; y: number; width: number; height: number };
+  /** Called when user drags the floating panel */
+  onFloatingMove?: (x: number, y: number) => void;
+  /** Called when user resizes the floating panel */
+  onFloatingResize?: (width: number, height: number) => void;
+  /** Whether to animate floating panel position changes */
+  floatingAnimate?: boolean;
+  /** Called when user sends first message in hero phase */
+  onHeroSubmit?: () => void;
 }
 
 export function RightPanel({
@@ -96,9 +118,22 @@ export function RightPanel({
   onSelectedElementSourceUpdate,
   onClearSelection,
   canvasMode,
+  strategyPhase,
+  onPhaseAction,
+  chatFloating,
+  onPopOut,
+  onDock,
+  floatingRect,
+  onFloatingMove,
+  onFloatingResize,
+  floatingAnimate,
+  onHeroSubmit,
 }: RightPanelProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [internalActiveTab, setInternalActiveTab] = useState<TabType>("chat");
+
+  // Default floating rect if parent doesn't provide one
+  const effectiveFloatingRect = floatingRect ?? { x: 0, y: 0, width: 400, height: 500 };
 
   // Track the "working className" and "working textContent" - these are the values as we've
   // modified them locally, which may differ from selectedElement until the iframe re-reports.
@@ -477,7 +512,7 @@ export function RightPanel({
   }
 
   return (
-    <div className={`w-96 h-full bg-white border-l border-neutral-200 flex flex-col ${className ?? ""}`}>
+    <div className={`${chatFloating ? "w-0 min-w-0" : "w-96"} h-full ${chatFloating ? "" : "bg-white border-l border-neutral-200"} flex flex-col overflow-hidden ${className ?? ""}`}>
       {/* Header with Tabs */}
       <div className="flex items-center justify-between px-2 py-2 border-b border-neutral-200">
         {/* Tab Switcher */}
@@ -493,37 +528,88 @@ export function RightPanel({
             <MessageSquare className="w-4 h-4" />
             Chat
           </button>
+          {/* Hide Design tab during early strategy phases */}
+          {(!strategyPhase || strategyPhase === "building" || strategyPhase === "complete") && (
+            <button
+              onClick={() => handleTabChange("design")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-base font-medium rounded-md transition-colors ${
+                activeTab === "design"
+                  ? "bg-white text-neutral-900 shadow-sm"
+                  : "text-neutral-600 hover:text-neutral-900"
+              }`}
+            >
+              <Palette className="w-4 h-4" />
+              Design
+              {(selectedElement || showCanvasProperties) && (
+                <span className={`w-2 h-2 rounded-full ${showCanvasProperties ? "bg-purple-500" : "bg-blue-500"}`} />
+              )}
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-0.5">
+          {/* Pop Out Button - only shown when chat tab is active and not already floating */}
+          {activeTab === "chat" && !chatFloating && onPopOut && (
+            <button
+              onClick={() => onPopOut?.()}
+              className="p-1 hover:bg-neutral-100 rounded transition-colors"
+              aria-label="Pop out chat"
+              title="Pop out chat"
+            >
+              <ExternalLink className="w-4 h-4 text-neutral-500" />
+            </button>
+          )}
+
+          {/* Close Button */}
           <button
-            onClick={() => handleTabChange("design")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-base font-medium rounded-md transition-colors ${
-              activeTab === "design"
-                ? "bg-white text-neutral-900 shadow-sm"
-                : "text-neutral-600 hover:text-neutral-900"
-            }`}
+            onClick={() => setIsOpen(false)}
+            className="p-1 hover:bg-neutral-100 rounded transition-colors"
+            aria-label="Close panel"
           >
-            <Palette className="w-4 h-4" />
-            Design
-            {(selectedElement || showCanvasProperties) && (
-              <span className={`w-2 h-2 rounded-full ${showCanvasProperties ? "bg-purple-500" : "bg-blue-500"}`} />
-            )}
+            <PanelRightClose className="w-5 h-5 text-neutral-500" />
           </button>
         </div>
-
-        {/* Close Button */}
-        <button
-          onClick={() => setIsOpen(false)}
-          className="p-1 hover:bg-neutral-100 rounded transition-colors"
-          aria-label="Close panel"
-        >
-          <PanelRightClose className="w-5 h-5 text-neutral-500" />
-        </button>
       </div>
 
-      {/* Tab Content - ChatTab always mounted to preserve history */}
+      {/* Tab Content - ChatTab ALWAYS mounted inside FloatingChatPanel wrapper to preserve state */}
       <div className="flex-1 overflow-hidden relative">
-        <div className={`absolute inset-0 ${activeTab === "chat" ? "" : "hidden"}`}>
-          <ChatTab writeFile={writeFile} files={files} />
-        </div>
+        {/* ChatTab wrapper: docked = absolute inset-0 inside this container; floating = position:fixed escaping the sidebar */}
+        <FloatingChatPanel
+          floating={!!chatFloating}
+          x={effectiveFloatingRect.x}
+          y={effectiveFloatingRect.y}
+          width={effectiveFloatingRect.width}
+          height={effectiveFloatingRect.height}
+          onMove={(nx, ny) => onFloatingMove?.(nx, ny)}
+          onResize={(nw, nh) => onFloatingResize?.(nw, nh)}
+          onDock={() => onDock?.()}
+          dockedClassName={`absolute inset-0 ${activeTab !== "chat" ? "hidden" : ""}`}
+          animate={floatingAnimate}
+        >
+          <ChatTab
+            writeFile={writeFile}
+            files={files}
+            strategyPhase={strategyPhase}
+            onPhaseAction={onPhaseAction}
+            onHeroSubmit={onHeroSubmit}
+          />
+        </FloatingChatPanel>
+
+        {/* Placeholder shown in docked chat area when chat is floating */}
+        {activeTab === "chat" && chatFloating && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center p-8">
+            <MessageSquare className="w-8 h-8 text-neutral-300 mb-3" />
+            <p className="text-neutral-500 text-sm">Chat is in a floating window</p>
+            {onDock && (
+              <button
+                onClick={onDock}
+                className="mt-3 text-sm text-neutral-600 hover:text-neutral-900 underline"
+              >
+                Dock back to sidebar
+              </button>
+            )}
+          </div>
+        )}
         {activeTab === "design" && (
           showCanvasProperties && selectedCanvasNode ? (
             // Show canvas group/frame properties when a canvas node is selected

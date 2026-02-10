@@ -1,6 +1,7 @@
 import { streamText, convertToModelMessages } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
+import { MANIFESTO_SYSTEM_PROMPT, FLOW_SYSTEM_PROMPT, buildBuildSystemPrompt } from "@/lib/ai/strategy-prompts";
 
 type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-5";
 
@@ -407,15 +408,36 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     **IMPORTANT:** Always update /flow.json when adding new pages so they appear in the Flow View!`;
 
 export async function POST(req: Request) {
-  const { messages, vfsContext, modelId } = await req.json();
+  const { messages, vfsContext, modelId, strategyPhase } = await req.json();
 
   // Convert UIMessage[] to ModelMessage[] format
   const modelMessages = await convertToModelMessages(messages);
 
+  // Select system prompt based on strategy phase
+  let basePrompt: string;
+  switch (strategyPhase) {
+    case "manifesto":
+      basePrompt = MANIFESTO_SYSTEM_PROMPT;
+      break;
+    case "flow":
+      basePrompt = FLOW_SYSTEM_PROMPT;
+      break;
+    case "building":
+      basePrompt = buildBuildSystemPrompt(
+        vfsContext?.manifestoContext || "",
+        vfsContext?.flowContext || ""
+      ) + "\n\n" + SYSTEM_PROMPT;
+      break;
+    default:
+      basePrompt = SYSTEM_PROMPT;
+      break;
+  }
+
   // Dynamic system prompt with VFS context (hidden from chat UI)
-  const dynamicSystemPrompt = vfsContext
-    ? `${SYSTEM_PROMPT}\n\n---\n\n## Current VFS Context\n\n${vfsContext}`
-    : SYSTEM_PROMPT;
+  const contextString = typeof vfsContext === "string" ? vfsContext : vfsContext?.vfs || "";
+  const dynamicSystemPrompt = contextString
+    ? `${basePrompt}\n\n---\n\n## Current VFS Context\n\n${contextString}`
+    : basePrompt;
 
   const result = streamText({
     model: getModel(modelId || "gemini-2.5-pro"),

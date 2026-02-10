@@ -13,6 +13,7 @@ import { useMaterializer } from "@/hooks/useMaterializer";
 import { useCanvasStore } from "@/hooks/useCanvasStore";
 import { useCanvasKeyboard } from "@/hooks/useCanvasKeyboard";
 import { useChatContextStore, type PinnedElement } from "@/hooks/useChatContextStore";
+import { useStrategyStore } from "@/hooks/useStrategyStore";
 import { SandpackWrapper } from "@/components/providers/SandpackWrapper";
 import { InfiniteCanvas, type ViewportState } from "@/components/canvas/InfiniteCanvas";
 import { Frame, type FrameState, DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT } from "@/components/canvas/Frame";
@@ -22,11 +23,19 @@ import { TokenStudio } from "@/components/editor/TokenStudio";
 import { ComponentDialog } from "@/components/canvas/ComponentDialog";
 import { InspectorContextMenu } from "@/components/canvas/InspectorContextMenu";
 import { FlowCanvas, type CanvasMode } from "@/components/flow";
+import { ManifestoCard } from "@/components/strategy/ManifestoCard";
+import { StrategyFlowCanvas } from "@/components/strategy/StrategyFlowCanvas";
 import { initializeTestAPI, updateTestAPI } from "@/lib/ast/test-utils";
+import { animateViewport } from "@/lib/canvas/viewport-animation";
 import type { CanvasTool, CanvasNode } from "@/lib/canvas/types";
 import type { ContextMenuPayload } from "@/lib/inspection/types";
 
 type ViewMode = "app" | "design-system";
+
+// Strategy layout defaults (world-space positions)
+const DEFAULT_MANIFESTO_X = 100;
+const DEFAULT_MANIFESTO_Y = 100;
+const MANIFESTO_WIDTH = 600;
 
 export default function Home() {
   const { files, writeFile } = useVirtualFiles();
@@ -47,6 +56,22 @@ export default function Home() {
 
   // Refresh counter to force SandpackWrapper remount
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Strategy state
+  const strategyPhase = useStrategyStore((s) => s.phase);
+  const manifestoData = useStrategyStore((s) => s.manifestoData);
+  const streamingOverview = useStrategyStore((s) => s.streamingOverview);
+  const flowData = useStrategyStore((s) => s.flowData);
+
+  // Draggable overview card position (world-space)
+  const [manifestoPos, setManifestoPos] = useState({ x: DEFAULT_MANIFESTO_X, y: DEFAULT_MANIFESTO_Y });
+  // Derived flow offset — always to the right of the overview card
+  const strategyFlowOffsetX = manifestoPos.x + MANIFESTO_WIDTH + 60;
+  const strategyFlowOffsetY = manifestoPos.y;
+  // Floating chat state (rect managed here for animation control)
+  const [chatMode, setChatMode] = useState<"docked" | "floating">("floating");
+  const [floatingRect, setFloatingRect] = useState({ x: 0, y: 0, width: 630, height: 720 });
+  const [floatingAnimate, setFloatingAnimate] = useState(false);
 
   // Flow manifest parsed from /flow.json
   const flowManifest = useFlowManifest(files);
@@ -343,44 +368,260 @@ export default function Home() {
     }
   }, [inspection.inspectionMode]);
 
+  // --- Strategy Mode Handlers ---
+
+  // Called by ChatTab when user sends their first message in hero phase
+  const handleHeroSubmit = useCallback(() => {
+    // Phase transition already handled by ChatTab + strategy store
+    // UI reacts automatically to phase change
+  }, []);
+
+  // Center the floating chat on mount for hero phase
+  useEffect(() => {
+    if (strategyPhase === "hero") {
+      setFloatingRect({
+        x: (window.innerWidth - 630) / 2,
+        y: (window.innerHeight - 720) / 2,
+        width: 630,
+        height: 720,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Mount only
+
+  // Animate viewport when overview starts appearing (streaming or final) + slide floating chat beside it
+  const hasAnimatedToOverview = useRef(false);
+  useEffect(() => {
+    const showOverview = manifestoData || streamingOverview;
+    if (strategyPhase === "manifesto" && showOverview && !hasAnimatedToOverview.current) {
+      hasAnimatedToOverview.current = true;
+
+      // Center the overview card + chat as a group in the viewport
+      const overviewWidth = 600;
+      const chatWidth = 630;
+      const chatHeight = 720;
+      const gap = 20;
+      const combinedWidth = overviewWidth + gap + chatWidth;
+
+      const screenW = window.innerWidth;
+      const screenH = window.innerHeight;
+
+      // Viewport offset so the overview card's left edge places the combined block centered
+      const targetViewport = {
+        x: (screenW - combinedWidth) / 2 - manifestoPos.x,
+        y: (screenH - chatHeight) / 2 - manifestoPos.y,
+        scale: 1,
+      };
+      animateViewport(viewport, targetViewport, setViewport, { duration: 400 });
+
+      // Position floating chat in screen space: right of the overview card
+      const chatScreenX = (screenW - combinedWidth) / 2 + overviewWidth + gap;
+      const chatScreenY = (screenH - chatHeight) / 2;
+
+      setFloatingAnimate(true);
+      setFloatingRect((prev) => ({
+        ...prev,
+        x: chatScreenX,
+        y: chatScreenY,
+      }));
+      // Disable animation after transition completes
+      const timer = setTimeout(() => setFloatingAnimate(false), 500);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manifestoData !== null || streamingOverview !== null, strategyPhase === "manifesto"]);
+
+  // Animate viewport when strategy flow appears + slide floating chat beside flow
+  useEffect(() => {
+    if (strategyPhase === "flow" && flowData) {
+      // Center the full layout (overview + flow + chat) in the viewport
+      const nodeCount = flowData.nodes.length;
+      const estimatedFlowWidth = Math.max(520, nodeCount * 260);
+      const estimatedFlowHeight = Math.max(200, Math.ceil(nodeCount / 3) * 180);
+      const chatWidth = 630;
+      const chatHeight = 720;
+      const gap = 20;
+
+      // Total world-space width: from overview left edge to flow right edge
+      const totalWorldWidth = (strategyFlowOffsetX - manifestoPos.x) + estimatedFlowWidth;
+      const combinedWidth = totalWorldWidth + gap + chatWidth;
+
+      const screenW = window.innerWidth;
+      const screenH = window.innerHeight;
+
+      // Pick scale to fit everything, capped at 1
+      const scale = Math.min(1, (screenW - 80) / combinedWidth);
+
+      // Center vertically on the taller of flow or chat
+      const contentHeight = Math.max(estimatedFlowHeight, chatHeight / scale);
+      const targetViewport = {
+        x: (screenW - combinedWidth * scale) / 2 - manifestoPos.x * scale,
+        y: (screenH - contentHeight * scale) / 2 - manifestoPos.y * scale,
+        scale,
+      };
+      animateViewport(viewport, targetViewport, setViewport, { duration: 400 });
+
+      // Position floating chat in screen space: right of the flow canvas
+      const flowScreenRight =
+        (strategyFlowOffsetX + estimatedFlowWidth) * scale + targetViewport.x + gap;
+      const chatScreenY = (screenH - chatHeight) / 2;
+
+      setFloatingAnimate(true);
+      setFloatingRect((prev) => ({
+        ...prev,
+        x: flowScreenRight,
+        y: chatScreenY,
+      }));
+      const timer = setTimeout(() => setFloatingAnimate(false), 500);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flowData !== null && strategyPhase === "flow"]);
+
+  const handlePhaseAction = useCallback((action: "approve-manifesto" | "approve-flow") => {
+    if (action === "approve-manifesto") {
+      useStrategyStore.getState().setPhase("flow");
+    } else if (action === "approve-flow") {
+      // Convert strategy flow nodes (type=page) to /flow.json entries
+      const currentFlowData = useStrategyStore.getState().flowData;
+      if (currentFlowData) {
+        const pageNodes = currentFlowData.nodes.filter((n) => n.type === "page");
+        const flowJson = {
+          pages: pageNodes.map((node, index) => ({
+            id: node.id,
+            name: node.label,
+            route: index === 0 ? "/" : `/${node.id}`,
+          })),
+          connections: currentFlowData.connections
+            .filter(
+              (c) =>
+                pageNodes.some((n) => n.id === c.from) &&
+                pageNodes.some((n) => n.id === c.to)
+            )
+            .map((c) => ({
+              from: c.from,
+              to: c.to,
+              label: c.label,
+            })),
+        };
+
+        writeFile("/flow.json", JSON.stringify(flowJson, null, 2));
+      }
+
+      useStrategyStore.getState().setPhase("building");
+      setCanvasMode("flow");
+    }
+  }, [writeFile]);
+
+  // --- Floating Chat Handlers ---
+
+  const handlePopOut = useCallback(() => {
+    setChatMode("floating");
+    setFloatingRect({
+      x: window.innerWidth - 650,
+      y: 80,
+      width: 630,
+      height: 720,
+    });
+  }, []);
+
+  const handleDock = useCallback(() => {
+    setChatMode("docked");
+  }, []);
+
+  // Determine if we're in an early strategy phase (no Sandpack needed)
+  const isEarlyStrategyPhase = strategyPhase === "hero" || strategyPhase === "manifesto" || strategyPhase === "flow";
+  // Hide RightPanel during hero phase, and during early strategy phases when chat is floating (no Design tab)
+  const showRightPanel = strategyPhase !== "hero" && !(isEarlyStrategyPhase && chatMode === "floating");
+  const showNav = strategyPhase !== "hero";
+
   return (
     <main className="w-screen h-screen overflow-hidden flex flex-col">
-      {/* Top Navigation Bar */}
-      <nav className="h-12 bg-white border-b border-neutral-200 flex items-center justify-between px-4 shrink-0">
-        <div className="flex items-center gap-1">
-          <span className="font-semibold text-neutral-800 mr-4">Novum</span>
+      {/* Top Navigation Bar - hidden during hero phase */}
+      {showNav && (
+        <nav className="h-12 bg-white border-b border-neutral-200 flex items-center justify-between px-4 shrink-0">
+          <div className="flex items-center gap-1">
+            <span className="font-semibold text-neutral-800 mr-4">Novum</span>
 
-          {/* View Mode Toggle */}
-          <div className="flex bg-neutral-100 rounded-lg p-0.5">
-            <button
-              onClick={() => setViewMode("app")}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                viewMode === "app"
-                  ? "bg-white text-neutral-900 shadow-sm"
-                  : "text-neutral-600 hover:text-neutral-900"
-              }`}
-            >
-              App Preview
-            </button>
-            <button
-              onClick={() => setViewMode("design-system")}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                viewMode === "design-system"
-                  ? "bg-white text-neutral-900 shadow-sm"
-                  : "text-neutral-600 hover:text-neutral-900"
-              }`}
-            >
-              Design System
-            </button>
+            {/* View Mode Toggle - hidden during early strategy phases */}
+            {!isEarlyStrategyPhase && (
+              <div className="flex bg-neutral-100 rounded-lg p-0.5">
+                <button
+                  onClick={() => setViewMode("app")}
+                  className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                    viewMode === "app"
+                      ? "bg-white text-neutral-900 shadow-sm"
+                      : "text-neutral-600 hover:text-neutral-900"
+                  }`}
+                >
+                  App Preview
+                </button>
+                <button
+                  onClick={() => setViewMode("design-system")}
+                  className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                    viewMode === "design-system"
+                      ? "bg-white text-neutral-900 shadow-sm"
+                      : "text-neutral-600 hover:text-neutral-900"
+                  }`}
+                >
+                  Design System
+                </button>
+              </div>
+            )}
+
+            {/* Phase indicator during strategy phases */}
+            {isEarlyStrategyPhase && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-neutral-500">
+                  {strategyPhase === "manifesto" && "Defining Overview"}
+                  {strategyPhase === "flow" && "Designing Architecture"}
+                </span>
+              </div>
+            )}
           </div>
-        </div>
-
-      </nav>
+        </nav>
+      )}
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* App Preview: Canvas + Right panel */}
-        <div className={`flex-1 h-full min-h-0 relative isolate ${viewMode !== "app" ? "hidden" : ""}`}>
+        {/* Strategy Canvas (hero + manifesto + flow phases): Canvas with strategy artifacts */}
+        {(strategyPhase === "hero" || strategyPhase === "manifesto" || strategyPhase === "flow") && (
+          <div className="flex-1 h-full min-h-0 relative isolate">
+            <InfiniteCanvas
+              ref={canvasContainerRef}
+              viewport={viewport}
+              onViewportChange={setViewport}
+              activeTool="cursor"
+              onToolChange={() => {}}
+              isDrawingActive={false}
+              onCanvasClick={() => {}}
+            >
+              {/* Overview Card — shows during streaming (progressive) and after full parse */}
+              {(manifestoData || streamingOverview) && (
+                <ManifestoCard
+                  manifestoData={manifestoData || streamingOverview!}
+                  x={manifestoPos.x}
+                  y={manifestoPos.y}
+                  onMove={(nx, ny) => setManifestoPos({ x: nx, y: ny })}
+                />
+              )}
+
+              {/* Strategy Flow Canvas */}
+              {flowData && (
+                <StrategyFlowCanvas
+                  flowData={flowData}
+                  offsetX={strategyFlowOffsetX}
+                  offsetY={strategyFlowOffsetY}
+                />
+              )}
+            </InfiniteCanvas>
+          </div>
+        )}
+
+        {/* App Preview: Canvas + Right panel (building + complete phases, or no strategy) */}
+        <div className={`flex-1 h-full min-h-0 relative isolate ${
+          isEarlyStrategyPhase || viewMode !== "app" ? "hidden" : ""
+        }`}>
           <SandpackWrapper
             files={shadowFiles}
             previewMode={tokenState.previewMode}
@@ -474,7 +715,7 @@ export default function Home() {
         </div>
 
         {/* Design System: Full-width preview */}
-        <div className={`flex-1 h-full ${viewMode !== "design-system" ? "hidden" : ""}`}>
+        <div className={`flex-1 h-full ${viewMode !== "design-system" || isEarlyStrategyPhase ? "hidden" : ""}`}>
           <SandpackWrapper
             files={shadowFiles}
             previewMode={tokenState.previewMode}
@@ -489,7 +730,7 @@ export default function Home() {
           </SandpackWrapper>
         </div>
 
-        {/* Right Panel - always mounted to preserve state */}
+        {/* Right Panel - always mounted to preserve state, hidden during hero phase */}
         <RightPanel
           writeFile={writeFile}
           files={files}
@@ -500,11 +741,27 @@ export default function Home() {
           onSelectedElementSourceUpdate={inspection.updateSelectedElementSource}
           onClearSelection={inspection.clearSelection}
           canvasMode={canvasMode}
-          className={`shrink-0 ${viewMode !== "app" ? "hidden" : ""}`}
+          strategyPhase={strategyPhase}
+          onPhaseAction={handlePhaseAction}
+          className={`shrink-0 ${
+            !showRightPanel || viewMode !== "app"
+              ? chatMode === "floating"
+                ? "w-0 min-w-0 overflow-hidden"
+                : "hidden"
+              : ""
+          }`}
+          chatFloating={chatMode === "floating"}
+          onPopOut={handlePopOut}
+          onDock={handleDock}
+          floatingRect={floatingRect}
+          onFloatingMove={(nx, ny) => setFloatingRect((prev) => ({ ...prev, x: nx, y: ny }))}
+          onFloatingResize={(nw, nh) => setFloatingRect((prev) => ({ ...prev, width: nw, height: nh }))}
+          floatingAnimate={floatingAnimate}
+          onHeroSubmit={handleHeroSubmit}
         />
 
         {/* Token Studio - only shown in design-system mode */}
-        {viewMode === "design-system" && (
+        {viewMode === "design-system" && !isEarlyStrategyPhase && (
           <TokenStudio tokenState={tokenState} />
         )}
       </div>

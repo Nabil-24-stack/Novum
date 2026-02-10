@@ -9,6 +9,7 @@ export interface UseVirtualFilesReturn {
   writeFile: (path: string, content: string) => void;
   deleteFile: (path: string) => void;
   getAllFiles: () => Record<string, string>;
+  resetFiles: (newFiles: Record<string, string>) => void;
 }
 
 export function useVirtualFiles(): UseVirtualFilesReturn {
@@ -40,11 +41,16 @@ export function useVirtualFiles(): UseVirtualFilesReturn {
     return { ...files };
   }, [files]);
 
+  const resetFiles = useCallback((newFiles: Record<string, string>) => {
+    setFiles(newFiles);
+  }, []);
+
   return {
     files,
     readFile,
     writeFile,
     deleteFile,
     getAllFiles,
+    resetFiles,
   };
 }
