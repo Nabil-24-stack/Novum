@@ -1,5 +1,6 @@
 "use client";
 
+import type React from "react";
 import type { FlowConnection, FlowNodePosition } from "@/lib/flow/types";
 import { getSmartOrthogonalPath, isForwardConnection } from "@/lib/flow/auto-layout";
 
@@ -8,6 +9,7 @@ interface FlowConnectionsProps {
   nodePositions: Map<string, FlowNodePosition>;
   width: number;
   height: number;
+  style?: React.CSSProperties;
 }
 
 /**
@@ -70,7 +72,7 @@ function ConnectionLine({
   );
 }
 
-export function FlowConnections({ connections, nodePositions, width, height }: FlowConnectionsProps) {
+export function FlowConnections({ connections, nodePositions, width, height, style }: FlowConnectionsProps) {
   if (connections.length === 0) {
     return null;
   }
@@ -80,7 +82,7 @@ export function FlowConnections({ connections, nodePositions, width, height }: F
       className="absolute top-0 left-0 pointer-events-none"
       width={width}
       height={height}
-      style={{ overflow: "visible" }}
+      style={{ overflow: "visible", ...style }}
     >
       {/* Arrowhead marker */}
       <defs>

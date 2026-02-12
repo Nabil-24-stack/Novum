@@ -5,9 +5,25 @@ import { useEffect, useRef, useState, useCallback, useMemo, DragEvent, Clipboard
 import { Send, Loader2, X, ImagePlus, ChevronDown, ArrowRight, Check, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { useChatContextStore } from "@/hooks/useChatContextStore";
+import { useStreamingStore } from "@/hooks/useStreamingStore";
 import { useStrategyStore, type StrategyPhase } from "@/hooks/useStrategyStore";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
+import { parseStreamingContent } from "@/lib/streaming-parser";
 import type { FileUIPart } from "ai";
+
+const FILE_CODE_BLOCK_RE = /```\w*\s+file="[^"]+"/;
+function hasFileCodeBlocks(content: string): boolean {
+  return FILE_CODE_BLOCK_RE.test(content);
+}
+
+/** Strip strategy JSON blocks from text (manifesto, flow, options, page-built) */
+function stripStrategyBlocks(text: string): string {
+  // Strip closed strategy blocks
+  let cleaned = text.replace(/```json\s+type="(?:options|manifesto|flow|page-built)"[\s\S]*?```/g, "");
+  // Strip open (still-streaming) strategy blocks
+  cleaned = cleaned.replace(/```json\s+type="(?:options|manifesto|flow|page-built)"[\s\S]*$/, "");
+  return cleaned.trim();
+}
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024; // 4MB
@@ -28,6 +44,8 @@ interface ChatTabProps {
   onPhaseAction?: (action: "approve-manifesto" | "approve-flow") => void;
   /** Called when user sends their first message in hero phase (phase transition to manifesto) */
   onHeroSubmit?: () => void;
+  /** Called when user approves a built page and wants to build the next one */
+  onApproveAndBuildNext?: (nextPageId: string) => void;
 }
 
 // Regex to match code blocks with file attribute
@@ -38,6 +56,7 @@ const CODE_BLOCK_REGEX = /```(\w+)?\s+file="([^"]+)"\n([\s\S]*?)```/g;
 const MANIFESTO_REGEX = /```json\s+type="manifesto"\n([\s\S]*?)```/g;
 const FLOW_REGEX = /```json\s+type="flow"\n([\s\S]*?)```/g;
 const OPTIONS_REGEX = /```json\s+type="options"\n([\s\S]*?)```/g;
+const PAGE_BUILT_REGEX = /```json\s+type="page-built"\n([\s\S]*?)```/g;
 
 interface OptionBlock {
   question: string;
@@ -191,7 +210,24 @@ function extractOptionBlocks(text: string): OptionBlock[] {
   return blocks;
 }
 
-export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHeroSubmit }: ChatTabProps) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Message type varies across AI SDK versions
+function getMessageText(message: any): string {
+  // Try parts first (AI SDK v6 format)
+  if (message.parts && Array.isArray(message.parts)) {
+    const text = message.parts
+      .filter((part: { type: string }) => part.type === "text")
+      .map((part: { text: string }) => part.text)
+      .join("");
+    if (text) return text;
+  }
+  // Fallback to content property (older format)
+  if ("content" in message && typeof message.content === "string") {
+    return message.content;
+  }
+  return "";
+}
+
+export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHeroSubmit, onApproveAndBuildNext }: ChatTabProps) {
   const [input, setInput] = useState("");
   const [selectedModel, setSelectedModel] = useState<ModelId>("gemini-2.5-pro");
   const [stagedImages, setStagedImages] = useState<FileUIPart[]>([]);
@@ -201,6 +237,9 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
   const { pinnedElements, unpinElement, clearPinnedElements } = useChatContextStore();
   const manifestoData = useStrategyStore((s) => s.manifestoData);
   const flowData = useStrategyStore((s) => s.flowData);
+  const completedPages = useStrategyStore((s) => s.completedPages);
+  const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
+  const pendingApprovalPage = useStrategyStore((s) => s.pendingApprovalPage);
 
   const { messages, sendMessage, status, error } = useChat({
     onError: (err) => {
@@ -237,16 +276,21 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
   const hasActiveQuestions = currentOptionBlocks.length > 0 && !manifestoData;
 
   // Reset question state when a new set of options arrives
-  useEffect(() => {
-    if (!hasActiveQuestions) return;
+  const lastAssistantId = useMemo(() => {
+    if (!hasActiveQuestions) return null;
     const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
-    if (lastAssistant && lastAssistant.id !== lastOptionsMsgId.current) {
-      lastOptionsMsgId.current = lastAssistant.id;
+    return lastAssistant?.id ?? null;
+  }, [messages, hasActiveQuestions]);
+
+  useEffect(() => {
+    if (!lastAssistantId) return;
+    if (lastAssistantId !== lastOptionsMsgId.current) {
+      lastOptionsMsgId.current = lastAssistantId;
       setQuestionAnswers({});
       setQuestionActiveTab(0);
       setQuestionWriteOwn(null);
     }
-  }, [messages, hasActiveQuestions]);
+  }, [lastAssistantId]);
 
   // --- Stream partial overview data to the canvas in real-time ---
   useEffect(() => {
@@ -325,6 +369,7 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
         });
       }
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- files is read via closure at call-time; adding it would re-run gatekeeper on every VFS change
   }, [messages, writeFile]);
 
   // Extract strategy JSON (manifesto/flow) from AI responses
@@ -378,13 +423,80 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
         }
       }
       FLOW_REGEX.lastIndex = 0;
+
+      // Extract page-built blocks
+      while ((match = PAGE_BUILT_REGEX.exec(textContent)) !== null) {
+        const blockKey = `page-built-${message.id}-${match.index}`;
+        if (!processedStrategyBlocksSet.has(blockKey)) {
+          processedStrategyBlocksSet.add(blockKey);
+          try {
+            const parsed = JSON.parse(match[1]);
+            if (parsed.pageId) {
+              const store = useStrategyStore.getState();
+              store.addCompletedPage(parsed.pageId);
+              store.setPendingApprovalPage(parsed.pageId);
+              store.setBuildingPage(null);
+            }
+          } catch (e) {
+            console.warn("[Strategy] Failed to parse page-built JSON:", e);
+          }
+        }
+      }
+      PAGE_BUILT_REGEX.lastIndex = 0;
     });
   }, [messages]);
 
+  // --- Stream code overlay state ---
+  useEffect(() => {
+    const store = useStreamingStore.getState();
+
+    if (!isLoading) {
+      if (store.isStreaming) store.endStreaming();
+      return;
+    }
+
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return;
+
+    const text = getMessageText(lastAssistant);
+    const parsed = parseStreamingContent(text);
+
+    // Start streaming on first code block detection
+    if (!store.isStreaming && (parsed.currentFile || parsed.completedBlocks.length > 0)) {
+      const buildingPage = useStrategyStore.getState().currentBuildingPage;
+      store.startStreaming(buildingPage);
+    }
+
+    // Update status text (first sentence of pre-code text)
+    if (parsed.preText) {
+      const firstSentence = parsed.preText.split(/[.!\n]/)[0].trim();
+      if (firstSentence) {
+        store.setStatusText(firstSentence);
+      }
+    }
+
+    // Update current streaming file
+    if (parsed.currentFile) {
+      store.setCurrentFile(parsed.currentFile.path, parsed.currentFile.content);
+    }
+
+    // Track completed files
+    parsed.completedBlocks.forEach((block) => store.markFileComplete(block.path));
+  }, [messages, isLoading]);
+
+  // Sync targetPageId when currentBuildingPage changes mid-stream
+  useEffect(() => {
+    const store = useStreamingStore.getState();
+    if (store.isStreaming && currentBuildingPage) {
+      store.setTargetPageId(currentBuildingPage);
+    }
+  }, [currentBuildingPage]);
+
   // Auto-scroll to bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    const behavior = status === "streaming" ? "instant" : "smooth";
+    messagesEndRef.current?.scrollIntoView({ behavior });
+  }, [messages, status, currentOptionBlocks.length, strategyPhase, pendingApprovalPage]);
 
   // --- Image upload helpers ---
 
@@ -668,32 +780,22 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
     if (hasText) messagePayload.text = messageText;
     if (hasImages) messagePayload.files = imagesToSend;
 
+    // Include current building page info for the build prompt
+    const buildingStore = useStrategyStore.getState();
+    const buildingPageId = buildingStore.currentBuildingPage;
+    const buildingPageName = buildingPageId
+      ? buildingStore.flowData?.nodes.find((n) => n.id === buildingPageId)?.label
+      : undefined;
+
     // Send user's clean message for display
     // Pass context via request-level body option (hidden from UI, sent to API)
     await sendMessage(
       messagePayload as { text: string; files?: FileUIPart[] },
-      { body: { vfsContext, modelId: selectedModel, strategyPhase: effectivePhase } }
+      { body: { vfsContext, modelId: selectedModel, strategyPhase: effectivePhase, currentPageId: buildingPageId, currentPageName: buildingPageName } }
     );
 
     // Clear pinned elements after sending
     clearPinnedElements();
-  };
-
-  // Helper to get message text content
-  const getMessageText = (message: typeof messages[0]): string => {
-    // Try parts first (AI SDK v6 format)
-    if (message.parts && Array.isArray(message.parts)) {
-      const text = message.parts
-        .filter((part): part is { type: "text"; text: string } => part.type === "text")
-        .map((part) => part.text)
-        .join("");
-      if (text) return text;
-    }
-    // Fallback to content property (older format)
-    if ("content" in message && typeof message.content === "string") {
-      return message.content;
-    }
-    return "";
   };
 
   const hasImages = stagedImages.length > 0;
@@ -772,7 +874,13 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                   }`}
                 >
                   <MessageImages parts={message.parts} isUser={message.role === "user"} />
-                  <MessageContent content={text} />
+                  {isLoading && isLastAssistant ? (
+                    <StreamingMessageContent content={text} />
+                  ) : message.role === "assistant" && hasFileCodeBlocks(text) ? (
+                    <CollapsedMessageContent content={text} />
+                  ) : (
+                    <MessageContent content={text} />
+                  )}
                 </div>
               </div>
 
@@ -820,13 +928,19 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
             <button
               onClick={() => {
                 onPhaseAction?.("approve-flow");
-                // Send follow-up message to trigger building
+                // Send follow-up message to trigger building the FIRST page only
                 const storeState = useStrategyStore.getState();
                 const pageNodes = storeState.flowData?.nodes.filter((n) => n.type === "page") || [];
-                const pageList = pageNodes.map((n) => `- ${n.label}: ${n.description || "No description"}`).join("\n");
+                const firstPage = pageNodes[0];
+                if (!firstPage) return;
+
+                const pageList = pageNodes.map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n");
+                storeState.setBuildingPage(firstPage.id);
+                useStreamingStore.getState().startStreaming(firstPage.id);
+
                 sendMessage(
-                  { text: `The architecture is approved. Start building the app page by page. Here are the pages to build:\n${pageList}\n\nStart with the home/landing page ("/").` },
-                  { body: { vfsContext: "", modelId: selectedModel, strategyPhase: "building" } }
+                  { text: `The architecture is approved. Here are all the pages to build:\n${pageList}\n\nStart by building the first page: "${firstPage.label}" (/).` },
+                  { body: { vfsContext: "", modelId: selectedModel, strategyPhase: "building", currentPageId: firstPage.id, currentPageName: firstPage.label } }
                 );
               }}
               className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
@@ -837,12 +951,80 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           </div>
         )}
 
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="bg-neutral-100 rounded-lg px-3 py-2">
-              <Loader2 className="w-4 h-4 animate-spin text-neutral-500" />
+        {/* Page approval button during building phase */}
+        {strategyPhase === "building" && pendingApprovalPage && !isLoading && (() => {
+          const storeState = useStrategyStore.getState();
+          const pageNodes = storeState.flowData?.nodes.filter((n) => n.type === "page") || [];
+          const nextPage = pageNodes.find((n) => !completedPages.includes(n.id));
+          const isLastPage = !nextPage;
+          const approvedPageName = pageNodes.find((n) => n.id === pendingApprovalPage)?.label || pendingApprovalPage;
+
+          return (
+            <div className="flex justify-center pt-2">
+              <button
+                onClick={() => {
+                  storeState.setPendingApprovalPage(null);
+
+                  if (isLastPage) {
+                    // All pages built
+                    storeState.setPhase("complete");
+                    return;
+                  }
+
+                  // Ensure next page is in /flow.json so its FlowFrame mounts immediately
+                  // (the AI may have overwritten flow.json with only built pages)
+                  const flowJsonRaw = files["/flow.json"];
+                  if (flowJsonRaw) {
+                    try {
+                      const flow = JSON.parse(flowJsonRaw);
+                      if (Array.isArray(flow.pages) && !flow.pages.some((p: any) => p.id === nextPage!.id)) {
+                        flow.pages.push({
+                          id: nextPage!.id,
+                          name: nextPage!.label,
+                          route: `/${nextPage!.id}`,
+                        });
+                        if (!flow.connections) flow.connections = [];
+                        flow.connections.push({
+                          from: pendingApprovalPage,
+                          to: nextPage!.id,
+                        });
+                        writeFile("/flow.json", JSON.stringify(flow, null, 2));
+                      }
+                    } catch {
+                      // Fail-safe: if parsing fails, continue without pre-populating
+                    }
+                  }
+
+                  // Build next page
+                  storeState.setBuildingPage(nextPage!.id);
+                  useStreamingStore.getState().startStreaming(nextPage!.id);
+                  onApproveAndBuildNext?.(nextPage!.id);
+
+                  sendMessage(
+                    { text: `"${approvedPageName}" looks great! Now build the next page: "${nextPage!.label}" (${nextPage!.id}).` },
+                    { body: { vfsContext: "", modelId: selectedModel, strategyPhase: "building", currentPageId: nextPage!.id, currentPageName: nextPage!.label } }
+                  );
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
+              >
+                {isLastPage ? (
+                  <>
+                    Approve & Finish
+                    <Check className="w-4 h-4" />
+                  </>
+                ) : (
+                  <>
+                    Approve & Build Next Page
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
             </div>
-          </div>
+          );
+        })()}
+
+        {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
+          <StreamingStatus />
         )}
 
         {error && (
@@ -887,6 +1069,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         <div className="px-4 pt-2 pb-1 border-t border-neutral-200 flex items-center gap-2 overflow-x-auto">
           {stagedImages.map((img, index) => (
             <div key={index} className="relative group shrink-0">
+              {/* eslint-disable-next-line @next/next/no-img-element -- data URL from local file input */}
               <img
                 src={img.url}
                 alt={img.filename || "Staged image"}
@@ -1156,6 +1339,7 @@ function MessageImages({ parts, isUser }: { parts: Array<{ type: string; [key: s
   return (
     <div className="flex flex-wrap gap-2 mb-2">
       {fileParts.map((file, index) => (
+        /* eslint-disable-next-line @next/next/no-img-element -- inline data URL from AI response */
         <img
           key={index}
           src={file.url}
@@ -1183,30 +1367,24 @@ function MessageContent({ content }: { content: string }) {
         if (part.startsWith("```")) {
           const firstLine = part.split("\n")[0];
 
-          // Hide strategy JSON blocks — rendered as UI elements instead
+          // Hide strategy JSON blocks, page-built markers, and file code blocks entirely
           if (
             firstLine.includes('type="options"') ||
             firstLine.includes('type="manifesto"') ||
-            firstLine.includes('type="flow"')
+            firstLine.includes('type="flow"') ||
+            firstLine.includes('type="page-built"') ||
+            firstLine.includes('file="')
           ) {
             return null;
           }
 
-          // Extract file info for code blocks
-          const fileMatch = firstLine.match(/file="([^"]+)"/);
-          const fileName = fileMatch ? fileMatch[1] : null;
-
+          // Non-file code blocks (e.g., plain code snippets) still shown
           return (
             <div key={index} className="mt-2">
-              {fileName && (
-                <div className="text-sm text-neutral-500 mb-1 font-mono">
-                  {fileName}
-                </div>
-              )}
               <pre className="bg-neutral-800 text-neutral-100 p-2 rounded text-xs overflow-x-auto">
                 <code>
                   {part
-                    .replace(/```\w*\s*(file="[^"]+")?\n?/, "")
+                    .replace(/```\w*\s*\n?/, "")
                     .replace(/```$/, "")
                     .trim()}
                 </code>
@@ -1222,6 +1400,164 @@ function MessageContent({ content }: { content: string }) {
           </p>
         ) : null;
       })}
+    </div>
+  );
+}
+
+// Detect if the content contains an open (still-streaming) options/strategy block
+function hasStreamingStrategyBlock(text: string): boolean {
+  // Check for an open strategy block that hasn't closed yet
+  return /```json\s+type="(?:options|manifesto|flow|page-built)"[\s\S]*$/.test(text) &&
+    !/```json\s+type="(?:options|manifesto|flow|page-built)"[\s\S]*?```\s*$/.test(text);
+}
+
+// Streaming message content — hides code, shows preText + compact file indicators
+function StreamingMessageContent({ content }: { content: string }) {
+  const currentFile = useStreamingStore((s) => s.currentFile);
+  const completedFilePaths = useStreamingStore((s) => s.completedFilePaths);
+  const phase = useStrategyStore((s) => s.phase);
+
+  const parsed = useMemo(() => parseStreamingContent(content), [content]);
+
+  // Clean preText: strip strategy blocks
+  const cleanPreText = useMemo(() => stripStrategyBlocks(parsed.preText), [parsed.preText]);
+
+  const hasCode = parsed.currentFile !== null || parsed.completedBlocks.length > 0;
+
+  // Detect if questions/strategy blocks are actively being generated
+  const isStreamingQuestions = useMemo(() => hasStreamingStrategyBlock(content), [content]);
+
+  // No text and no code yet → phase-aware typing indicator
+  if (!cleanPreText && !hasCode && !isStreamingQuestions) {
+    const phaseHint =
+      phase === "hero" || phase === "manifesto" ? "Thinking about what to ask you..."
+      : phase === "flow" ? "Designing architecture..."
+      : phase === "building" ? "Writing code..."
+      : null;
+
+    if (phaseHint) {
+      return (
+        <div className="flex items-center gap-2 py-1">
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-neutral-400 shrink-0" />
+          <span className="text-sm text-neutral-500">{phaseHint}</span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex items-center gap-1 py-1">
+        <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 animate-pulse" />
+        <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 animate-pulse [animation-delay:150ms]" />
+        <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 animate-pulse [animation-delay:300ms]" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {cleanPreText && <p className="whitespace-pre-wrap">{cleanPreText}</p>}
+
+      {/* Questions being generated indicator */}
+      {isStreamingQuestions && (
+        <div className="flex items-center gap-1.5 text-xs text-blue-600">
+          <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+          <span className="font-medium">Generating questions...</span>
+        </div>
+      )}
+
+      {/* Completed file badges */}
+      {completedFilePaths.map((path) => (
+        <div key={path} className="flex items-center gap-1.5 text-xs text-green-700">
+          <Check className="w-3 h-3 shrink-0" />
+          <span className="font-mono truncate">{path}</span>
+        </div>
+      ))}
+
+      {/* Currently streaming file indicator */}
+      {currentFile && !completedFilePaths.includes(currentFile.path) && (
+        <div className="flex items-center gap-1.5 text-xs text-blue-600">
+          <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+          <span className="font-mono truncate">Writing {currentFile.path}...</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Collapsed message for completed assistant messages that contain file code blocks
+function CollapsedMessageContent({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const { summary, filePaths } = useMemo(() => {
+    const parsed = parseStreamingContent(content);
+    const cleanPre = stripStrategyBlocks(parsed.preText);
+
+    // Extract first sentence as summary
+    const sentenceMatch = cleanPre.match(/^(.+?[.!?])(?:\s|$)/);
+    const summaryText = sentenceMatch ? sentenceMatch[1] : cleanPre.split("\n")[0] || "Code generated.";
+
+    // Collect all file paths from code blocks
+    const paths = parsed.completedBlocks.map((b) => b.path);
+
+    return { summary: summaryText, filePaths: paths };
+  }, [content]);
+
+  if (expanded) {
+    return (
+      <div className="space-y-2">
+        <MessageContent content={content} />
+        <button
+          onClick={() => setExpanded(false)}
+          className="text-xs text-neutral-400 hover:text-neutral-600 transition-colors"
+        >
+          Collapse
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <p className="text-sm">{summary}</p>
+      {filePaths.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {filePaths.map((path) => (
+            <span
+              key={path}
+              className="inline-flex items-center gap-1 text-xs font-mono bg-neutral-200/60 text-neutral-600 rounded px-1.5 py-0.5"
+            >
+              <Check className="w-2.5 h-2.5 text-green-600 shrink-0" />
+              {path}
+            </span>
+          ))}
+        </div>
+      )}
+      <button
+        onClick={() => setExpanded(true)}
+        className="text-xs text-neutral-400 hover:text-neutral-600 transition-colors"
+      >
+        Show full response
+      </button>
+    </div>
+  );
+}
+
+// Phase-aware spinner shown before the first assistant token arrives
+function StreamingStatus() {
+  const phase = useStrategyStore((s) => s.phase);
+
+  const message =
+    phase === "hero" || phase === "manifesto" ? "Analyzing your problem..."
+    : phase === "flow" ? "Designing app architecture..."
+    : phase === "building" ? "Preparing to build..."
+    : null;
+
+  return (
+    <div className="flex justify-start">
+      <div className="bg-neutral-100 rounded-lg px-3 py-2 flex items-center gap-2">
+        <Loader2 className="w-4 h-4 animate-spin text-neutral-500 shrink-0" />
+        {message && <span className="text-sm text-neutral-500">{message}</span>}
+      </div>
     </div>
   );
 }

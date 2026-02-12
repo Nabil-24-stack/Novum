@@ -14,21 +14,28 @@ import { useCanvasStore } from "@/hooks/useCanvasStore";
 import { useCanvasKeyboard } from "@/hooks/useCanvasKeyboard";
 import { useChatContextStore, type PinnedElement } from "@/hooks/useChatContextStore";
 import { useStrategyStore } from "@/hooks/useStrategyStore";
+import { useFlowNavigation } from "@/hooks/useFlowNavigation";
+import { useCanvasTransition } from "@/hooks/useCanvasTransition";
 import { SandpackWrapper } from "@/components/providers/SandpackWrapper";
 import { InfiniteCanvas, type ViewportState } from "@/components/canvas/InfiniteCanvas";
-import { Frame, type FrameState, DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT } from "@/components/canvas/Frame";
-import { CanvasOverlay } from "@/components/canvas/CanvasOverlay";
+import { type FrameState, DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT } from "@/components/canvas/Frame";
+import { CanvasOverlay, type FlowFrameDropState } from "@/components/canvas/CanvasOverlay";
 import { RightPanel, type RightPanelTab } from "@/components/editor/RightPanel";
 import { TokenStudio } from "@/components/editor/TokenStudio";
 import { ComponentDialog } from "@/components/canvas/ComponentDialog";
 import { InspectorContextMenu } from "@/components/canvas/InspectorContextMenu";
-import { FlowCanvas, type CanvasMode } from "@/components/flow";
+import { FlowFrame } from "@/components/flow/FlowFrame";
+import { FlowConnections } from "@/components/flow/FlowConnections";
+import { ViewModeToggle, type CanvasMode } from "@/components/flow/ViewModeToggle";
 import { ManifestoCard } from "@/components/strategy/ManifestoCard";
 import { StrategyFlowCanvas } from "@/components/strategy/StrategyFlowCanvas";
 import { initializeTestAPI, updateTestAPI } from "@/lib/ast/test-utils";
-import { animateViewport } from "@/lib/canvas/viewport-animation";
+import { animateViewport, calculateCenteredViewport, calculateFitAllViewport } from "@/lib/canvas/viewport-animation";
+import { calculateFlowLayout } from "@/lib/flow/auto-layout";
 import type { CanvasTool, CanvasNode } from "@/lib/canvas/types";
 import type { ContextMenuPayload } from "@/lib/inspection/types";
+import type { FlowNodePosition } from "@/lib/flow/types";
+import type { PreviewMode } from "@/lib/tokens";
 
 type ViewMode = "app" | "design-system";
 
@@ -51,20 +58,36 @@ export default function Home() {
   // Canvas mode: prototype (single frame) or flow (multi-page flow diagram)
   const [canvasMode, setCanvasMode] = useState<CanvasMode>("prototype");
 
+  // Frame expand state (fullscreen-like preview)
+  const [isFrameExpanded, setIsFrameExpanded] = useState(false);
+  const expandSavedViewport = useRef<ViewportState | null>(null);
+
   // Active route for prototype view (navigating from flow view)
   const [activeRoute, setActiveRoute] = useState("/");
-
-  // Refresh counter to force SandpackWrapper remount
-  const [refreshKey, setRefreshKey] = useState(0);
 
   // Strategy state
   const strategyPhase = useStrategyStore((s) => s.phase);
   const manifestoData = useStrategyStore((s) => s.manifestoData);
   const streamingOverview = useStrategyStore((s) => s.streamingOverview);
   const flowData = useStrategyStore((s) => s.flowData);
+  const completedPages = useStrategyStore((s) => s.completedPages);
+  const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
+
+  // Compute visible page IDs for progressive FlowFrame rendering
+  const visiblePageIds = useMemo(() => {
+    if (strategyPhase !== "building") return undefined; // Show all pages when not building
+    const ids = new Set(completedPages);
+    if (currentBuildingPage) ids.add(currentBuildingPage);
+    return ids;
+  }, [strategyPhase, completedPages, currentBuildingPage]);
+
+  // State for auto-centering viewport on newly built pages
+  const [centerOnPageId, setCenterOnPageId] = useState<string | null>(null);
 
   // Draggable overview card position (world-space)
   const [manifestoPos, setManifestoPos] = useState({ x: DEFAULT_MANIFESTO_X, y: DEFAULT_MANIFESTO_Y });
+  // Y offset to push FlowFrames below strategy content during building
+  const [flowLayoutOffset, setFlowLayoutOffset] = useState({ x: 0, y: 0 });
   // Derived flow offset — always to the right of the overview card
   const strategyFlowOffsetX = manifestoPos.x + MANIFESTO_WIDTH + 60;
   const strategyFlowOffsetY = manifestoPos.y;
@@ -76,23 +99,7 @@ export default function Home() {
   // Flow manifest parsed from /flow.json
   const flowManifest = useFlowManifest(files);
 
-  // Compute hash of VFS files for change detection (layers panel auto-refresh)
-  const vfsHash = useMemo(() => {
-    const entries = Object.entries(files);
-    return entries.reduce((acc, [path, content]) =>
-      acc + path.length + content.length, entries.length);
-  }, [files]);
-
-  // Frame state lifted here to persist across SandpackWrapper remounts (light/dark mode toggle)
-  const [frameState, setFrameState] = useState<FrameState>({
-    x: 100,
-    y: 100,
-    width: DEFAULT_FRAME_WIDTH,
-    height: DEFAULT_FRAME_HEIGHT,
-  });
-
-  // Canvas viewport state for prototype view
-  // Use a ref to track the "real" viewport to detect unexpected resets
+  // --- Unified viewport state (single viewport for both modes) ---
   const viewportRef = useRef<ViewportState>({ x: 0, y: 0, scale: 1 });
   const [viewport, setViewportInternal] = useState<ViewportState>({
     x: 0,
@@ -100,7 +107,6 @@ export default function Home() {
     scale: 1,
   });
 
-  // Wrapped setViewport that updates both state and ref
   const setViewport = useCallback((update: ViewportState | ((prev: ViewportState) => ViewportState)) => {
     setViewportInternal((prev) => {
       const newValue = typeof update === "function" ? update(prev) : update;
@@ -109,17 +115,55 @@ export default function Home() {
     });
   }, []);
 
-  // Separate viewport state for flow view (preserve pan/zoom independently)
-  const [flowViewport, setFlowViewport] = useState<ViewportState>({
-    x: 50,
-    y: 80,
-    scale: 1,
-  });
+  // --- State absorbed from FlowCanvas ---
 
-  // Callback to auto-switch to Design tab and open Layers when element is selected
+  // Store node positions (allows manual repositioning)
+  const [nodePositions, setNodePositionsInternal] = useState<Map<string, FlowNodePosition>>(
+    () => new Map()
+  );
+  const nodePositionsRef = useRef<Map<string, FlowNodePosition>>(new Map());
+  const setNodePositions: typeof setNodePositionsInternal = useCallback((update) => {
+    setNodePositionsInternal((prev) => {
+      const newValue = typeof update === "function" ? update(prev) : update;
+      nodePositionsRef.current = newValue;
+      return newValue;
+    });
+  }, []);
+
+  // Track which frame is active (receives inspection events, ring highlight)
+  const [activeFrameId, setActiveFrameId] = useState<string | null>(null);
+
+  // Track per-frame preview modes (independent light/dark toggle)
+  const [framePreviewModes, setFramePreviewModes] = useState<Map<string, PreviewMode>>(
+    () => new Map()
+  );
+
+  // Canvas dimensions for SVG connections
+  const [canvasDimensions, setCanvasDimensions] = useState({ width: 800, height: 600 });
+
+  // Container dimensions for viewport centering calculations
+  const [containerDimensions, setContainerDimensions] = useState({ width: 800, height: 600 });
+
+  // Canvas transition animation hook
+  const transition = useCanvasTransition();
+
+  // Derive activePageId from activeRoute + manifest
+  const activePageId = useMemo(() => {
+    const page = flowManifest.pages.find((p) => p.route === activeRoute);
+    return page?.id ?? flowManifest.pages[0]?.id ?? null;
+  }, [flowManifest.pages, activeRoute]);
+
+  // Sync activeFrameId with activePageId in prototype mode
+  useEffect(() => {
+    if (canvasMode === "prototype" && activePageId) {
+      setActiveFrameId(activePageId);
+    }
+  }, [canvasMode, activePageId]);
+
+  // Callback to auto-switch to Design tab when element is selected
+  // (FlowFrame auto-opens layers internally via selectedPageId prop)
   const handleElementSelected = useCallback(() => {
     setRightPanelTab("design");
-    setLayersOpen(true);
   }, []);
 
   const inspection = useInspection({ onElementSelected: handleElementSelected });
@@ -199,8 +243,11 @@ export default function Home() {
   // Canvas keyboard shortcuts (Cmd+G for grouping, etc.)
   useCanvasKeyboard();
 
-  // Ref for infinite canvas container (for coordinate conversion in CanvasOverlay)
+  // Ref for infinite canvas inner container (for coordinate conversion in CanvasOverlay)
   const canvasContainerRef = useRef<HTMLDivElement>(null);
+
+  // Ref for outer canvas wrapper (for dimension measurement)
+  const canvasWrapperRef = useRef<HTMLDivElement>(null);
 
   // Coordinate canvas tool with inspection mode
   useEffect(() => {
@@ -209,12 +256,226 @@ export default function Home() {
     }
   }, [canvasTool.activeTool, inspection]);
 
+  // --- Container dimensions ResizeObserver ---
+  useEffect(() => {
+    const container = canvasWrapperRef.current;
+    if (!container) return;
+
+    const updateDimensions = () => {
+      setContainerDimensions({
+        width: container.clientWidth,
+        height: container.clientHeight,
+      });
+    };
+
+    updateDimensions();
+
+    const resizeObserver = new ResizeObserver(updateDimensions);
+    resizeObserver.observe(container);
+
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  // --- Frame expand toggle: sets viewport + expanded state synchronously ---
+  // Both state updates are batched by React into a single render, preventing
+  // the frame from jumping off-screen (which happens if position overrides
+  // before the viewport catches up via an async effect).
+  const handleExpandToggle = useCallback(() => {
+    if (!isFrameExpanded) {
+      // Expanding: save viewport, snap to origin at scale 1
+      expandSavedViewport.current = { ...viewportRef.current };
+      setViewport({ x: 0, y: 0, scale: 1 });
+    } else {
+      // Collapsing: restore saved viewport
+      if (expandSavedViewport.current) {
+        setViewport(expandSavedViewport.current);
+        expandSavedViewport.current = null;
+      }
+    }
+    setIsFrameExpanded((prev) => !prev);
+  }, [isFrameExpanded, setViewport]);
+
+  // --- Flow navigation interception ---
+  useFlowNavigation({
+    canvasMode,
+    manifest: flowManifest,
+    nodePositions,
+    viewport,
+    onViewportChange: setViewport,
+    containerDimensions,
+  });
+
+  // --- Calculate flow layout when manifest changes ---
+  // Preserve existing positions for nodes the user may have dragged;
+  // only auto-layout newly added nodes.
+  useEffect(() => {
+    const layout = calculateFlowLayout(flowManifest.pages, flowManifest.connections);
+
+    setNodePositions((prev) => {
+      const newMap = new Map(prev);
+      for (const node of layout.nodes) {
+        if (!newMap.has(node.id)) {
+          newMap.set(node.id, {
+            ...node,
+            x: node.x + flowLayoutOffset.x,
+            y: node.y + flowLayoutOffset.y,
+          });
+        }
+      }
+      // Remove nodes that no longer exist in manifest
+      for (const id of newMap.keys()) {
+        if (!layout.nodes.some((n) => n.id === id)) {
+          newMap.delete(id);
+        }
+      }
+      return newMap;
+    });
+    setCanvasDimensions({ width: layout.width, height: layout.height });
+  }, [flowManifest, flowLayoutOffset]);
+
+  // --- Auto-center on a specific page when centerOnPageId changes ---
+  useEffect(() => {
+    if (!centerOnPageId) return;
+
+    const pos = nodePositions.get(centerOnPageId);
+    if (!pos) return;
+
+    const targetViewport = calculateCenteredViewport(
+      { x: pos.x, y: pos.y, width: pos.width, height: pos.height },
+      containerDimensions.width,
+      containerDimensions.height
+    );
+
+    const cancel = animateViewport(viewport, targetViewport, setViewport, { duration: 400 });
+    setCenterOnPageId(null);
+
+    return cancel;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [centerOnPageId, nodePositions.size]);
+
+  // --- Node drag handler (updates position in real-time) ---
+  const handleNodeDrag = useCallback((nodeId: string, deltaX: number, deltaY: number) => {
+    setNodePositions((prev) => {
+      const newMap = new Map(prev);
+      const node = newMap.get(nodeId);
+
+      if (node) {
+        newMap.set(nodeId, {
+          ...node,
+          x: node.x + deltaX,
+          y: node.y + deltaY,
+        });
+      }
+
+      return newMap;
+    });
+
+    // Expand canvas bounds separately (avoid side effects inside state updater)
+    setCanvasDimensions((dims) => {
+      const pos = nodePositionsRef.current.get(nodeId);
+      if (!pos) return dims;
+      return {
+        width: Math.max(dims.width, pos.x + pos.width + 50),
+        height: Math.max(dims.height, pos.y + pos.height + 100),
+      };
+    });
+  }, []);
+
+  // --- Node resize handler ---
+  const handleNodeResize = useCallback((nodeId: string, width: number, height: number) => {
+    setNodePositions((prev) => {
+      const newMap = new Map(prev);
+      const node = newMap.get(nodeId);
+
+      if (node) {
+        newMap.set(nodeId, { ...node, width, height });
+      }
+
+      return newMap;
+    });
+
+    // Expand canvas bounds separately (avoid side effects inside state updater)
+    setCanvasDimensions((dims) => {
+      const pos = nodePositionsRef.current.get(nodeId);
+      if (!pos) return dims;
+      return {
+        width: Math.max(dims.width, pos.x + pos.width + 50),
+        height: Math.max(dims.height, pos.y + pos.height + 100),
+      };
+    });
+  }, []);
+
+  // --- Frame activation handler ---
+  const handleFrameActivate = useCallback((frameId: string) => {
+    setActiveFrameId(frameId);
+  }, []);
+
+  // --- Per-frame preview mode change ---
+  const handleFramePreviewModeChange = useCallback((frameId: string, mode: PreviewMode) => {
+    setFramePreviewModes((prev) => {
+      const newMap = new Map(prev);
+      newMap.set(frameId, mode);
+      return newMap;
+    });
+  }, []);
+
+  // --- Memoized connections ---
+  const connections = useMemo(() => flowManifest.connections, [flowManifest.connections]);
+
+  // --- Flow frame states for multi-frame drop detection ---
+  const flowFrameStates: FlowFrameDropState[] = useMemo(() => {
+    return flowManifest.pages
+      .map((page) => {
+        const pos = nodePositions.get(page.id);
+        if (!pos) return null;
+        return {
+          pageId: page.id,
+          route: page.route,
+          x: pos.x,
+          y: pos.y,
+          width: pos.width,
+          height: pos.height,
+        };
+      })
+      .filter((s): s is FlowFrameDropState => s !== null);
+  }, [flowManifest.pages, nodePositions]);
+
+  // --- Visible pages / connections (progressive rendering during build) ---
+  const visiblePages = useMemo(() => {
+    if (!visiblePageIds) return flowManifest.pages;
+    return flowManifest.pages.filter((p) => visiblePageIds.has(p.id));
+  }, [flowManifest.pages, visiblePageIds]);
+
+  const visibleConnections = useMemo(() => {
+    if (!visiblePageIds) return connections;
+    return connections.filter(
+      (c) => visiblePageIds.has(c.from) && visiblePageIds.has(c.to)
+    );
+  }, [connections, visiblePageIds]);
+
+  const visibleFlowFrameStates = useMemo(() => {
+    if (!visiblePageIds) return flowFrameStates;
+    return flowFrameStates.filter((s) => visiblePageIds.has(s.pageId));
+  }, [flowFrameStates, visiblePageIds]);
+
+  // --- Active frame state for CanvasOverlay (prototype mode drop detection) ---
+  const activeFrameState: FrameState | undefined = useMemo(() => {
+    if (!activePageId) return undefined;
+    const pos = nodePositions.get(activePageId);
+    if (!pos) return undefined;
+    return { x: pos.x, y: pos.y, width: pos.width, height: pos.height };
+  }, [activePageId, nodePositions]);
+
+  // --- Strategy flow offset derived from manifesto position ---
+  const manifestoX = manifestoPos.x;
+  const manifestoY = manifestoPos.y;
+  const buildingFlowOffsetX = manifestoX + 660;
+  const buildingFlowOffsetY = manifestoY;
+
   // Handle component selection from dialog
   const handleComponentSelect = useCallback((componentType: string, defaultWidth: number, defaultHeight: number) => {
-    // Calculate viewport center in world coordinates (use flow viewport when in flow mode)
-    const currentViewport = canvasMode === "flow" ? flowViewport : viewport;
-    const viewportCenterX = (-currentViewport.x + window.innerWidth / 2) / currentViewport.scale;
-    const viewportCenterY = (-currentViewport.y + window.innerHeight / 2) / currentViewport.scale;
+    const viewportCenterX = (-viewport.x + window.innerWidth / 2) / viewport.scale;
+    const viewportCenterY = (-viewport.y + window.innerHeight / 2) / viewport.scale;
 
     const newNode: CanvasNode = {
       id: `ghost-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -228,67 +489,60 @@ export default function Home() {
 
     canvasStore.addNode(newNode);
     canvasStore.selectNode(newNode.id);
-    canvasTool.setActiveTool("cursor"); // Auto-switch to cursor for immediate manipulation
-  }, [viewport, flowViewport, canvasMode, canvasStore, canvasTool]);
+    canvasTool.setActiveTool("cursor");
+  }, [viewport, canvasStore, canvasTool]);
 
-  // Handle flow page selection: navigate to that page in prototype view
-  const handleFlowPageSelect = useCallback((route: string) => {
-    setActiveRoute(route);
-    setCanvasMode("prototype");
-  }, []);
+  // Handle canvas mode change via ViewModeToggle
+  const handleCanvasModeChange = useCallback((newMode: CanvasMode) => {
+    // Collapse expanded frame and restore viewport if needed
+    if (isFrameExpanded && expandSavedViewport.current) {
+      setViewport(expandSavedViewport.current);
+      expandSavedViewport.current = null;
+    }
+    setIsFrameExpanded(false);
+    if (canvasMode === "flow" && newMode === "prototype") {
+      // Flow → Prototype: set active route from currently active frame
+      const activePage = flowManifest.pages.find((p) => p.id === activeFrameId);
+      if (activePage) {
+        setActiveRoute(activePage.route);
+      }
+    }
+    // Animated transition for both directions (collapsing skips viewport animation)
+    const currentActiveId = canvasMode === "prototype" ? activePageId : activeFrameId;
+    if (currentActiveId) {
+      transition.start(canvasMode, newMode, currentActiveId, nodePositions, viewport, setViewport, containerDimensions);
+    }
+    setCanvasMode(newMode);
+  }, [canvasMode, isFrameExpanded, activePageId, activeFrameId, flowManifest.pages, transition, nodePositions, viewport, setViewport, containerDimensions]);
 
-  // Handle node materialization: convert canvas node to actual code (Prototype View)
+  // Unified materialization handler (works for both modes)
   const handleMaterialize = useCallback(
-    async (node: CanvasNode, nodes: Map<string, CanvasNode>, iframeDropPoint: { x: number; y: number }) => {
-      // Extra safety check: only allow drops when inspection mode is ON
+    async (node: CanvasNode, nodes: Map<string, CanvasNode>, iframeDropPoint: { x: number; y: number }, pageId?: string) => {
       if (!inspection.inspectionMode) return;
 
-      const result = await materializeNode(node, nodes, frameState, iframeDropPoint);
+      // In prototype mode, always target the active page
+      const targetPageId = pageId ?? activePageId ?? undefined;
+
+      const result = await materializeNode(node, nodes, activeFrameState ?? { x: 0, y: 0, width: DEFAULT_FRAME_WIDTH, height: DEFAULT_FRAME_HEIGHT }, iframeDropPoint, targetPageId);
 
       if (result.success) {
-        // Remove the node from canvas (it's now real code)
         canvasStore.removeNode(node.id);
-        // HMR handles the update instantly thanks to warmup pre-compilation
-        console.log("[Materializer] Node materialized successfully:", node.type);
+        console.log("[Materializer] Node materialized successfully:", node.type, "→ page:", targetPageId);
       } else {
         console.error("[Materializer] Failed to materialize node:", result.error);
       }
     },
-    [materializeNode, frameState, canvasStore, inspection.inspectionMode]
-  );
-
-  // Handle node materialization in Flow View: convert canvas node to actual code in targeted page
-  const handleFlowMaterialize = useCallback(
-    async (node: CanvasNode, nodes: Map<string, CanvasNode>, iframeDropPoint: { x: number; y: number }, pageId?: string) => {
-      if (!inspection.inspectionMode) return;
-
-      const result = await materializeNode(node, nodes, frameState, iframeDropPoint, pageId);
-
-      if (result.success) {
-        canvasStore.removeNode(node.id);
-        console.log("[Materializer] Flow node materialized successfully:", node.type, "→ page:", pageId);
-      } else {
-        console.error("[Materializer] Failed to materialize flow node:", result.error);
-      }
-    },
-    [materializeNode, frameState, canvasStore, inspection.inspectionMode]
+    [materializeNode, activeFrameState, activePageId, canvasStore, inspection.inspectionMode]
   );
 
   // Handle tool change - open component dialog immediately when component tool is selected
   const handleToolChange = useCallback((tool: CanvasTool) => {
     if (tool === "component") {
       setComponentDialogOpen(true);
-      // Don't change the active tool - keep cursor active
     } else {
       canvasTool.setActiveTool(tool);
     }
   }, [canvasTool]);
-
-  // Layers panel open state (Frame handles its own DOM tree and messaging)
-  const [layersOpen, setLayersOpen] = useState(false);
-
-  // Close layers panel when inspection mode is disabled
-  const derivedLayersOpen = inspection.inspectionMode && layersOpen;
 
   // Debounced CSS hash to force Design System preview remount when theme changes
   const [cssHash, setCssHash] = useState(0);
@@ -297,11 +551,9 @@ export default function Home() {
   useEffect(() => {
     const currentCss = files["/globals.css"];
 
-    // Only trigger if CSS actually changed
     if (currentCss === cssContentRef.current) return;
     cssContentRef.current = currentCss;
 
-    // Debounce by 1000ms so we don't reload while dragging sliders
     const timer = setTimeout(() => {
       console.log("[ThemeSync] CSS changed, triggering preview refresh");
       setCssHash((prev) => prev + 1);
@@ -316,9 +568,8 @@ export default function Home() {
       if (!event.data || event.data.type !== "novum:context-menu") return;
 
       const payload = event.data.payload as ContextMenuPayload;
-      if (!payload?.source) return; // Only show if element has AST source location
+      if (!payload?.source) return;
 
-      // Find the source iframe via event.source
       const iframes = document.querySelectorAll("iframe");
       let sourceIframe: HTMLIFrameElement | null = null;
       for (const iframe of iframes) {
@@ -329,14 +580,12 @@ export default function Home() {
       }
       if (!sourceIframe) return;
 
-      // Convert iframe-local coords to screen-space with scale correction
       const iframeRect = sourceIframe.getBoundingClientRect();
       const scaleX = iframeRect.width / sourceIframe.clientWidth;
       const scaleY = iframeRect.height / sourceIframe.clientHeight;
       const screenX = iframeRect.left + payload.menuX * scaleX;
       const screenY = iframeRect.top + payload.menuY * scaleY;
 
-      // Build display label: "<tagName.firstClass>" or "<TagName>"
       const tag = payload.tagName;
       const firstClass = payload.className
         ? payload.className.split(/\s+/)[0]
@@ -370,10 +619,8 @@ export default function Home() {
 
   // --- Strategy Mode Handlers ---
 
-  // Called by ChatTab when user sends their first message in hero phase
   const handleHeroSubmit = useCallback(() => {
     // Phase transition already handled by ChatTab + strategy store
-    // UI reacts automatically to phase change
   }, []);
 
   // Center the floating chat on mount for hero phase
@@ -396,7 +643,6 @@ export default function Home() {
     if (strategyPhase === "manifesto" && showOverview && !hasAnimatedToOverview.current) {
       hasAnimatedToOverview.current = true;
 
-      // Center the overview card + chat as a group in the viewport
       const overviewWidth = 600;
       const chatWidth = 630;
       const chatHeight = 720;
@@ -406,7 +652,6 @@ export default function Home() {
       const screenW = window.innerWidth;
       const screenH = window.innerHeight;
 
-      // Viewport offset so the overview card's left edge places the combined block centered
       const targetViewport = {
         x: (screenW - combinedWidth) / 2 - manifestoPos.x,
         y: (screenH - chatHeight) / 2 - manifestoPos.y,
@@ -414,7 +659,6 @@ export default function Home() {
       };
       animateViewport(viewport, targetViewport, setViewport, { duration: 400 });
 
-      // Position floating chat in screen space: right of the overview card
       const chatScreenX = (screenW - combinedWidth) / 2 + overviewWidth + gap;
       const chatScreenY = (screenH - chatHeight) / 2;
 
@@ -424,7 +668,6 @@ export default function Home() {
         x: chatScreenX,
         y: chatScreenY,
       }));
-      // Disable animation after transition completes
       const timer = setTimeout(() => setFloatingAnimate(false), 500);
       return () => clearTimeout(timer);
     }
@@ -434,7 +677,6 @@ export default function Home() {
   // Animate viewport when strategy flow appears + slide floating chat beside flow
   useEffect(() => {
     if (strategyPhase === "flow" && flowData) {
-      // Center the full layout (overview + flow + chat) in the viewport
       const nodeCount = flowData.nodes.length;
       const estimatedFlowWidth = Math.max(520, nodeCount * 260);
       const estimatedFlowHeight = Math.max(200, Math.ceil(nodeCount / 3) * 180);
@@ -442,17 +684,14 @@ export default function Home() {
       const chatHeight = 720;
       const gap = 20;
 
-      // Total world-space width: from overview left edge to flow right edge
       const totalWorldWidth = (strategyFlowOffsetX - manifestoPos.x) + estimatedFlowWidth;
       const combinedWidth = totalWorldWidth + gap + chatWidth;
 
       const screenW = window.innerWidth;
       const screenH = window.innerHeight;
 
-      // Pick scale to fit everything, capped at 1
       const scale = Math.min(1, (screenW - 80) / combinedWidth);
 
-      // Center vertically on the taller of flow or chat
       const contentHeight = Math.max(estimatedFlowHeight, chatHeight / scale);
       const targetViewport = {
         x: (screenW - combinedWidth * scale) / 2 - manifestoPos.x * scale,
@@ -461,7 +700,6 @@ export default function Home() {
       };
       animateViewport(viewport, targetViewport, setViewport, { duration: 400 });
 
-      // Position floating chat in screen space: right of the flow canvas
       const flowScreenRight =
         (strategyFlowOffsetX + estimatedFlowWidth) * scale + targetViewport.x + gap;
       const chatScreenY = (screenH - chatHeight) / 2;
@@ -482,7 +720,6 @@ export default function Home() {
     if (action === "approve-manifesto") {
       useStrategyStore.getState().setPhase("flow");
     } else if (action === "approve-flow") {
-      // Convert strategy flow nodes (type=page) to /flow.json entries
       const currentFlowData = useStrategyStore.getState().flowData;
       if (currentFlowData) {
         const pageNodes = currentFlowData.nodes.filter((n) => n.type === "page");
@@ -510,8 +747,31 @@ export default function Home() {
 
       useStrategyStore.getState().setPhase("building");
       setCanvasMode("flow");
+
+      // Position FlowFrames below strategy content (keep manifesto in place)
+      const strategyBottom = manifestoPos.y + 700; // generous height estimate for manifesto + strategy flow
+      const flowYOffset = strategyBottom + 120;     // 120px gap below strategy content
+      setFlowLayoutOffset({ x: manifestoPos.x - 50, y: flowYOffset - 50 }); // subtract auto-layout MARGIN(50)
+
+      // Dock the chat panel to the sidebar for building phase
+      setChatMode("docked");
+
+      // Animate viewport to show strategy content + first FlowFrame area
+      requestAnimationFrame(() => {
+        const rects = [
+          { x: manifestoPos.x, y: manifestoPos.y, width: MANIFESTO_WIDTH, height: 600 },
+          { x: manifestoPos.x, y: flowYOffset, width: DEFAULT_FRAME_WIDTH, height: DEFAULT_FRAME_HEIGHT },
+        ];
+        const target = calculateFitAllViewport(rects, containerDimensions.width, containerDimensions.height);
+        animateViewport(viewportRef.current, target, setViewport, { duration: 500 });
+      });
     }
-  }, [writeFile]);
+  }, [writeFile, setViewport, manifestoPos, containerDimensions]);
+
+  // Handle "Approve & Build Next Page" — animate viewport to the next page's FlowFrame
+  const handleApproveAndBuildNext = useCallback((nextPageId: string) => {
+    setCenterOnPageId(nextPageId);
+  }, []);
 
   // --- Floating Chat Handlers ---
 
@@ -535,6 +795,37 @@ export default function Home() {
   const showRightPanel = strategyPhase !== "hero" && !(isEarlyStrategyPhase && chatMode === "floating");
   const showNav = strategyPhase !== "hero";
 
+  // --- Frame visibility helpers ---
+  const isFrameVisible = useCallback((pageId: string): boolean => {
+    if (transition.isTransitioning) return true; // During transition, opacity is controlled by transitionStyle
+    if (canvasMode === "flow") return true;
+    // Prototype mode: only active page visible
+    return pageId === activePageId;
+  }, [transition.isTransitioning, canvasMode, activePageId]);
+
+  const getTransitionStyle = useCallback((pageId: string): React.CSSProperties | undefined => {
+    if (!transition.isTransitioning) return undefined;
+    const target = transition.frameTargets.get(pageId);
+    if (!target) return undefined;
+    const isActive = pageId === activePageId;
+    return {
+      opacity: target.opacity,
+      transform: `translate(${target.translateX}px, ${target.translateY}px) scale(${target.scale})`,
+      transition: "opacity 300ms ease-out, transform 300ms ease-out",
+      pointerEvents: isActive ? "auto" as const : "none" as const,
+      transformOrigin: "center center",
+    };
+  }, [transition.isTransitioning, transition.frameTargets, activePageId]);
+
+  // Determine which frame is "active" (ring highlight + inspection)
+  const isFrameActive = useCallback((pageId: string): boolean => {
+    if (canvasMode === "prototype") return pageId === activePageId;
+    return pageId === activeFrameId;
+  }, [canvasMode, activePageId, activeFrameId]);
+
+  // Determine connection opacity (fades in/out during transitions)
+  const connectionOpacity = transition.isTransitioning ? transition.connectionOpacity : (canvasMode === "flow" ? 1 : 0);
+
   return (
     <main className="w-screen h-screen overflow-hidden flex flex-col">
       {/* Top Navigation Bar - hidden during hero phase */}
@@ -543,30 +834,14 @@ export default function Home() {
           <div className="flex items-center gap-1">
             <span className="font-semibold text-neutral-800 mr-4">Novum</span>
 
-            {/* View Mode Toggle - hidden during early strategy phases */}
-            {!isEarlyStrategyPhase && (
-              <div className="flex bg-neutral-100 rounded-lg p-0.5">
-                <button
-                  onClick={() => setViewMode("app")}
-                  className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                    viewMode === "app"
-                      ? "bg-white text-neutral-900 shadow-sm"
-                      : "text-neutral-600 hover:text-neutral-900"
-                  }`}
-                >
-                  App Preview
-                </button>
-                <button
-                  onClick={() => setViewMode("design-system")}
-                  className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                    viewMode === "design-system"
-                      ? "bg-white text-neutral-900 shadow-sm"
-                      : "text-neutral-600 hover:text-neutral-900"
-                  }`}
-                >
-                  Design System
-                </button>
-              </div>
+            {/* Back button when viewing Design System */}
+            {viewMode === "design-system" && (
+              <button
+                onClick={() => setViewMode("app")}
+                className="flex items-center gap-1 px-2 py-1.5 text-sm text-neutral-600 hover:text-neutral-900 transition-colors"
+              >
+                ← Back
+              </button>
             )}
 
             {/* Phase indicator during strategy phases */}
@@ -579,139 +854,137 @@ export default function Home() {
               </div>
             )}
           </div>
+
+          {/* Design System button on far right */}
+          {!isEarlyStrategyPhase && viewMode === "app" && (
+            <button
+              onClick={() => setViewMode("design-system")}
+              className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
+            >
+              Design System
+            </button>
+          )}
         </nav>
       )}
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Strategy Canvas (hero + manifesto + flow phases): Canvas with strategy artifacts */}
-        {(strategyPhase === "hero" || strategyPhase === "manifesto" || strategyPhase === "flow") && (
-          <div className="flex-1 h-full min-h-0 relative isolate">
-            <InfiniteCanvas
-              ref={canvasContainerRef}
-              viewport={viewport}
-              onViewportChange={setViewport}
-              activeTool="cursor"
-              onToolChange={() => {}}
-              isDrawingActive={false}
-              onCanvasClick={() => {}}
-            >
-              {/* Overview Card — shows during streaming (progressive) and after full parse */}
-              {(manifestoData || streamingOverview) && (
-                <ManifestoCard
-                  manifestoData={manifestoData || streamingOverview!}
-                  x={manifestoPos.x}
-                  y={manifestoPos.y}
-                  onMove={(nx, ny) => setManifestoPos({ x: nx, y: ny })}
-                />
-              )}
-
-              {/* Strategy Flow Canvas */}
-              {flowData && (
-                <StrategyFlowCanvas
-                  flowData={flowData}
-                  offsetX={strategyFlowOffsetX}
-                  offsetY={strategyFlowOffsetY}
-                />
-              )}
-            </InfiniteCanvas>
-          </div>
-        )}
-
-        {/* App Preview: Canvas + Right panel (building + complete phases, or no strategy) */}
-        <div className={`flex-1 h-full min-h-0 relative isolate ${
-          isEarlyStrategyPhase || viewMode !== "app" ? "hidden" : ""
-        }`}>
-          <SandpackWrapper
-            files={shadowFiles}
-            previewMode={tokenState.previewMode}
-            inspectionMode={inspection.inspectionMode}
-            flowModeActive={canvasMode === "flow"}
-            key={`app-${tokenState.previewMode}-${activeRoute}-${refreshKey}`}
+        {/* Unified Canvas (App mode) — single InfiniteCanvas for all phases */}
+        <div
+          ref={canvasWrapperRef}
+          className={`flex-1 h-full min-h-0 relative isolate ${viewMode !== "app" ? "hidden" : ""}`}
+        >
+          <InfiniteCanvas
+            ref={canvasContainerRef}
+            viewport={viewport}
+            onViewportChange={setViewport}
+            activeTool={isEarlyStrategyPhase ? "cursor" : canvasTool.activeTool}
+            onToolChange={isEarlyStrategyPhase ? undefined : handleToolChange}
+            isDrawingActive={isEarlyStrategyPhase ? false : canvasTool.drawState.isDrawing}
+            onCanvasClick={() => canvasStore.deselectAll()}
+            hideChrome={isFrameExpanded}
           >
-            {/* Prototype View: Single Frame */}
-            <div className={canvasMode !== "prototype" ? "hidden" : "absolute inset-0"}>
-              <InfiniteCanvas
-                ref={canvasContainerRef}
-                viewport={viewport}
-                onViewportChange={setViewport}
-                activeTool={canvasTool.activeTool}
-                onToolChange={handleToolChange}
-                isDrawingActive={canvasTool.drawState.isDrawing}
-                onCanvasClick={() => canvasStore.deselectAll()}
-              >
-                <Frame
-                  x={frameState.x}
-                  y={frameState.y}
-                  width={frameState.width}
-                  height={frameState.height}
-                  onFrameChange={setFrameState}
-                  startRoute={activeRoute}
-                  previewMode={tokenState.previewMode}
-                  onPreviewModeChange={tokenState.setPreviewMode}
+            {/* Strategy artifacts — always visible once created */}
+            {(manifestoData || streamingOverview) && (
+              <ManifestoCard
+                manifestoData={manifestoData || streamingOverview!}
+                x={manifestoPos.x}
+                y={manifestoPos.y}
+                onMove={(nx, ny) => setManifestoPos({ x: nx, y: ny })}
+              />
+            )}
+            {flowData && (
+              <StrategyFlowCanvas
+                flowData={flowData}
+                offsetX={isEarlyStrategyPhase ? strategyFlowOffsetX : buildingFlowOffsetX}
+                offsetY={isEarlyStrategyPhase ? strategyFlowOffsetY : buildingFlowOffsetY}
+              />
+            )}
+
+            {/* FlowConnections — visible in flow mode, fades in/out during transitions */}
+            {!isEarlyStrategyPhase && (connectionOpacity > 0 || transition.isTransitioning) && (
+              <FlowConnections
+                connections={visibleConnections}
+                nodePositions={nodePositions}
+                width={canvasDimensions.width}
+                height={canvasDimensions.height}
+                style={{
+                  opacity: connectionOpacity,
+                  transition: "opacity 200ms",
+                }}
+              />
+            )}
+
+            {/* All page FlowFrames — always mounted for instant switching */}
+            {!isEarlyStrategyPhase && visiblePages.map((page) => {
+              const basePosition = nodePositions.get(page.id);
+              if (!basePosition) return null;
+
+              const isThisFrameExpanded = isFrameExpanded && canvasMode === "prototype" && page.id === activePageId;
+              // When expanded, override position to fill the canvas area at viewport origin
+              const position = isThisFrameExpanded
+                ? { ...basePosition, x: 0, y: 0, width: containerDimensions.width, height: containerDimensions.height - 36 }
+                : basePosition;
+
+              const framePreviewMode = framePreviewModes.get(page.id) ?? tokenState.previewMode;
+
+              return (
+                <FlowFrame
+                  key={page.id}
+                  page={page}
+                  position={position}
+                  files={shadowFiles}
+                  previewMode={framePreviewMode}
                   inspectionMode={inspection.inspectionMode}
+                  isActive={isFrameActive(page.id)}
+                  onActivate={handleFrameActivate}
+                  onDrag={handleNodeDrag}
+                  onResize={handleNodeResize}
+                  canvasScale={viewport.scale}
+                  onPreviewModeChange={handleFramePreviewModeChange}
                   onInspectionModeChange={inspection.setInspectionMode}
-                  // Layers panel props (Frame handles its own DOM tree and messaging)
-                  layersOpen={derivedLayersOpen}
-                  onLayersOpenChange={setLayersOpen}
+                  flowModeActive={canvasMode === "flow"}
+                  isVisible={isFrameVisible(page.id)}
+                  transitionStyle={getTransitionStyle(page.id)}
+                  selectedPageId={inspection.selectedElement?.pageId}
                   selectedSelector={inspection.selectedElement?.selector}
-                  // Canvas mode toggle (Prototype/Flow)
-                  canvasMode={canvasMode}
-                  onCanvasModeChange={setCanvasMode}
-                  // Refresh to remount SandpackWrapper
-                  onRefresh={() => setRefreshKey((k) => k + 1)}
-                  // VFS hash for auto-refresh when files change
-                  vfsHash={vfsHash}
+                  animateEntrance={strategyPhase === "building"}
+                  isExpanded={isThisFrameExpanded || undefined}
+                  onExpandToggle={canvasMode === "prototype" && page.id === activePageId ? handleExpandToggle : undefined}
+                  forceStreamingOverlay={canvasMode === "prototype" && page.id === activePageId ? true : undefined}
                 />
+              );
+            })}
 
-                {/* Canvas Overlay - Global drawing layer for ghost elements (always rendered to preserve ghosts) */}
-                <CanvasOverlay
-                  activeTool={canvasTool.activeTool}
-                  drawState={canvasTool.drawState}
-                  onStartDrawing={canvasTool.startDrawing}
-                  onUpdateDrawing={canvasTool.updateDrawing}
-                  onStopDrawing={canvasTool.stopDrawing}
-                  onOpenComponentDialog={() => setComponentDialogOpen(true)}
-                  onToolChange={canvasTool.setActiveTool}
-                  viewport={viewport}
-                  containerRef={canvasContainerRef}
-                  files={files}
-                  frameState={frameState}
-                  onMaterialize={handleMaterialize}
-                  inspectionMode={inspection.inspectionMode}
-                />
-              </InfiniteCanvas>
-            </div>
-
-            {/* Flow View: Multi-page flow diagram with full editing capabilities */}
-            <div className={canvasMode !== "flow" ? "hidden" : "absolute inset-0"}>
-              <FlowCanvas
-                manifest={flowManifest}
-                viewport={flowViewport}
-                onViewportChange={setFlowViewport}
-                onPageSelect={handleFlowPageSelect}
-                selectedRoute={activeRoute}
-                files={shadowFiles}
-                previewMode={tokenState.previewMode}
-                canvasMode={canvasMode}
-                onCanvasModeChange={setCanvasMode}
-                inspectionMode={inspection.inspectionMode}
-                onInspectionModeChange={inspection.setInspectionMode}
+            {/* Canvas Overlay — drawing layer for ghost elements */}
+            {!isEarlyStrategyPhase && (
+              <CanvasOverlay
                 activeTool={canvasTool.activeTool}
-                onToolChange={handleToolChange}
                 drawState={canvasTool.drawState}
                 onStartDrawing={canvasTool.startDrawing}
                 onUpdateDrawing={canvasTool.updateDrawing}
                 onStopDrawing={canvasTool.stopDrawing}
                 onOpenComponentDialog={() => setComponentDialogOpen(true)}
-                cleanFiles={files}
-                onMaterialize={handleFlowMaterialize}
-                selectedPageId={inspection.selectedElement?.pageId}
-                selectedSelector={inspection.selectedElement?.selector}
+                onToolChange={canvasTool.setActiveTool}
+                viewport={viewport}
+                containerRef={canvasContainerRef}
+                files={files}
+                frameState={canvasMode === "prototype" ? activeFrameState : undefined}
+                flowFrameStates={canvasMode === "flow" ? visibleFlowFrameStates : undefined}
+                onMaterialize={handleMaterialize}
+                inspectionMode={inspection.inspectionMode}
               />
-            </div>
-          </SandpackWrapper>
+            )}
+          </InfiniteCanvas>
 
+          {/* ViewModeToggle — fixed position in canvas UI layer */}
+          {!isEarlyStrategyPhase && !isFrameExpanded && (
+            <ViewModeToggle
+              mode={canvasMode}
+              onModeChange={handleCanvasModeChange}
+              className="absolute bottom-4 left-4 z-20"
+            />
+          )}
         </div>
 
         {/* Design System: Full-width preview */}
@@ -758,6 +1031,7 @@ export default function Home() {
           onFloatingResize={(nw, nh) => setFloatingRect((prev) => ({ ...prev, width: nw, height: nh }))}
           floatingAnimate={floatingAnimate}
           onHeroSubmit={handleHeroSubmit}
+          onApproveAndBuildNext={handleApproveAndBuildNext}
         />
 
         {/* Token Studio - only shown in design-system mode */}

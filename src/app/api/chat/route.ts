@@ -408,7 +408,7 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     **IMPORTANT:** Always update /flow.json when adding new pages so they appear in the Flow View!`;
 
 export async function POST(req: Request) {
-  const { messages, vfsContext, modelId, strategyPhase } = await req.json();
+  const { messages, vfsContext, modelId, strategyPhase, currentPageId, currentPageName } = await req.json();
 
   // Convert UIMessage[] to ModelMessage[] format
   const modelMessages = await convertToModelMessages(messages);
@@ -425,7 +425,9 @@ export async function POST(req: Request) {
     case "building":
       basePrompt = buildBuildSystemPrompt(
         vfsContext?.manifestoContext || "",
-        vfsContext?.flowContext || ""
+        vfsContext?.flowContext || "",
+        currentPageId,
+        currentPageName
       ) + "\n\n" + SYSTEM_PROMPT;
       break;
     default:

@@ -94,14 +94,13 @@ export function useFlowNavigation({
         cancelAnimationRef.current();
       }
 
-      // Adjust for FlowFrame's additional height (Frame header + title bar)
-      // These match the values in FlowFrame.tsx: height: position.height + 36 + 28
+      // Adjust for FlowFrame's additional height (Frame header)
+      // Matches the value in FlowFrame.tsx: height: position.height + 36
       const FRAME_HEADER_HEIGHT = 36;
-      const TITLE_BAR_HEIGHT = 28;
 
       const adjustedPosition = {
         ...targetPosition,
-        height: targetPosition.height + FRAME_HEADER_HEIGHT + TITLE_BAR_HEIGHT,
+        height: targetPosition.height + FRAME_HEADER_HEIGHT,
       };
 
       // Calculate target viewport state (centered at 100% zoom)

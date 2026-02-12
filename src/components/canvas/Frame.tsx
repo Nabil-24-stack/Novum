@@ -2,10 +2,10 @@
 
 import { useState, useCallback, useRef, useEffect, MouseEvent, PointerEvent } from "react";
 import { SandpackPreview, SandpackCodeViewer } from "@codesandbox/sandpack-react";
-import { GripHorizontal, Sun, Moon, Pencil, Layers, Eye, Code, RefreshCw } from "lucide-react";
+import { GripHorizontal, Sun, Moon, Pencil, Layers, Eye, Code, RefreshCw, Maximize2, Minimize2 } from "lucide-react";
 import { useCanvasScale } from "./InfiniteCanvas";
 import { LayersPanel } from "./LayersPanel";
-import { ViewModeToggle, type CanvasMode } from "@/components/flow";
+import { StreamingOverlay } from "./StreamingOverlay";
 import type { PreviewMode } from "@/lib/tokens";
 import type { DOMTreeNode, InspectionMessage } from "@/lib/inspection/types";
 import { DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT } from "@/lib/constants";
@@ -34,13 +34,22 @@ interface FrameProps {
   layersOpen?: boolean;
   onLayersOpenChange?: (open: boolean) => void;
   selectedSelector?: string;
-  // Canvas mode toggle (Prototype/Flow)
-  canvasMode?: CanvasMode;
-  onCanvasModeChange?: (mode: CanvasMode) => void;
   // Refresh callback to remount SandpackWrapper
   onRefresh?: () => void;
   // VFS hash for auto-refresh when files change
   vfsHash?: number;
+  // Page ID for scoping streaming overlay in Flow View
+  pageId?: string;
+  // External drag delegation (used by FlowFrame to handle repositioning)
+  pageInfo?: { name: string; route: string };
+  onExternalDragMove?: (deltaX: number, deltaY: number) => void;
+  onExternalDragStart?: () => void;
+  onExternalDragEnd?: () => void;
+  // Expand/collapse for fullscreen-like prototype preview
+  isExpanded?: boolean;
+  onExpandToggle?: () => void;
+  // Force streaming overlay to show (active frame in Prototype View)
+  forceStreamingOverlay?: boolean;
 }
 
 type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
@@ -77,10 +86,16 @@ export function Frame({
   layersOpen,
   onLayersOpenChange,
   selectedSelector,
-  canvasMode,
-  onCanvasModeChange,
   onRefresh,
   vfsHash,
+  pageId,
+  pageInfo,
+  onExternalDragMove,
+  onExternalDragStart,
+  onExternalDragEnd,
+  isExpanded,
+  onExpandToggle,
+  forceStreamingOverlay,
 }: FrameProps) {
 
   type FrameViewMode = "preview" | "code";
@@ -91,6 +106,18 @@ export function Frame({
   const resizeDirectionRef = useRef<ResizeDirection | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasScale = useCanvasScale();
+
+  // Escape key to collapse expanded frame
+  useEffect(() => {
+    if (!isExpanded) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onExpandToggle?.();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isExpanded, onExpandToggle]);
 
   // Local DOM tree state for this Frame's layers panel
   const [localDomTree, setLocalDomTree] = useState<DOMTreeNode | null>(null);
@@ -286,30 +313,49 @@ export function Frame({
     }
   }, [viewMode, inspectionMode, onInspectionModeChange]);
 
+  // Ref for tracking external drag start position
+  const externalDragStartRef = useRef<{ x: number; y: number } | null>(null);
+
   // --- Native Pointer Event Drag Handlers ---
   const handleDragPointerDown = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    if (isResizing) return;
+    if (isResizing || isExpanded) return;
     e.preventDefault();
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     setIsDragging(true);
-  }, [isResizing]);
+    if (onExternalDragMove) {
+      externalDragStartRef.current = { x: e.clientX, y: e.clientY };
+      onExternalDragStart?.();
+    }
+  }, [isResizing, isExpanded, onExternalDragMove, onExternalDragStart]);
 
   const handleDragPointerMove = useCallback((e: PointerEvent<HTMLDivElement>) => {
     if (!isDragging) return;
-    // Use movementX/movementY for precise delta, divide by scale for zoom correction
-    onFrameChange({
-      x: x + e.movementX / canvasScale,
-      y: y + e.movementY / canvasScale,
-      width,
-      height,
-    });
-  }, [isDragging, canvasScale, x, y, width, height, onFrameChange]);
+    if (onExternalDragMove) {
+      // External drag: compute deltas and forward to parent
+      const deltaX = e.clientX - externalDragStartRef.current!.x;
+      const deltaY = e.clientY - externalDragStartRef.current!.y;
+      externalDragStartRef.current = { x: e.clientX, y: e.clientY };
+      onExternalDragMove(deltaX, deltaY);
+    } else {
+      // Internal drag: update own position
+      onFrameChange({
+        x: x + e.movementX / canvasScale,
+        y: y + e.movementY / canvasScale,
+        width,
+        height,
+      });
+    }
+  }, [isDragging, onExternalDragMove, canvasScale, x, y, width, height, onFrameChange]);
 
   const handleDragPointerUp = useCallback((e: PointerEvent<HTMLDivElement>) => {
     e.currentTarget.releasePointerCapture(e.pointerId);
     setIsDragging(false);
-  }, []);
+    if (onExternalDragMove) {
+      externalDragStartRef.current = null;
+      onExternalDragEnd?.();
+    }
+  }, [onExternalDragMove, onExternalDragEnd]);
 
   // --- Resize Handlers ---
   const handleResizeStart = useCallback(
@@ -386,40 +432,32 @@ export function Frame({
   return (
     <div
       ref={containerRef}
-      className={`absolute bg-white rounded-lg shadow-xl select-none ${
-        inspectionMode && viewMode === "preview"
-          ? "border-2 border-blue-400 ring-2 ring-blue-100"
-          : "border border-neutral-200"
+      className={`absolute bg-white select-none ${
+        isExpanded
+          ? "border border-neutral-200"
+          : inspectionMode && viewMode === "preview"
+            ? "rounded-lg shadow-xl border-2 border-blue-400 ring-2 ring-blue-100"
+            : "rounded-lg shadow-xl border border-neutral-200"
       }`}
       style={{
         left: x,
         top: y,
         width: width,
         height: height + HEADER_HEIGHT,
-        overflow: "visible", // Allow LayersPanel to render outside frame bounds
+        overflow: isExpanded ? 'hidden' : 'visible',
       }}
     >
-      {/* View Mode Toggle - attached to left side of frame */}
-      {canvasMode && onCanvasModeChange && (
-        <div className="absolute top-3 -left-12 z-10">
-          <ViewModeToggle
-            mode={canvasMode}
-            onModeChange={onCanvasModeChange}
-          />
-        </div>
-      )}
-
       {/* Header / Title Bar - acts as drag handle */}
       <div
-        className={`h-9 bg-neutral-50 border-b border-neutral-200 flex items-center px-3 gap-2 overflow-hidden rounded-t-lg ${
-          isDragging ? "cursor-grabbing" : "cursor-grab"
-        }`}
+        className={`h-9 bg-neutral-50 border-b border-neutral-200 flex items-center px-3 gap-2 overflow-hidden ${
+          isExpanded ? "cursor-default" : isDragging ? "cursor-grabbing" : "cursor-grab"
+        } ${isExpanded ? "" : "rounded-t-lg"}`}
         style={{ touchAction: "none" }}
         onPointerDown={handleDragPointerDown}
         onPointerMove={handleDragPointerMove}
         onPointerUp={handleDragPointerUp}
       >
-        <GripHorizontal className="w-4 h-4 text-neutral-400 pointer-events-none" />
+        {!isExpanded && <GripHorizontal className="w-4 h-4 text-neutral-400 pointer-events-none" />}
 
         {/* Preview/Code Toggle - labels hidden when frame is narrow */}
         <div
@@ -460,9 +498,20 @@ export function Frame({
 
         <span className="flex-1" /> {/* Spacer */}
 
-        <span className="text-sm text-neutral-400 font-mono pointer-events-none">
-          {Math.round(width)} × {Math.round(height)}
-        </span>
+        {/* Page info (Flow View) */}
+        {pageInfo && (
+          <span className="text-sm text-neutral-500 pointer-events-none truncate max-w-[200px]">
+            <span className="font-medium text-neutral-700">{pageInfo.name}</span>
+            <span className="mx-1.5 text-neutral-300">·</span>
+            <span className="font-mono text-neutral-400">{pageInfo.route}</span>
+          </span>
+        )}
+
+        {!isExpanded && (
+          <span className="text-sm text-neutral-400 font-mono pointer-events-none">
+            {Math.round(width)} × {Math.round(height)}
+          </span>
+        )}
 
         {/* Inspection mode toggle - only visible in preview mode */}
         {onInspectionModeChange && viewMode === "preview" && (
@@ -517,6 +566,18 @@ export function Frame({
           </button>
         )}
 
+        {/* Expand/Collapse toggle */}
+        {onExpandToggle && viewMode === "preview" && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onExpandToggle(); }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="p-1.5 rounded transition-colors pointer-events-auto bg-neutral-100 text-neutral-400 hover:text-neutral-600"
+            title={isExpanded ? "Collapse frame" : "Expand frame"}
+          >
+            {isExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+          </button>
+        )}
+
         {/* Mode toggle (only show if callback provided) */}
         {onPreviewModeChange && (
           <div
@@ -557,9 +618,15 @@ export function Frame({
 
       {/* Sandpack Content - Preview and Code Viewer (both mounted, one hidden) */}
       <div
-        className="overflow-hidden bg-white rounded-b-lg relative"
-        style={{ height: height }}
+        className={`overflow-hidden bg-white relative ${isExpanded ? "" : "rounded-b-lg"}`}
+        style={isExpanded
+          ? { position: 'absolute', top: HEADER_HEIGHT, left: 0, right: 0, bottom: 0 }
+          : { height: height }
+        }
       >
+        {/* Streaming code overlay */}
+        <StreamingOverlay pageId={pageId} forceShow={forceStreamingOverlay} />
+
         {/* Preview - always mounted to preserve iframe state */}
         <div
           className={`absolute inset-0 ${viewMode === "preview" ? "visible" : "invisible"}`}
@@ -585,8 +652,8 @@ export function Frame({
         </div>
       </div>
 
-      {/* Layers Panel - positioned on the outside right edge of the frame (only in preview mode) */}
-      {inspectionMode && viewMode === "preview" && (
+      {/* Layers Panel - positioned on the outside right edge of the frame (only in preview mode, hidden when expanded) */}
+      {!isExpanded && inspectionMode && viewMode === "preview" && (
         <LayersPanel
           isOpen={layersOpen ?? false}
           onClose={() => {
@@ -607,42 +674,46 @@ export function Frame({
         />
       )}
 
-      {/* Resize Handles */}
-      {/* Edges */}
-      <div
-        className={`${resizeHandleClass} top-0 left-2 right-2 h-1 cursor-n-resize`}
-        onMouseDown={(e) => handleResizeStart(e, "n")}
-      />
-      <div
-        className={`${resizeHandleClass} bottom-0 left-2 right-2 h-1 cursor-s-resize`}
-        onMouseDown={(e) => handleResizeStart(e, "s")}
-      />
-      <div
-        className={`${resizeHandleClass} left-0 top-2 bottom-2 w-1 cursor-w-resize`}
-        onMouseDown={(e) => handleResizeStart(e, "w")}
-      />
-      <div
-        className={`${resizeHandleClass} right-0 top-2 bottom-2 w-1 cursor-e-resize`}
-        onMouseDown={(e) => handleResizeStart(e, "e")}
-      />
+      {/* Resize Handles (hidden when expanded) */}
+      {!isExpanded && (
+        <>
+          {/* Edges */}
+          <div
+            className={`${resizeHandleClass} top-0 left-2 right-2 h-1 cursor-n-resize`}
+            onMouseDown={(e) => handleResizeStart(e, "n")}
+          />
+          <div
+            className={`${resizeHandleClass} bottom-0 left-2 right-2 h-1 cursor-s-resize`}
+            onMouseDown={(e) => handleResizeStart(e, "s")}
+          />
+          <div
+            className={`${resizeHandleClass} left-0 top-2 bottom-2 w-1 cursor-w-resize`}
+            onMouseDown={(e) => handleResizeStart(e, "w")}
+          />
+          <div
+            className={`${resizeHandleClass} right-0 top-2 bottom-2 w-1 cursor-e-resize`}
+            onMouseDown={(e) => handleResizeStart(e, "e")}
+          />
 
-      {/* Corners */}
-      <div
-        className={`${resizeHandleClass} top-0 left-0 w-3 h-3 cursor-nw-resize`}
-        onMouseDown={(e) => handleResizeStart(e, "nw")}
-      />
-      <div
-        className={`${resizeHandleClass} top-0 right-0 w-3 h-3 cursor-ne-resize`}
-        onMouseDown={(e) => handleResizeStart(e, "ne")}
-      />
-      <div
-        className={`${resizeHandleClass} bottom-0 left-0 w-3 h-3 cursor-sw-resize`}
-        onMouseDown={(e) => handleResizeStart(e, "sw")}
-      />
-      <div
-        className={`${resizeHandleClass} bottom-0 right-0 w-3 h-3 cursor-se-resize`}
-        onMouseDown={(e) => handleResizeStart(e, "se")}
-      />
+          {/* Corners */}
+          <div
+            className={`${resizeHandleClass} top-0 left-0 w-3 h-3 cursor-nw-resize`}
+            onMouseDown={(e) => handleResizeStart(e, "nw")}
+          />
+          <div
+            className={`${resizeHandleClass} top-0 right-0 w-3 h-3 cursor-ne-resize`}
+            onMouseDown={(e) => handleResizeStart(e, "ne")}
+          />
+          <div
+            className={`${resizeHandleClass} bottom-0 left-0 w-3 h-3 cursor-sw-resize`}
+            onMouseDown={(e) => handleResizeStart(e, "sw")}
+          />
+          <div
+            className={`${resizeHandleClass} bottom-0 right-0 w-3 h-3 cursor-se-resize`}
+            onMouseDown={(e) => handleResizeStart(e, "se")}
+          />
+        </>
+      )}
     </div>
   );
 }

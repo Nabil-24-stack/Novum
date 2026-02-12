@@ -105,6 +105,8 @@ interface RightPanelProps {
   floatingAnimate?: boolean;
   /** Called when user sends first message in hero phase */
   onHeroSubmit?: () => void;
+  /** Called when user approves a built page and wants to build the next one */
+  onApproveAndBuildNext?: (nextPageId: string) => void;
 }
 
 export function RightPanel({
@@ -128,6 +130,7 @@ export function RightPanel({
   onFloatingResize,
   floatingAnimate,
   onHeroSubmit,
+  onApproveAndBuildNext,
 }: RightPanelProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [internalActiveTab, setInternalActiveTab] = useState<TabType>("chat");
@@ -592,6 +595,7 @@ export function RightPanel({
             strategyPhase={strategyPhase}
             onPhaseAction={onPhaseAction}
             onHeroSubmit={onHeroSubmit}
+            onApproveAndBuildNext={onApproveAndBuildNext}
           />
         </FloatingChatPanel>
 

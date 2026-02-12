@@ -8,7 +8,7 @@ import type { StrategyNode } from "@/hooks/useStrategyStore";
 interface StrategyFlowNodeProps {
   node: StrategyNode;
   position: { x: number; y: number; width: number; height: number };
-  index: number;
+  index?: number;
   onMove?: (id: string, x: number, y: number) => void;
 }
 
@@ -29,7 +29,7 @@ const TYPE_ICONS: Record<StrategyNode["type"], typeof FileText> = {
   data: Database,
 };
 
-export function StrategyFlowNode({ node, position, index, onMove }: StrategyFlowNodeProps) {
+export function StrategyFlowNode({ node, position, onMove }: StrategyFlowNodeProps) {
   const canvasScale = useCanvasScale();
   const [visible, setVisible] = useState(false);
   const [isDragging, setIsDragging] = useState(false);

@@ -7,11 +7,12 @@ export type CanvasMode = "prototype" | "flow";
 interface ViewModeToggleProps {
   mode: CanvasMode;
   onModeChange: (mode: CanvasMode) => void;
+  className?: string;
 }
 
-export function ViewModeToggle({ mode, onModeChange }: ViewModeToggleProps) {
+export function ViewModeToggle({ mode, onModeChange, className }: ViewModeToggleProps) {
   return (
-    <div className="flex flex-col bg-white rounded-lg shadow-lg border border-neutral-200 p-1 gap-1">
+    <div className={`flex flex-col bg-white rounded-lg shadow-lg border border-neutral-200 p-1 gap-1 ${className ?? ""}`}>
       <button
         onClick={() => onModeChange("prototype")}
         className={`p-2 rounded-md transition-colors relative group ${

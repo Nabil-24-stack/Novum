@@ -18,6 +18,7 @@ interface InfiniteCanvasProps {
   onToolChange?: (tool: CanvasTool) => void;
   isDrawingActive?: boolean;
   onCanvasClick?: () => void;
+  hideChrome?: boolean;
 }
 
 // Context to share canvas scale with child components (e.g., Frame)
@@ -32,7 +33,7 @@ const MAX_SCALE = 3;
 const ZOOM_SENSITIVITY = 0.01;
 
 export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(function InfiniteCanvas(
-  { children, viewport, onViewportChange, activeTool, onToolChange, isDrawingActive, onCanvasClick },
+  { children, viewport, onViewportChange, activeTool, onToolChange, isDrawingActive, onCanvasClick, hideChrome },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -93,8 +94,8 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
     if (!container) return;
 
     const handleWheel = (e: WheelEvent) => {
-      // Skip pan/zoom while drawing to prevent accidental canvas movement
-      if (isDrawingActive) return;
+      // Skip pan/zoom while drawing or when chrome is hidden (expanded mode)
+      if (isDrawingActive || hideChrome) return;
       e.preventDefault();
 
       // Pinch-to-zoom: browsers report pinch gestures as wheel events with ctrlKey
@@ -140,7 +141,7 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
 
     // Middle-mouse drag pan
     const handlePointerDown = (e: PointerEvent) => {
-      if (e.button !== 1) return; // Middle mouse button only
+      if (e.button !== 1 || hideChrome) return; // Middle mouse button only, skip when expanded
       e.preventDefault();
       middleMousePan.current = { active: true, lastX: e.clientX, lastY: e.clientY };
       container.setPointerCapture(e.pointerId);
@@ -184,7 +185,7 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
       container.removeEventListener("auxclick", handleAuxClick);
       container.removeEventListener("mousedown", handleMouseDown);
     };
-  }, [onViewportChange, isDrawingActive]);
+  }, [onViewportChange, isDrawingActive, hideChrome]);
 
   // Handle canvas background click to deselect
   const handleCanvasClick = (e: React.MouseEvent) => {
@@ -216,16 +217,18 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
         onScroll={handleScroll}
       >
         {/* Grid pattern background */}
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            backgroundImage: `
-              radial-gradient(circle, #d4d4d4 1px, transparent 1px)
-            `,
-            backgroundSize: `${20 * viewport.scale}px ${20 * viewport.scale}px`,
-            backgroundPosition: `${viewport.x}px ${viewport.y}px`,
-          }}
-        />
+        {!hideChrome && (
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              backgroundImage: `
+                radial-gradient(circle, #d4d4d4 1px, transparent 1px)
+              `,
+              backgroundSize: `${20 * viewport.scale}px ${20 * viewport.scale}px`,
+              backgroundPosition: `${viewport.x}px ${viewport.y}px`,
+            }}
+          />
+        )}
 
         {/* Canvas content with pan/zoom transform */}
         <div
@@ -238,12 +241,14 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
         </div>
 
         {/* Zoom indicator */}
-        <div className="absolute bottom-4 right-4 bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-md shadow-sm text-base text-neutral-600 font-mono">
-          {Math.round(viewport.scale * 100)}%
-        </div>
+        {!hideChrome && (
+          <div className="absolute bottom-4 right-4 bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-md shadow-sm text-base text-neutral-600 font-mono">
+            {Math.round(viewport.scale * 100)}%
+          </div>
+        )}
 
         {/* Canvas Toolbar */}
-        {onToolChange && (
+        {!hideChrome && onToolChange && (
           <CanvasToolbar
             activeTool={activeTool ?? "cursor"}
             onToolChange={onToolChange}

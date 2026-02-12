@@ -37,6 +37,8 @@ interface StrategyState {
   streamingOverview: Partial<ManifestoData> | null;
   flowData: FlowData | null;
   completedPages: string[];
+  currentBuildingPage: string | null;
+  pendingApprovalPage: string | null;
 
   // Actions
   setPhase: (phase: StrategyPhase) => void;
@@ -45,6 +47,8 @@ interface StrategyState {
   setStreamingOverview: (data: Partial<ManifestoData> | null) => void;
   setFlowData: (data: FlowData) => void;
   addCompletedPage: (pageId: string) => void;
+  setBuildingPage: (pageId: string | null) => void;
+  setPendingApprovalPage: (pageId: string | null) => void;
   reset: () => void;
 }
 
@@ -55,6 +59,8 @@ const initialState = {
   streamingOverview: null as Partial<ManifestoData> | null,
   flowData: null as FlowData | null,
   completedPages: [] as string[],
+  currentBuildingPage: null as string | null,
+  pendingApprovalPage: null as string | null,
 };
 
 export const useStrategyStore = create<StrategyState>((set) => ({
@@ -76,6 +82,10 @@ export const useStrategyStore = create<StrategyState>((set) => ({
         ? state.completedPages
         : [...state.completedPages, pageId],
     })),
+
+  setBuildingPage: (pageId) => set({ currentBuildingPage: pageId }),
+
+  setPendingApprovalPage: (pageId) => set({ pendingApprovalPage: pageId }),
 
   reset: () => set(initialState),
 }));

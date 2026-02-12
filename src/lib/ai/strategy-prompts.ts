@@ -84,20 +84,20 @@ Output the flow as a structured JSON code block:
 \`\`\`json type="flow"
 {
   "nodes": [
-    { "id": "landing", "label": "Landing Page", "type": "page", "description": "Hero section with CTA" },
-    { "id": "auth", "label": "Authentication", "type": "action", "description": "Login/signup flow" },
-    { "id": "dashboard", "label": "Dashboard", "type": "page", "description": "Main app view with overview" }
+    { "id": "dashboard", "label": "Dashboard", "type": "page", "description": "Main app view with overview" },
+    { "id": "fetch-data", "label": "Fetch Data", "type": "action", "description": "Load user data from API" },
+    { "id": "settings", "label": "Settings", "type": "page", "description": "User preferences and config" }
   ],
   "connections": [
-    { "from": "landing", "to": "auth", "label": "Sign Up" },
-    { "from": "auth", "to": "dashboard", "label": "Success" }
+    { "from": "dashboard", "to": "fetch-data", "label": "On Load" },
+    { "from": "dashboard", "to": "settings", "label": "Settings" }
   ]
 }
 \`\`\`
 
 ## GUIDELINES
 
-- Start with the entry point (usually a landing or home page)
+- Start directly with the main application screen — the first thing users interact with (e.g., Dashboard, Inbox, Editor). Do NOT include a landing page, marketing page, or hero page — users want the functional app, not a promotional front door
 - Include 3-8 nodes for a reasonable app scope
 - Every page node will become a real page in the built app
 - Action/decision/data nodes are for planning — they help the AI understand the full picture
@@ -107,7 +107,11 @@ Output the flow as a structured JSON code block:
 - When the user is satisfied, tell them: "When you're happy with this architecture, click **Approve Architecture** to start building!"
 - You can update the flow multiple times — just output a new JSON block`;
 
-export function buildBuildSystemPrompt(overviewContext: string, flowContext: string): string {
+export function buildBuildSystemPrompt(overviewContext: string, flowContext: string, currentPageId?: string, currentPageName?: string): string {
+  const pageInstruction = currentPageId && currentPageName
+    ? `You are now building the **${currentPageName}** page (id: "${currentPageId}").`
+    : `You are now building the first page (the "/" main app route).`;
+
   return `You are an expert Product Designer and Senior Frontend Architect building a web application based on an approved product strategy.
 
 ## PRODUCT CONTEXT
@@ -118,16 +122,29 @@ ${flowContext}
 
 ## BUILD INSTRUCTIONS
 
-You are now building the actual application page by page. Follow these rules:
+${pageInstruction}
 
-1. Build ONE page at a time, starting with the "/" (home/landing) route
-2. For each page, output:
+Build ONLY this one page. Follow these rules:
+
+1. For this page, output:
    - The page component file (e.g., \`/pages/Home.tsx\`)
    - Updated \`/App.tsx\` with routing
    - Updated \`/flow.json\` with the new page entry
-3. After completing each page, announce which page you just built and ask if the user wants modifications before moving to the next
-4. Use the JTBD and flow architecture to guide your design decisions
-5. Make each page polished and production-ready — not placeholder content
+2. Use the JTBD and flow architecture to guide your design decisions
+3. Make the page polished and production-ready — not placeholder content
+
+## PAGE-BUILT MARKER (CRITICAL)
+
+After you have output ALL code blocks for this page, you MUST:
+
+1. Write a brief summary (2-3 sentences) of what you built and any key design decisions, then ask the user if it looks good.
+2. Output the following marker AFTER the summary:
+
+\`\`\`json type="page-built"
+{ "pageId": "${currentPageId || "home"}", "pageName": "${currentPageName || "Home"}" }
+\`\`\`
+
+This marker tells the system you are done with this page. Do NOT build the next page — wait for the user to approve this page first.
 
 ## IMPORTANT RULES
 
@@ -135,5 +152,6 @@ You are now building the actual application page by page. Follow these rules:
 - Use the pre-installed component library (Button, Card, Input, etc.)
 - Every page should feel like a real product — rich content, proper hierarchy, good spacing
 - Navigation between pages should use \`navigate()\` from \`useRouter()\`
-- Always update /flow.json when adding a new page`;
+- Always update /flow.json when adding a new page
+- Do NOT proceed to the next page until the user explicitly approves`;
 }

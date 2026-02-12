@@ -1,15 +1,12 @@
 "use client";
 
-import { useRef, useCallback, useEffect, PointerEvent, useState } from "react";
+import React, { useRef, useCallback, useEffect, useState } from "react";
 import { SandpackWrapper } from "@/components/providers/SandpackWrapper";
 import { Frame, type FrameState } from "@/components/canvas/Frame";
 import { DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT } from "@/lib/constants";
-import { ViewModeToggle, type CanvasMode } from "./ViewModeToggle";
 import type { FlowPage, FlowNodePosition } from "@/lib/flow/types";
 import type { PreviewMode } from "@/lib/tokens";
-
-// Threshold to distinguish click from drag (in pixels)
-const DRAG_THRESHOLD = 5;
+import { useStrategyStore } from "@/hooks/useStrategyStore";
 
 // Re-export for backwards compatibility
 export const DEFAULT_FLOW_FRAME_WIDTH = DEFAULT_FRAME_WIDTH;
@@ -28,16 +25,24 @@ interface FlowFrameProps {
   canvasScale: number;
   onPreviewModeChange?: (frameId: string, mode: PreviewMode) => void;
   onInspectionModeChange?: (enabled: boolean) => void;
-  onClick: (route: string) => void;
   /** Whether flow mode is active (navigation interception) */
   flowModeActive?: boolean;
-  /** Canvas mode toggle (Prototype/Flow) */
-  canvasMode?: CanvasMode;
-  onCanvasModeChange?: (mode: CanvasMode) => void;
+  /** Whether this frame is rendered visually (iframes stay mounted even when hidden) */
+  isVisible?: boolean;
+  /** CSS transition overrides during mode animation */
+  transitionStyle?: React.CSSProperties;
   /** Page ID of the currently selected element (for auto-opening layers) */
   selectedPageId?: string;
   /** Selector of the currently selected element */
   selectedSelector?: string;
+  /** Whether to play dissolve-in animation on first appearance */
+  animateEntrance?: boolean;
+  /** Whether this frame is expanded (fullscreen-like) */
+  isExpanded?: boolean;
+  /** Toggle expand/collapse */
+  onExpandToggle?: () => void;
+  /** Force streaming overlay to show (active frame in Prototype View) */
+  forceStreamingOverlay?: boolean;
 }
 
 export function FlowFrame({
@@ -53,18 +58,17 @@ export function FlowFrame({
   canvasScale,
   onPreviewModeChange,
   onInspectionModeChange,
-  onClick,
   flowModeActive = false,
-  canvasMode,
-  onCanvasModeChange,
+  isVisible = true,
+  transitionStyle,
   selectedPageId,
   selectedSelector,
+  animateEntrance = false,
+  isExpanded,
+  onExpandToggle,
+  forceStreamingOverlay,
 }: FlowFrameProps) {
-  const [isDragging, setIsDragging] = useState(false);
   const frameRef = useRef<HTMLDivElement>(null);
-  const dragOverlayRef = useRef<HTMLDivElement>(null);
-  const startPosRef = useRef({ x: 0, y: 0 });
-  const totalDistanceRef = useRef(0);
 
   // Local preview mode state (independent per-frame)
   const [localPreviewMode, setLocalPreviewMode] = useState<PreviewMode>(previewMode);
@@ -74,6 +78,23 @@ export function FlowFrame({
 
   // Refresh key for forcing SandpackWrapper remount
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Auto-refresh after AI finishes building this page
+  const pendingApprovalPage = useStrategyStore((s) => s.pendingApprovalPage);
+  const lastRefreshedPageRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (pendingApprovalPage === page.id && lastRefreshedPageRef.current !== page.id) {
+      const timer = setTimeout(() => {
+        lastRefreshedPageRef.current = page.id;
+        setRefreshKey((k) => k + 1);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+    if (pendingApprovalPage !== page.id) {
+      lastRefreshedPageRef.current = null;
+    }
+  }, [pendingApprovalPage, page.id]);
 
   // Auto-open layers panel when this frame's page is selected
   useEffect(() => {
@@ -97,53 +118,14 @@ export function FlowFrame({
     }
   }, [page.id, position.width, position.height, onResize]);
 
-  // --- Drag Handlers (for repositioning frame on canvas) ---
-  const handlePointerDown = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    // Activate this frame
+  // --- External drag handlers (delegated to Frame header) ---
+  const handleHeaderDragMove = useCallback((deltaX: number, deltaY: number) => {
+    onDrag(page.id, deltaX / canvasScale, deltaY / canvasScale);
+  }, [page.id, onDrag, canvasScale]);
+
+  const handleHeaderDragStart = useCallback(() => {
     onActivate(page.id);
-
-    e.preventDefault();
-    e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
-
-    setIsDragging(true);
-    startPosRef.current = { x: e.clientX, y: e.clientY };
-    totalDistanceRef.current = 0;
   }, [page.id, onActivate]);
-
-  const handlePointerMove = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    if (!isDragging) return;
-
-    // Calculate delta (accounting for canvas zoom)
-    const deltaX = (e.clientX - startPosRef.current.x) / canvasScale;
-    const deltaY = (e.clientY - startPosRef.current.y) / canvasScale;
-
-    // Track total distance for click vs drag detection
-    totalDistanceRef.current += Math.sqrt(
-      Math.pow(e.clientX - startPosRef.current.x, 2) +
-      Math.pow(e.clientY - startPosRef.current.y, 2)
-    );
-
-    // Update start position for next frame
-    startPosRef.current = { x: e.clientX, y: e.clientY };
-
-    // Notify parent of drag
-    onDrag(page.id, deltaX, deltaY);
-  }, [isDragging, page.id, onDrag, canvasScale]);
-
-  const handlePointerUp = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    e.currentTarget.releasePointerCapture(e.pointerId);
-
-    const wasDragging = isDragging;
-    setIsDragging(false);
-
-    // If moved less than threshold, treat as click (navigate)
-    if (wasDragging && totalDistanceRef.current < DRAG_THRESHOLD) {
-      onClick(page.route);
-    }
-
-    totalDistanceRef.current = 0;
-  }, [isDragging, page.route, onClick]);
 
   // Handle click on frame content (activate without navigation)
   const handleFrameClick = useCallback(() => {
@@ -155,42 +137,30 @@ export function FlowFrame({
       ref={frameRef}
       data-flow-page-id={page.id}
       className={`absolute select-none ${
-        isActive ? "ring-2 ring-blue-500 ring-offset-2 z-10" : ""
+        isActive ? "shadow-lg z-10" : ""
       }`}
       style={{
         left: position.x,
         top: position.y,
         width: position.width,
-        height: position.height + 36 + 28, // +36 for Frame header, +28 for title bar
+        height: position.height + 36, // +36 for Frame header
+        opacity: isVisible ? 1 : 0,
+        visibility: isVisible || transitionStyle ? "visible" : "hidden",
+        pointerEvents: isVisible ? "auto" : "none",
+        animation: animateEntrance && isVisible ? 'dissolveIn 700ms ease-out both' : undefined,
+        willChange: transitionStyle ? "transform, opacity" : undefined,
+        ...transitionStyle, // Must remain LAST to override opacity, pointerEvents
       }}
       onClick={handleFrameClick}
     >
-      {/* Title bar (page name + route) */}
-      <div
-        ref={dragOverlayRef}
-        className="absolute -top-7 left-0 right-0 flex items-center justify-between px-2 cursor-grab active:cursor-grabbing z-20"
-        style={{ touchAction: "none" }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-      >
-        <span className="text-base font-medium text-neutral-700 bg-white/80 backdrop-blur-sm px-2 py-0.5 rounded shadow-sm">
-          {page.name}
-        </span>
-        <span className="text-sm text-neutral-400 font-mono bg-white/60 px-1.5 py-0.5 rounded">
-          {page.route}
-        </span>
-      </div>
-
-      {/* View Mode Toggle - attached to left side of frame */}
-      {canvasMode && onCanvasModeChange && (
-        <div className="absolute top-3 -left-12 z-10">
-          <ViewModeToggle
-            mode={canvasMode}
-            onModeChange={onCanvasModeChange}
-          />
-        </div>
+      {/* Dissolve-in animation keyframes */}
+      {animateEntrance && (
+        <style>{`
+          @keyframes dissolveIn {
+            from { opacity: 0; filter: blur(8px); transform: scale(0.97); }
+            to { opacity: 1; filter: blur(0px); transform: scale(1); }
+          }
+        `}</style>
       )}
 
       {/* Frame content - always mounted to avoid reload delays */}
@@ -208,6 +178,7 @@ export function FlowFrame({
           height={position.height}
           onFrameChange={handleFrameChange}
           startRoute={page.route}
+          pageId={page.id}
           previewMode={localPreviewMode}
           onPreviewModeChange={handleLocalPreviewModeChange}
           inspectionMode={isActive && inspectionMode}
@@ -216,6 +187,12 @@ export function FlowFrame({
           onLayersOpenChange={setLayersOpen}
           selectedSelector={selectedPageId === page.id ? selectedSelector : undefined}
           onRefresh={() => setRefreshKey((k) => k + 1)}
+          pageInfo={{ name: page.name, route: page.route }}
+          onExternalDragMove={handleHeaderDragMove}
+          onExternalDragStart={handleHeaderDragStart}
+          isExpanded={isExpanded}
+          onExpandToggle={onExpandToggle}
+          forceStreamingOverlay={forceStreamingOverlay}
         />
       </SandpackWrapper>
     </div>

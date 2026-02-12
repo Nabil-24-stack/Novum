@@ -80,6 +80,58 @@ export function animateViewport(
 }
 
 /**
+ * Calculate viewport state that fits all given node rects with padding.
+ * Scale is clamped to max 1 (never zoom in past 100%).
+ */
+export function calculateFitAllViewport(
+  nodeRects: NodeRect[],
+  containerWidth: number,
+  containerHeight: number,
+  padding = 80
+): ViewportState {
+  if (nodeRects.length === 0) {
+    return { x: 0, y: 0, scale: 1 };
+  }
+
+  // Find bounding box of all rects
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const rect of nodeRects) {
+    minX = Math.min(minX, rect.x);
+    minY = Math.min(minY, rect.y);
+    maxX = Math.max(maxX, rect.x + rect.width);
+    maxY = Math.max(maxY, rect.y + rect.height);
+  }
+
+  const contentWidth = maxX - minX;
+  const contentHeight = maxY - minY;
+
+  // Available space after padding
+  const availableWidth = containerWidth - padding * 2;
+  const availableHeight = containerHeight - padding * 2;
+
+  // Scale to fit, clamped to max 1
+  const scale = Math.min(
+    1,
+    availableWidth / contentWidth,
+    availableHeight / contentHeight
+  );
+
+  // Center the content in the viewport
+  const contentCenterX = minX + contentWidth / 2;
+  const contentCenterY = minY + contentHeight / 2;
+
+  return {
+    x: containerWidth / 2 - contentCenterX * scale,
+    y: containerHeight / 2 - contentCenterY * scale,
+    scale,
+  };
+}
+
+/**
  * Calculate viewport state that centers a node at 100% zoom
  * @param nodePosition - The position and dimensions of the node to center
  * @param containerWidth - Width of the viewport container

@@ -15,7 +15,7 @@ export const NODE_HEIGHT = DEFAULT_FRAME_HEIGHT;
 
 // Layout spacing - extra space for full-featured frames with headers
 const COLUMN_SPACING = NODE_WIDTH + 100;   // Horizontal distance between columns
-const ROW_SPACING = NODE_HEIGHT + 120;     // Vertical distance between rows (+ Frame header + title bar + gap)
+const ROW_SPACING = NODE_HEIGHT + 120;     // Vertical distance between rows (+ Frame header + gap)
 const MARGIN = 50;           // Canvas margin
 
 // Routing constants

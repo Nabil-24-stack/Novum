@@ -17,6 +17,7 @@ export function SandpackFileSync({ files }: SandpackFileSyncProps) {
   // Refs for debounced batching
   const pendingUpdatesRef = useRef<Record<string, string>>({});
   const deletedPathsRef = useRef<Set<string>>(new Set());
+  const hasNewFilesRef = useRef(false);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Create a stable JSON representation for comparison
@@ -45,7 +46,8 @@ export function SandpackFileSync({ files }: SandpackFileSyncProps) {
     deletedPathsRef.current = new Set();
 
     // Determine if we need a full reset vs just HMR
-    const hasNewFiles = updatePaths.some(path => !(path in prevFilesRef.current));
+    const hasNewFiles = hasNewFilesRef.current;
+    hasNewFilesRef.current = false;
     const hasManyChanges = updatePaths.length > 3;
     const hasPackageJson = updatePaths.includes("/package.json");
     const needsFullRestart = hasNewFiles || hasManyChanges || hasPackageJson;
@@ -90,6 +92,9 @@ export function SandpackFileSync({ files }: SandpackFileSyncProps) {
     // Accumulate changed or new files
     Object.entries(currentFiles).forEach(([path, content]) => {
       if (prevFiles[path] !== content) {
+        if (!(path in prevFiles)) {
+          hasNewFilesRef.current = true;
+        }
         console.log(`[SandpackSync] Queueing file update: ${path}`);
         pendingUpdatesRef.current[path] = content;
       }

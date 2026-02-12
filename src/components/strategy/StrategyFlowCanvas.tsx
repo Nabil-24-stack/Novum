@@ -34,7 +34,8 @@ export function StrategyFlowCanvas({ flowData, offsetX, offsetY }: StrategyFlowC
 
   // Staggered reveal: increment visibleCount on an interval
   useEffect(() => {
-    setVisibleCount(0);
+    // Reset is safe here — it synchronizes with a new orderedNodeIds arriving
+    setVisibleCount(0); // eslint-disable-line react-hooks/set-state-in-effect
 
     // Small initial delay so the container has time to mount
     const startDelay = setTimeout(() => {
