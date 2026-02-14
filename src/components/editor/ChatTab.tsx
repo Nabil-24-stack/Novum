@@ -6,7 +6,8 @@ import { Send, Loader2, X, ImagePlus, ChevronDown, ArrowRight, Check, AlertTrian
 import { toast } from "sonner";
 import { useChatContextStore } from "@/hooks/useChatContextStore";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
-import { useStrategyStore, type StrategyPhase } from "@/hooks/useStrategyStore";
+import { useStrategyStore, type StrategyPhase, type ConfidenceData, type PersonaData, type WireframeSection, type WireframeElement } from "@/hooks/useStrategyStore";
+import { ConfidenceBar } from "./ConfidenceBar";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
 import { parseStreamingContent } from "@/lib/streaming-parser";
 import type { FileUIPart } from "ai";
@@ -16,13 +17,38 @@ function hasFileCodeBlocks(content: string): boolean {
   return FILE_CODE_BLOCK_RE.test(content);
 }
 
-/** Strip strategy JSON blocks from text (manifesto, flow, options, page-built) */
+/** Strip strategy JSON blocks from text (manifesto, flow, options, page-built, confidence, personas, wireframes) */
 function stripStrategyBlocks(text: string): string {
   // Strip closed strategy blocks
-  let cleaned = text.replace(/```json\s+type="(?:options|manifesto|flow|page-built)"[\s\S]*?```/g, "");
+  let cleaned = text.replace(/```json\s+type="(?:options|manifesto|personas|flow|page-built|confidence|wireframes)"[\s\S]*?```/g, "");
   // Strip open (still-streaming) strategy blocks
-  cleaned = cleaned.replace(/```json\s+type="(?:options|manifesto|flow|page-built)"[\s\S]*$/, "");
+  cleaned = cleaned.replace(/```json\s+type="(?:options|manifesto|personas|flow|page-built|confidence|wireframes)"[\s\S]*$/, "");
   return cleaned.trim();
+}
+
+/** Serialize wireframe sections into human-readable text for the build prompt */
+function serializeWireframeSections(sections: WireframeSection[], indent = 0): string {
+  const prefix = "  ".repeat(indent);
+  return sections.map((s) => {
+    const parts = [`${prefix}- ${s.label}`];
+    if (s.type && s.type !== "block") parts.push(`type: ${s.type}`);
+    if (s.flex !== undefined) parts.push(`flex: ${s.flex}`);
+    if (s.columns) parts.push(`columns: ${s.columns}`);
+    if (s.items && s.items.length > 0) parts.push(`items: [${s.items.join(", ")}]`);
+    let line = parts[0] + (parts.length > 1 ? ` (${parts.slice(1).join(", ")})` : "");
+    if (s.elements && s.elements.length > 0) {
+      line += `\n${prefix}  Components: ${s.elements.map(serializeElement).join(", ")}`;
+    }
+    if (s.children && s.children.length > 0) {
+      line += `\n${serializeWireframeSections(s.children, indent + 1)}`;
+    }
+    return line;
+  }).join("\n");
+}
+
+function serializeElement(el: WireframeElement): string {
+  const variant = el.variant ? ` (${el.variant})` : "";
+  return `${el.type}: "${el.label}"${variant}`;
 }
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -41,7 +67,7 @@ interface ChatTabProps {
   writeFile: (path: string, content: string) => void;
   files: Record<string, string>;
   strategyPhase?: StrategyPhase;
-  onPhaseAction?: (action: "approve-manifesto" | "approve-flow") => void;
+  onPhaseAction?: (action: "approve-manifesto" | "approve-persona" | "approve-flow" | "approve-wireframe") => void;
   /** Called when user sends their first message in hero phase (phase transition to manifesto) */
   onHeroSubmit?: () => void;
   /** Called when user approves a built page and wants to build the next one */
@@ -54,9 +80,12 @@ const CODE_BLOCK_REGEX = /```(\w+)?\s+file="([^"]+)"\n([\s\S]*?)```/g;
 
 // Regex to match strategy JSON blocks
 const MANIFESTO_REGEX = /```json\s+type="manifesto"\n([\s\S]*?)```/g;
+const PERSONA_REGEX = /```json\s+type="personas"\n([\s\S]*?)```/g;
 const FLOW_REGEX = /```json\s+type="flow"\n([\s\S]*?)```/g;
 const OPTIONS_REGEX = /```json\s+type="options"\n([\s\S]*?)```/g;
 const PAGE_BUILT_REGEX = /```json\s+type="page-built"\n([\s\S]*?)```/g;
+const CONFIDENCE_REGEX = /```json\s+type="confidence"\n([\s\S]*?)```/g;
+const WIREFRAMES_REGEX = /```json\s+type="wireframes"\n([\s\S]*?)```/g;
 
 interface OptionBlock {
   question: string;
@@ -187,10 +216,216 @@ function extractPartialOverview(text: string): Partial<import("@/hooks/useStrate
   const jtbd = extractJsonArrayItems(content, 'jtbd');
   if (jtbd !== undefined) result.jtbd = jtbd;
 
-  const solution = extractJsonStringValue(content, 'solution');
-  if (solution !== undefined) result.solution = solution;
+  const hmw = extractJsonArrayItems(content, 'hmw');
+  if (hmw !== undefined) result.hmw = hmw;
 
   return Object.keys(result).length > 0 ? result : null;
+}
+
+function extractPartialPersonas(text: string): Partial<PersonaData>[] | null {
+  const marker = '```json type="personas"';
+  const blockStart = text.indexOf(marker);
+  if (blockStart === -1) return null;
+
+  const content = text.slice(blockStart + marker.length);
+
+  // Try to find personas by looking for object boundaries in the array
+  const personas: Partial<PersonaData>[] = [];
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let objectStart = -1;
+
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i];
+
+    if (escape) {
+      escape = false;
+      continue;
+    }
+
+    if (ch === '\\' && inString) {
+      escape = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (ch === '{') {
+      if (depth === 0) objectStart = i;
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && objectStart !== -1) {
+        const objStr = content.slice(objectStart, i + 1);
+        try {
+          const parsed = JSON.parse(objStr);
+          if (parsed.name || parsed.role) {
+            personas.push(parsed);
+          }
+        } catch {
+          // Incomplete object — try partial extraction
+          const partial: Partial<PersonaData> = {};
+          const name = extractJsonStringValue(objStr, 'name');
+          if (name !== undefined) partial.name = name;
+          const role = extractJsonStringValue(objStr, 'role');
+          if (role !== undefined) partial.role = role;
+          const bio = extractJsonStringValue(objStr, 'bio');
+          if (bio !== undefined) partial.bio = bio;
+          const goals = extractJsonArrayItems(objStr, 'goals');
+          if (goals !== undefined) partial.goals = goals;
+          const painPoints = extractJsonArrayItems(objStr, 'painPoints');
+          if (painPoints !== undefined) partial.painPoints = painPoints;
+          const quote = extractJsonStringValue(objStr, 'quote');
+          if (quote !== undefined) partial.quote = quote;
+          if (Object.keys(partial).length > 0) {
+            personas.push(partial);
+          }
+        }
+        objectStart = -1;
+      }
+    }
+  }
+
+  // Handle currently-streaming object (depth > 0 means unclosed)
+  if (depth > 0 && objectStart !== -1) {
+    const partialStr = content.slice(objectStart);
+    const partial: Partial<PersonaData> = {};
+    const name = extractJsonStringValue(partialStr, 'name');
+    if (name !== undefined) partial.name = name;
+    const role = extractJsonStringValue(partialStr, 'role');
+    if (role !== undefined) partial.role = role;
+    const bio = extractJsonStringValue(partialStr, 'bio');
+    if (bio !== undefined) partial.bio = bio;
+    const goals = extractJsonArrayItems(partialStr, 'goals');
+    if (goals !== undefined) partial.goals = goals;
+    const painPoints = extractJsonArrayItems(partialStr, 'painPoints');
+    if (painPoints !== undefined) partial.painPoints = painPoints;
+    const quote = extractJsonStringValue(partialStr, 'quote');
+    if (quote !== undefined) partial.quote = quote;
+    if (Object.keys(partial).length > 0) {
+      personas.push(partial);
+    }
+  }
+
+  return personas.length > 0 ? personas : null;
+}
+
+// --- Partial wireframe extraction for real-time streaming ---
+
+function extractPartialWireframes(text: string): import("@/hooks/useStrategyStore").WireframeData | null {
+  const marker = '```json type="wireframes"';
+  const blockStart = text.indexOf(marker);
+  if (blockStart === -1) return null;
+
+  const content = text.slice(blockStart + marker.length);
+
+  // Find the start of the "pages" array
+  const pagesKeyIdx = content.indexOf('"pages"');
+  if (pagesKeyIdx === -1) return null;
+
+  let arrayStart = pagesKeyIdx + '"pages"'.length;
+  while (arrayStart < content.length && content[arrayStart] !== '[') arrayStart++;
+  if (arrayStart >= content.length) return null;
+  arrayStart++; // skip [
+
+  // Track page objects within the array
+  const pages: import("@/hooks/useStrategyStore").WireframePage[] = [];
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let objectStart = -1;
+
+  for (let i = arrayStart; i < content.length; i++) {
+    const ch = content[i];
+
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+
+    if (ch === '{') {
+      if (depth === 0) objectStart = i;
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && objectStart !== -1) {
+        // Complete page object
+        const objStr = content.slice(objectStart, i + 1);
+        try {
+          const parsed = JSON.parse(objStr);
+          if (parsed.id) pages.push(parsed);
+        } catch { /* skip malformed */ }
+        objectStart = -1;
+      }
+    } else if (ch === ']' && depth === 0) {
+      break; // End of pages array
+    }
+  }
+
+  // Handle currently-streaming page (unclosed object)
+  if (depth > 0 && objectStart !== -1) {
+    const partialStr = content.slice(objectStart);
+    const id = extractJsonStringValue(partialStr, 'id');
+    const name = extractJsonStringValue(partialStr, 'name');
+    if (id) {
+      // Extract whatever complete section objects exist so far
+      const sections = extractCompleteSections(partialStr);
+      pages.push({ id, name: name || id, sections });
+    }
+  }
+
+  return pages.length > 0 ? { pages } : null;
+}
+
+/** Extract complete section objects from within a partial page string */
+function extractCompleteSections(pageStr: string): import("@/hooks/useStrategyStore").WireframeSection[] {
+  const sectionsIdx = pageStr.indexOf('"sections"');
+  if (sectionsIdx === -1) return [];
+
+  let arrayStart = sectionsIdx + '"sections"'.length;
+  while (arrayStart < pageStr.length && pageStr[arrayStart] !== '[') arrayStart++;
+  if (arrayStart >= pageStr.length) return [];
+  arrayStart++; // skip [
+
+  const sections: import("@/hooks/useStrategyStore").WireframeSection[] = [];
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let objectStart = -1;
+
+  for (let i = arrayStart; i < pageStr.length; i++) {
+    const ch = pageStr[i];
+
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+
+    if (ch === '{') {
+      if (depth === 0) objectStart = i;
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && objectStart !== -1) {
+        const objStr = pageStr.slice(objectStart, i + 1);
+        try {
+          const parsed = JSON.parse(objStr);
+          if (parsed.label) sections.push(parsed);
+        } catch { /* skip */ }
+        objectStart = -1;
+      }
+    } else if (ch === ']' && depth === 0) {
+      break;
+    }
+  }
+
+  return sections;
 }
 
 function extractOptionBlocks(text: string): OptionBlock[] {
@@ -236,7 +471,10 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { pinnedElements, unpinElement, clearPinnedElements } = useChatContextStore();
   const manifestoData = useStrategyStore((s) => s.manifestoData);
+  const personaData = useStrategyStore((s) => s.personaData);
   const flowData = useStrategyStore((s) => s.flowData);
+  const confidenceData = useStrategyStore((s) => s.confidenceData);
+  const wireframeData = useStrategyStore((s) => s.wireframeData);
   const completedPages = useStrategyStore((s) => s.completedPages);
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
   const pendingApprovalPage = useStrategyStore((s) => s.pendingApprovalPage);
@@ -322,6 +560,64 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
     }
   }, [messages, isLoading]);
 
+  // --- Stream partial persona data to the canvas in real-time ---
+  useEffect(() => {
+    if (!isLoading) {
+      if (useStrategyStore.getState().streamingPersonas) {
+        useStrategyStore.getState().setStreamingPersonas(null);
+      }
+      return;
+    }
+
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return;
+
+    let textContent = "";
+    if (lastAssistant.parts && Array.isArray(lastAssistant.parts)) {
+      textContent = lastAssistant.parts
+        .filter((p): p is { type: "text"; text: string } => p.type === "text")
+        .map((p) => p.text)
+        .join("");
+    }
+    if (!textContent && "content" in lastAssistant && typeof lastAssistant.content === "string") {
+      textContent = lastAssistant.content;
+    }
+
+    const partialPersonas = extractPartialPersonas(textContent);
+    if (partialPersonas) {
+      useStrategyStore.getState().setStreamingPersonas(partialPersonas);
+    }
+  }, [messages, isLoading]);
+
+  // --- Stream partial wireframe data to the canvas in real-time ---
+  useEffect(() => {
+    if (!isLoading) {
+      if (useStrategyStore.getState().streamingWireframes) {
+        useStrategyStore.getState().setStreamingWireframes(null);
+      }
+      return;
+    }
+
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return;
+
+    let textContent = "";
+    if (lastAssistant.parts && Array.isArray(lastAssistant.parts)) {
+      textContent = lastAssistant.parts
+        .filter((p): p is { type: "text"; text: string } => p.type === "text")
+        .map((p) => p.text)
+        .join("");
+    }
+    if (!textContent && "content" in lastAssistant && typeof lastAssistant.content === "string") {
+      textContent = lastAssistant.content;
+    }
+
+    const partialWireframes = extractPartialWireframes(textContent);
+    if (partialWireframes) {
+      useStrategyStore.getState().setStreamingWireframes(partialWireframes);
+    }
+  }, [messages, isLoading]);
+
   // Log for debugging
   useEffect(() => {
     console.log("Chat status:", status, "Messages:", messages.length, "Error:", error);
@@ -397,7 +693,7 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
           processedStrategyBlocksSet.add(blockKey);
           try {
             const parsed = JSON.parse(match[1]);
-            if (parsed.title && parsed.problemStatement && parsed.targetUser && Array.isArray(parsed.jtbd) && parsed.solution) {
+            if (parsed.title && parsed.problemStatement && parsed.targetUser && Array.isArray(parsed.jtbd) && Array.isArray(parsed.hmw)) {
               useStrategyStore.getState().setManifestoData(parsed);
             }
           } catch (e) {
@@ -406,6 +702,23 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
         }
       }
       MANIFESTO_REGEX.lastIndex = 0;
+
+      // Extract persona blocks
+      while ((match = PERSONA_REGEX.exec(textContent)) !== null) {
+        const blockKey = `personas-${message.id}-${match.index}`;
+        if (!processedStrategyBlocksSet.has(blockKey)) {
+          processedStrategyBlocksSet.add(blockKey);
+          try {
+            const parsed = JSON.parse(match[1]);
+            if (Array.isArray(parsed) && parsed.length > 0 && (parsed[0].name || parsed[0].role)) {
+              useStrategyStore.getState().setPersonaData(parsed);
+            }
+          } catch (e) {
+            console.warn("[Strategy] Failed to parse personas JSON:", e);
+          }
+        }
+      }
+      PERSONA_REGEX.lastIndex = 0;
 
       // Extract flow blocks
       while ((match = FLOW_REGEX.exec(textContent)) !== null) {
@@ -443,6 +756,40 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
         }
       }
       PAGE_BUILT_REGEX.lastIndex = 0;
+
+      // Extract wireframes blocks
+      while ((match = WIREFRAMES_REGEX.exec(textContent)) !== null) {
+        const blockKey = `wireframes-${message.id}-${match.index}`;
+        if (!processedStrategyBlocksSet.has(blockKey)) {
+          processedStrategyBlocksSet.add(blockKey);
+          try {
+            const parsed = JSON.parse(match[1]);
+            if (Array.isArray(parsed.pages) && parsed.pages.length > 0) {
+              useStrategyStore.getState().setWireframeData(parsed);
+            }
+          } catch (e) {
+            console.warn("[Strategy] Failed to parse wireframes JSON:", e);
+          }
+        }
+      }
+      WIREFRAMES_REGEX.lastIndex = 0;
+
+      // Extract confidence blocks (always use the latest one)
+      while ((match = CONFIDENCE_REGEX.exec(textContent)) !== null) {
+        const blockKey = `confidence-${message.id}-${match.index}`;
+        if (!processedStrategyBlocksSet.has(blockKey)) {
+          processedStrategyBlocksSet.add(blockKey);
+          try {
+            const parsed = JSON.parse(match[1]) as ConfidenceData;
+            if (typeof parsed.overall === "number" && parsed.dimensions) {
+              useStrategyStore.getState().setConfidenceData(parsed);
+            }
+          } catch (e) {
+            console.warn("[Strategy] Failed to parse confidence JSON:", e);
+          }
+        }
+      }
+      CONFIDENCE_REGEX.lastIndex = 0;
     });
   }, [messages]);
 
@@ -607,11 +954,14 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
     (text: string) => {
       if (isLoading) return;
 
-      // Build context (same as manifesto/flow phases)
+      // Build context (same as manifesto/persona/flow phases)
       const storeState = useStrategyStore.getState();
       const parts: string[] = [];
       if (storeState.manifestoData) {
         parts.push(`## Current Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
+      }
+      if (storeState.personaData) {
+        parts.push(`## Current Personas\n\n${JSON.stringify(storeState.personaData, null, 2)}`);
       }
       if (storeState.flowData) {
         parts.push(`## Current Flow Architecture\n\n${JSON.stringify(storeState.flowData, null, 2)}`);
@@ -625,6 +975,16 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
     },
     [isLoading, sendMessage, selectedModel, strategyPhase]
   );
+
+  // --- "I'm ready" override for confidence gating ---
+
+  const handleConfidenceReady = useCallback(() => {
+    if (isLoading) return;
+    sendQuickReply("I'm ready — generate the product overview now with what you know.");
+  }, [isLoading, sendQuickReply]);
+
+  // Show confidence bar during manifesto phase, before manifesto is generated
+  const showConfidenceBar = strategyPhase === "manifesto" && confidenceData !== null;
 
   // --- Question Tab Handlers ---
 
@@ -697,12 +1057,15 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
     // Build context based on strategy phase
     let vfsContext: string | Record<string, string> = "";
 
-    if (effectivePhase === "manifesto" || effectivePhase === "flow") {
-      // In strategy phases, send manifesto/flow data as context instead of VFS
+    if (effectivePhase === "manifesto" || effectivePhase === "persona" || effectivePhase === "flow" || effectivePhase === "wireframe") {
+      // In strategy phases, send manifesto/persona/flow data as context instead of VFS
       const storeState = useStrategyStore.getState();
       const parts: string[] = [];
       if (storeState.manifestoData) {
         parts.push(`## Current Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
+      }
+      if (storeState.personaData) {
+        parts.push(`## Current Personas\n\n${JSON.stringify(storeState.personaData, null, 2)}`);
       }
       if (storeState.flowData) {
         parts.push(`## Current Flow Architecture\n\n${JSON.stringify(storeState.flowData, null, 2)}`);
@@ -727,10 +1090,16 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
       vfsContext = {
         vfs,
         manifestoContext: storeState.manifestoData
-          ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\nWhat ${storeState.manifestoData.targetUser} Need To Get Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}\nSolution: ${storeState.manifestoData.solution}`
+          ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\nWhat ${storeState.manifestoData.targetUser} Need To Get Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}\nHow Might We:\n${storeState.manifestoData.hmw.map((q, i) => `${i + 1}. ${q}`).join("\n")}`
+          : "",
+        personaContext: storeState.personaData
+          ? `## User Personas\n\n${storeState.personaData.map((p, i) => `### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${p.painPoints.map((pp) => `- ${pp}`).join("\n")}\nQuote: "${p.quote}"`).join("\n\n")}`
           : "",
         flowContext: storeState.flowData
           ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`
+          : "",
+        wireframeContext: storeState.wireframeData
+          ? storeState.wireframeData.pages.map((p) => `### ${p.name} (${p.id})\nSections:\n${serializeWireframeSections(p.sections)}`).join("\n\n")
           : "",
       };
     } else {
@@ -813,6 +1182,11 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-blue-50/80 border-2 border-dashed border-blue-400 rounded-lg pointer-events-none">
           <div className="text-blue-600 font-medium text-sm">Drop images here</div>
         </div>
+      )}
+
+      {/* Confidence Bar */}
+      {showConfidenceBar && (
+        <ConfidenceBar data={confidenceData} onReady={handleConfidenceReady} />
       )}
 
       {/* Messages */}
@@ -907,17 +1281,45 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
             <button
               onClick={() => {
                 onPhaseAction?.("approve-manifesto");
-                // Send follow-up message to trigger flow generation
+                // Send follow-up message to trigger persona generation
                 const storeState = useStrategyStore.getState();
                 const context = `## Approved Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`;
                 sendMessage(
-                  { text: "The overview is approved. Now design the app architecture as a logical flow of pages, actions, and decisions." },
+                  { text: "The overview is approved. Now create 2 user personas based on this overview." },
+                  { body: { vfsContext: context, modelId: selectedModel, strategyPhase: "persona" } }
+                );
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
+            >
+              Approve Overview & Define Personas
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {strategyPhase === "persona" && personaData && !isLoading && (
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={() => {
+                onPhaseAction?.("approve-persona");
+                // Send follow-up message to trigger flow generation with manifesto + persona context
+                const storeState = useStrategyStore.getState();
+                const parts: string[] = [];
+                if (storeState.manifestoData) {
+                  parts.push(`## Approved Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
+                }
+                if (storeState.personaData) {
+                  parts.push(`## Approved Personas\n\n${JSON.stringify(storeState.personaData, null, 2)}`);
+                }
+                const context = parts.join("\n\n");
+                sendMessage(
+                  { text: "The personas are approved. Now design the app architecture as a logical flow of pages, actions, and decisions." },
                   { body: { vfsContext: context, modelId: selectedModel, strategyPhase: "flow" } }
                 );
               }}
               className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
             >
-              Approve Overview & Design Architecture
+              Approve Personas & Design Architecture
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>
@@ -928,7 +1330,42 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
             <button
               onClick={() => {
                 onPhaseAction?.("approve-flow");
-                // Send follow-up message to trigger building the FIRST page only
+                // Send follow-up message to trigger wireframe generation for ALL pages
+                const storeState = useStrategyStore.getState();
+                const pageNodes = storeState.flowData?.nodes.filter((n) => n.type === "page") || [];
+                const pageList = pageNodes.map((n, i) => `- ${n.label} (${n.id}, route: ${i === 0 ? "/" : `/${n.id}`}): ${n.description || "No description"}`).join("\n");
+
+                const parts: string[] = [];
+                if (storeState.manifestoData) {
+                  parts.push(`## Approved Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
+                }
+                if (storeState.personaData) {
+                  parts.push(`## Approved Personas\n\n${JSON.stringify(storeState.personaData, null, 2)}`);
+                }
+                if (storeState.flowData) {
+                  parts.push(`## Approved Architecture\n\n${JSON.stringify(storeState.flowData, null, 2)}`);
+                }
+                const context = parts.join("\n\n");
+
+                sendMessage(
+                  { text: `The architecture is approved. Generate low-fidelity wireframe skeletons for ALL pages:\n${pageList}\n\nCreate annotated gray-block layouts showing the structural layout of each page.` },
+                  { body: { vfsContext: context, modelId: selectedModel, strategyPhase: "wireframe" } }
+                );
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
+            >
+              Approve Architecture & Create Wireframes
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {strategyPhase === "wireframe" && wireframeData && !isLoading && (
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={() => {
+                onPhaseAction?.("approve-wireframe");
+                // Transition to building — start with first page
                 const storeState = useStrategyStore.getState();
                 const pageNodes = storeState.flowData?.nodes.filter((n) => n.type === "page") || [];
                 const firstPage = pageNodes[0];
@@ -938,14 +1375,32 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 storeState.setBuildingPage(firstPage.id);
                 useStreamingStore.getState().startStreaming(firstPage.id);
 
+                // Serialize wireframe data as text context for the build prompt
+                const wfData = storeState.wireframeData;
+                const wireframeText = wfData
+                  ? wfData.pages.map((p) => `### ${p.name} (${p.id})\nSections:\n${serializeWireframeSections(p.sections)}`).join("\n\n")
+                  : "";
+
+                const buildContext = {
+                  vfs: "",
+                  manifestoContext: storeState.manifestoData
+                    ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}`
+                    : "",
+                  personaContext: "",
+                  flowContext: storeState.flowData
+                    ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`
+                    : "",
+                  wireframeContext: wireframeText,
+                };
+
                 sendMessage(
-                  { text: `The architecture is approved. Here are all the pages to build:\n${pageList}\n\nStart by building the first page: "${firstPage.label}" (/).` },
-                  { body: { vfsContext: "", modelId: selectedModel, strategyPhase: "building", currentPageId: firstPage.id, currentPageName: firstPage.label } }
+                  { text: `The wireframes are approved. Here are all the pages to build:\n${pageList}\n\nStart by building the first page: "${firstPage.label}" (/). Replace the wireframe skeleton with a polished, production-ready page using the component library.` },
+                  { body: { vfsContext: buildContext, modelId: selectedModel, strategyPhase: "building", currentPageId: firstPage.id, currentPageName: firstPage.label } }
                 );
               }}
               className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
             >
-              Approve Architecture & Start Building
+              Approve Wireframes & Start Building
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>
@@ -1123,8 +1578,12 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 ? "e.g. My team wastes hours coordinating who's working on what..."
                 : strategyPhase === "manifesto"
                 ? "Refine the vision..."
+                : strategyPhase === "persona"
+                ? "Refine the personas..."
                 : strategyPhase === "flow"
                 ? "Adjust the architecture..."
+                : strategyPhase === "wireframe"
+                ? "Refine the wireframes..."
                 : "Ask me to modify your UI..."
             }
             className="flex-1 px-3 py-2 text-base border border-neutral-200 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:border-transparent disabled:bg-neutral-50 disabled:text-neutral-400"
@@ -1367,12 +1826,15 @@ function MessageContent({ content }: { content: string }) {
         if (part.startsWith("```")) {
           const firstLine = part.split("\n")[0];
 
-          // Hide strategy JSON blocks, page-built markers, and file code blocks entirely
+          // Hide strategy JSON blocks, page-built markers, confidence blocks, wireframes, and file code blocks entirely
           if (
             firstLine.includes('type="options"') ||
             firstLine.includes('type="manifesto"') ||
+            firstLine.includes('type="personas"') ||
             firstLine.includes('type="flow"') ||
             firstLine.includes('type="page-built"') ||
+            firstLine.includes('type="confidence"') ||
+            firstLine.includes('type="wireframes"') ||
             firstLine.includes('file="')
           ) {
             return null;
@@ -1407,8 +1869,8 @@ function MessageContent({ content }: { content: string }) {
 // Detect if the content contains an open (still-streaming) options/strategy block
 function hasStreamingStrategyBlock(text: string): boolean {
   // Check for an open strategy block that hasn't closed yet
-  return /```json\s+type="(?:options|manifesto|flow|page-built)"[\s\S]*$/.test(text) &&
-    !/```json\s+type="(?:options|manifesto|flow|page-built)"[\s\S]*?```\s*$/.test(text);
+  return /```json\s+type="(?:options|manifesto|personas|flow|page-built|confidence|wireframes)"[\s\S]*$/.test(text) &&
+    !/```json\s+type="(?:options|manifesto|personas|flow|page-built|confidence|wireframes)"[\s\S]*?```\s*$/.test(text);
 }
 
 // Streaming message content — hides code, shows preText + compact file indicators
@@ -1431,7 +1893,9 @@ function StreamingMessageContent({ content }: { content: string }) {
   if (!cleanPreText && !hasCode && !isStreamingQuestions) {
     const phaseHint =
       phase === "hero" || phase === "manifesto" ? "Thinking about what to ask you..."
+      : phase === "persona" ? "Creating user personas..."
       : phase === "flow" ? "Designing architecture..."
+      : phase === "wireframe" ? "Creating wireframes..."
       : phase === "building" ? "Writing code..."
       : null;
 
@@ -1548,7 +2012,9 @@ function StreamingStatus() {
 
   const message =
     phase === "hero" || phase === "manifesto" ? "Analyzing your problem..."
+    : phase === "persona" ? "Creating user personas..."
     : phase === "flow" ? "Designing app architecture..."
+    : phase === "wireframe" ? "Creating wireframes..."
     : phase === "building" ? "Preparing to build..."
     : null;
 

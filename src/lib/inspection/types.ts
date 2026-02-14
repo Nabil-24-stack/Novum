@@ -167,6 +167,11 @@ export interface ContextMenuPayload extends SelectedElement {
   menuY: number;
 }
 
+/** Payload for route change notification (Iframe → Host) */
+export interface RouteChangedPayload {
+  route: string;
+}
+
 export interface InspectionMessage {
   type:
     | "novum:element-selected"
@@ -195,6 +200,7 @@ export interface InspectionMessage {
     | "novum:optimistic-move"
     | "novum:flow-mode-state"
     | "novum:navigation-intent"
-    | "novum:context-menu";
-  payload?: SelectedElement | { enabled: boolean } | DOMTreeNode | { selector: string } | UpdateClassesPayload | RollbackClassesPayload | UpdateTextPayload | RollbackTextPayload | FindDropTargetPayload | DropTargetFoundPayload | ShowDropZonePayload | SwapElementsPayload | { key: string } | InsertPlaceholderPayload | MoveElementPayload | OptimisticMovePayload | FlowModeStatePayload | NavigationIntentPayload | ContextMenuPayload;
+    | "novum:context-menu"
+    | "novum:route-changed";
+  payload?: SelectedElement | { enabled: boolean } | DOMTreeNode | { selector: string } | UpdateClassesPayload | RollbackClassesPayload | UpdateTextPayload | RollbackTextPayload | FindDropTargetPayload | DropTargetFoundPayload | ShowDropZonePayload | SwapElementsPayload | { key: string } | InsertPlaceholderPayload | MoveElementPayload | OptimisticMovePayload | FlowModeStatePayload | NavigationIntentPayload | ContextMenuPayload | RouteChangedPayload;
 }

@@ -83,12 +83,12 @@ interface RightPanelProps {
   onSelectedElementSourceUpdate?: (source: SourceLocation) => void;
   /** Called when keyboard delete removes the selected element */
   onClearSelection?: () => void;
-  /** Current canvas mode - used to flush pending edits on view switch */
-  canvasMode?: string;
+  /** Whether a frame is expanded - used to flush pending edits on expand/collapse */
+  isFrameExpanded?: boolean;
   /** Current strategy phase */
   strategyPhase?: StrategyPhase;
   /** Called when user clicks approve buttons in chat */
-  onPhaseAction?: (action: "approve-manifesto" | "approve-flow") => void;
+  onPhaseAction?: (action: "approve-manifesto" | "approve-persona" | "approve-flow" | "approve-wireframe") => void;
   /** Whether chat is currently in a floating panel */
   chatFloating?: boolean;
   /** Called when user clicks the pop-out button */
@@ -119,7 +119,7 @@ export function RightPanel({
   onTabChange,
   onSelectedElementSourceUpdate,
   onClearSelection,
-  canvasMode,
+  isFrameExpanded,
   strategyPhase,
   onPhaseAction,
   chatFloating,
@@ -253,18 +253,18 @@ export function RightPanel({
     lastInspectionMode.current = isInspecting;
   }, [inspectionMode, draftEditor]);
 
-  // Trigger 3: Commit when canvas mode changes (e.g., Flow → Prototype)
+  // Trigger 3: Commit when frame expand state changes (e.g., expanding/collapsing)
   // Without this, the debounce timer may fire after the SandpackWrapper remounts,
   // causing the edit to be written to VFS but not recompiled into the preview.
-  const lastCanvasMode = useRef<string | undefined>(canvasMode);
+  const lastIsFrameExpanded = useRef<boolean | undefined>(isFrameExpanded);
   useEffect(() => {
-    if (canvasMode !== lastCanvasMode.current) {
-      if (lastCanvasMode.current !== undefined) {
+    if (isFrameExpanded !== lastIsFrameExpanded.current) {
+      if (lastIsFrameExpanded.current !== undefined) {
         draftEditor.flush();
       }
-      lastCanvasMode.current = canvasMode;
+      lastIsFrameExpanded.current = isFrameExpanded;
     }
-  }, [canvasMode, draftEditor]);
+  }, [isFrameExpanded, draftEditor]);
 
   // Handler for manual tab switches
   const handleTabChange = (tab: TabType) => {
@@ -502,8 +502,9 @@ export function RightPanel({
     onOptimisticMove: broadcastMove,
   });
 
-  if (!isOpen) {
-    return (
+  return (
+    <>
+    {!isOpen && (
       <button
         onClick={() => setIsOpen(true)}
         className={`absolute top-4 right-4 z-50 p-2 bg-white rounded-md shadow-md border border-neutral-200 hover:bg-neutral-50 transition-colors ${className ?? ""}`}
@@ -511,11 +512,8 @@ export function RightPanel({
       >
         <PanelRight className="w-5 h-5 text-neutral-600" />
       </button>
-    );
-  }
-
-  return (
-    <div className={`${chatFloating ? "w-0 min-w-0" : "w-96"} h-full ${chatFloating ? "" : "bg-white border-l border-neutral-200"} flex flex-col overflow-hidden ${className ?? ""}`}>
+    )}
+    <div className={`${!isOpen ? "w-0 min-w-0" : chatFloating ? "w-0 min-w-0" : "w-96"} h-full ${chatFloating || !isOpen ? "" : "bg-white border-l border-neutral-200"} flex flex-col overflow-hidden ${className ?? ""}`}>
       {/* Header with Tabs */}
       <div className="flex items-center justify-between px-2 py-2 border-b border-neutral-200">
         {/* Tab Switcher */}
@@ -655,6 +653,7 @@ export function RightPanel({
         )}
       </div>
     </div>
+    </>
   );
 }
 

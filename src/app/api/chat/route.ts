@@ -1,7 +1,7 @@
 import { streamText, convertToModelMessages } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
-import { MANIFESTO_SYSTEM_PROMPT, FLOW_SYSTEM_PROMPT, buildBuildSystemPrompt } from "@/lib/ai/strategy-prompts";
+import { MANIFESTO_SYSTEM_PROMPT, PERSONA_SYSTEM_PROMPT, FLOW_SYSTEM_PROMPT, WIREFRAME_SYSTEM_PROMPT, buildBuildSystemPrompt } from "@/lib/ai/strategy-prompts";
 
 type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-5";
 
@@ -382,7 +382,7 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     Update /App.tsx to use routing:
     \`\`\`tsx file="/App.tsx"
     import * as React from "react";
-    import { useRouter } from "./index";
+    import { useRouter } from "./lib/router";
     import { Home } from "./pages/Home";
     import { Dashboard } from "./pages/Dashboard";
     import "./globals.css";
@@ -401,7 +401,7 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     \`\`\`
 
     ## Navigation:
-    - Use \`useRouter()\` hook from "./index" to access \`route\` and \`navigate\`
+    - Use \`useRouter()\` hook from "./lib/router" to access \`route\` and \`navigate\`
     - Call \`navigate("/dashboard")\` to navigate to a route
     - The router uses hash-based routing (e.g., \`#/dashboard\`)
 
@@ -419,15 +419,23 @@ export async function POST(req: Request) {
     case "manifesto":
       basePrompt = MANIFESTO_SYSTEM_PROMPT;
       break;
+    case "persona":
+      basePrompt = PERSONA_SYSTEM_PROMPT;
+      break;
     case "flow":
       basePrompt = FLOW_SYSTEM_PROMPT;
+      break;
+    case "wireframe":
+      basePrompt = WIREFRAME_SYSTEM_PROMPT;
       break;
     case "building":
       basePrompt = buildBuildSystemPrompt(
         vfsContext?.manifestoContext || "",
         vfsContext?.flowContext || "",
+        vfsContext?.personaContext || "",
         currentPageId,
-        currentPageName
+        currentPageName,
+        vfsContext?.wireframeContext || ""
       ) + "\n\n" + SYSTEM_PROMPT;
       break;
     default:

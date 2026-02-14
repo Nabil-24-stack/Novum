@@ -15,7 +15,6 @@ import { useCanvasKeyboard } from "@/hooks/useCanvasKeyboard";
 import { useChatContextStore, type PinnedElement } from "@/hooks/useChatContextStore";
 import { useStrategyStore } from "@/hooks/useStrategyStore";
 import { useFlowNavigation } from "@/hooks/useFlowNavigation";
-import { useCanvasTransition } from "@/hooks/useCanvasTransition";
 import { SandpackWrapper } from "@/components/providers/SandpackWrapper";
 import { InfiniteCanvas, type ViewportState } from "@/components/canvas/InfiniteCanvas";
 import { type FrameState, DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT } from "@/components/canvas/Frame";
@@ -26,10 +25,13 @@ import { ComponentDialog } from "@/components/canvas/ComponentDialog";
 import { InspectorContextMenu } from "@/components/canvas/InspectorContextMenu";
 import { FlowFrame } from "@/components/flow/FlowFrame";
 import { FlowConnections } from "@/components/flow/FlowConnections";
-import { ViewModeToggle, type CanvasMode } from "@/components/flow/ViewModeToggle";
 import { ManifestoCard } from "@/components/strategy/ManifestoCard";
+import { PersonaCard } from "@/components/strategy/PersonaCard";
+import { WireframeCard, WIREFRAME_CARD_WIDTH, WIREFRAME_CARD_HEIGHT } from "@/components/strategy/WireframeCard";
 import { StrategyFlowCanvas } from "@/components/strategy/StrategyFlowCanvas";
 import { initializeTestAPI, updateTestAPI } from "@/lib/ast/test-utils";
+import { PublishDialog } from "@/components/editor/PublishDialog";
+import { Smartphone, GitBranch, Share } from "lucide-react";
 import { animateViewport, calculateCenteredViewport, calculateFitAllViewport } from "@/lib/canvas/viewport-animation";
 import { calculateFlowLayout } from "@/lib/flow/auto-layout";
 import type { CanvasTool, CanvasNode } from "@/lib/canvas/types";
@@ -43,6 +45,8 @@ type ViewMode = "app" | "design-system";
 const DEFAULT_MANIFESTO_X = 100;
 const DEFAULT_MANIFESTO_Y = 100;
 const MANIFESTO_WIDTH = 600;
+const PERSONA_CARD_WIDTH = 320;
+const PERSONA_GAP = 20;
 
 export default function Home() {
   const { files, writeFile } = useVirtualFiles();
@@ -55,9 +59,6 @@ export default function Home() {
   const [viewMode, setViewMode] = useState<ViewMode>("app");
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("chat");
 
-  // Canvas mode: prototype (single frame) or flow (multi-page flow diagram)
-  const [canvasMode, setCanvasMode] = useState<CanvasMode>("prototype");
-
   // Frame expand state (fullscreen-like preview)
   const [isFrameExpanded, setIsFrameExpanded] = useState(false);
   const expandSavedViewport = useRef<ViewportState | null>(null);
@@ -69,13 +70,17 @@ export default function Home() {
   const strategyPhase = useStrategyStore((s) => s.phase);
   const manifestoData = useStrategyStore((s) => s.manifestoData);
   const streamingOverview = useStrategyStore((s) => s.streamingOverview);
+  const personaData = useStrategyStore((s) => s.personaData);
+  const streamingPersonas = useStrategyStore((s) => s.streamingPersonas);
   const flowData = useStrategyStore((s) => s.flowData);
+  const wireframeData = useStrategyStore((s) => s.wireframeData);
+  const streamingWireframes = useStrategyStore((s) => s.streamingWireframes);
   const completedPages = useStrategyStore((s) => s.completedPages);
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
 
   // Compute visible page IDs for progressive FlowFrame rendering
   const visiblePageIds = useMemo(() => {
-    if (strategyPhase !== "building") return undefined; // Show all pages when not building
+    if (strategyPhase !== "building") return undefined; // Show all pages when not building (including wireframe)
     const ids = new Set(completedPages);
     if (currentBuildingPage) ids.add(currentBuildingPage);
     return ids;
@@ -86,10 +91,24 @@ export default function Home() {
 
   // Draggable overview card position (world-space)
   const [manifestoPos, setManifestoPos] = useState({ x: DEFAULT_MANIFESTO_X, y: DEFAULT_MANIFESTO_Y });
+  // Persona card positions (world-space, to the right of manifesto)
+  const defaultPersonaX = DEFAULT_MANIFESTO_X + MANIFESTO_WIDTH + 40;
+  const [personaPositions, setPersonaPositions] = useState([
+    { x: defaultPersonaX, y: DEFAULT_MANIFESTO_Y },
+    { x: defaultPersonaX + PERSONA_CARD_WIDTH + PERSONA_GAP, y: DEFAULT_MANIFESTO_Y },
+  ]);
+  // Active wireframe data (streaming or final)
+  const activeWireframeData = wireframeData || streamingWireframes;
+
+  // Wireframe card positions (world-space, below strategy flow)
+  const WIREFRAME_GAP = 20;
+  const [wireframePositions, setWireframePositions] = useState<{ x: number; y: number }[]>([]);
+
   // Y offset to push FlowFrames below strategy content during building
   const [flowLayoutOffset, setFlowLayoutOffset] = useState({ x: 0, y: 0 });
-  // Derived flow offset — always to the right of the overview card
-  const strategyFlowOffsetX = manifestoPos.x + MANIFESTO_WIDTH + 60;
+  // Derived flow offset — always to the right of the overview card (accounting for persona cards)
+  const personasRightEdge = personaPositions[1].x + PERSONA_CARD_WIDTH;
+  const strategyFlowOffsetX = Math.max(manifestoPos.x + MANIFESTO_WIDTH + 60, personasRightEdge + 40);
   const strategyFlowOffsetY = manifestoPos.y;
   // Floating chat state (rect managed here for animation control)
   const [chatMode, setChatMode] = useState<"docked" | "floating">("floating");
@@ -122,6 +141,7 @@ export default function Home() {
     () => new Map()
   );
   const nodePositionsRef = useRef<Map<string, FlowNodePosition>>(new Map());
+  const architecturePositionsRef = useRef<Map<string, FlowNodePosition> | null>(null);
   const setNodePositions: typeof setNodePositionsInternal = useCallback((update) => {
     setNodePositionsInternal((prev) => {
       const newValue = typeof update === "function" ? update(prev) : update;
@@ -144,21 +164,11 @@ export default function Home() {
   // Container dimensions for viewport centering calculations
   const [containerDimensions, setContainerDimensions] = useState({ width: 800, height: 600 });
 
-  // Canvas transition animation hook
-  const transition = useCanvasTransition();
-
   // Derive activePageId from activeRoute + manifest
   const activePageId = useMemo(() => {
     const page = flowManifest.pages.find((p) => p.route === activeRoute);
     return page?.id ?? flowManifest.pages[0]?.id ?? null;
   }, [flowManifest.pages, activeRoute]);
-
-  // Sync activeFrameId with activePageId in prototype mode
-  useEffect(() => {
-    if (canvasMode === "prototype" && activePageId) {
-      setActiveFrameId(activePageId);
-    }
-  }, [canvasMode, activePageId]);
 
   // Callback to auto-switch to Design tab when element is selected
   // (FlowFrame auto-opens layers internally via selectedPageId prop)
@@ -239,6 +249,7 @@ export default function Home() {
   // Canvas tool state (toolbar, drawing state only - ghosts managed by useCanvasStore)
   const canvasTool = useCanvasTool();
   const [componentDialogOpen, setComponentDialogOpen] = useState(false);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
 
   // Canvas keyboard shortcuts (Cmd+G for grouping, etc.)
   useCanvasKeyboard();
@@ -276,28 +287,60 @@ export default function Home() {
     return () => resizeObserver.disconnect();
   }, []);
 
-  // --- Frame expand toggle: sets viewport + expanded state synchronously ---
-  // Both state updates are batched by React into a single render, preventing
-  // the frame from jumping off-screen (which happens if position overrides
-  // before the viewport catches up via an async effect).
-  const handleExpandToggle = useCallback(() => {
-    if (!isFrameExpanded) {
-      // Expanding: save viewport, snap to origin at scale 1
-      expandSavedViewport.current = { ...viewportRef.current };
-      setViewport({ x: 0, y: 0, scale: 1 });
-    } else {
+  // --- Prototype toggle: expands active frame to fill canvas (or collapses back to flow) ---
+  const handlePrototypeToggle = useCallback(() => {
+    if (isFrameExpanded) {
       // Collapsing: restore saved viewport
       if (expandSavedViewport.current) {
         setViewport(expandSavedViewport.current);
         expandSavedViewport.current = null;
       }
+      setIsFrameExpanded(false);
+
+      // Reset all iframes to their correct start routes.
+      // Navigation in Prototype View changes the active iframe's hash,
+      // and Sandpack's shared bundler can propagate this to all iframes.
+      setTimeout(() => {
+        flowManifest.pages.forEach((page) => {
+          const container = document.querySelector(`[data-flow-page-id="${page.id}"]`);
+          const iframe = container?.querySelector<HTMLIFrameElement>('iframe[title="Sandpack Preview"]');
+          if (iframe?.contentWindow) {
+            iframe.contentWindow.postMessage(
+              { type: "novum:navigate-to", payload: { route: page.route } },
+              "*"
+            );
+          }
+        });
+      }, 150);
+    } else {
+      // Expanding: determine which frame to expand
+      const targetId = activeFrameId ?? flowManifest.pages.find(p => p.route === "/")?.id ?? flowManifest.pages[0]?.id;
+      if (targetId) {
+        setActiveFrameId(targetId);
+        const page = flowManifest.pages.find(p => p.id === targetId);
+        if (page) setActiveRoute(page.route);
+        expandSavedViewport.current = { ...viewportRef.current };
+        setViewport({ x: 0, y: 0, scale: 1 });
+        setIsFrameExpanded(true);
+      }
     }
-    setIsFrameExpanded((prev) => !prev);
-  }, [isFrameExpanded, setViewport]);
+  }, [isFrameExpanded, activeFrameId, flowManifest.pages, setViewport]);
+
+  // --- Global Escape key to collapse expanded frame ---
+  useEffect(() => {
+    if (!isFrameExpanded) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        handlePrototypeToggle();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isFrameExpanded, handlePrototypeToggle]);
 
   // --- Flow navigation interception ---
   useFlowNavigation({
-    canvasMode,
+    isExpanded: isFrameExpanded,
     manifest: flowManifest,
     nodePositions,
     viewport,
@@ -315,23 +358,47 @@ export default function Home() {
       const newMap = new Map(prev);
       for (const node of layout.nodes) {
         if (!newMap.has(node.id)) {
-          newMap.set(node.id, {
-            ...node,
-            x: node.x + flowLayoutOffset.x,
-            y: node.y + flowLayoutOffset.y,
-          });
+          // During building, prefer the architecture snapshot position (preserves full-layout positioning)
+          const snapshotPos = architecturePositionsRef.current?.get(node.id);
+          if (snapshotPos) {
+            newMap.set(node.id, snapshotPos);
+          } else {
+            newMap.set(node.id, {
+              ...node,
+              x: node.x + flowLayoutOffset.x,
+              y: node.y + flowLayoutOffset.y,
+            });
+          }
         }
       }
-      // Remove nodes that no longer exist in manifest
-      for (const id of newMap.keys()) {
-        if (!layout.nodes.some((n) => n.id === id)) {
-          newMap.delete(id);
+      // Remove nodes that no longer exist in manifest — skip during building phase
+      // because visiblePageIds already controls rendering and AI may temporarily
+      // overwrite flow.json with fewer pages
+      if (strategyPhase !== "building") {
+        for (const id of newMap.keys()) {
+          if (!layout.nodes.some((n) => n.id === id)) {
+            newMap.delete(id);
+          }
         }
       }
       return newMap;
     });
     setCanvasDimensions({ width: layout.width, height: layout.height });
-  }, [flowManifest, flowLayoutOffset]);
+  }, [flowManifest, flowLayoutOffset, strategyPhase]);
+
+  // Snapshot architecture positions when entering building phase so that
+  // partial flow.json rewrites don't cause position recalculation.
+  useEffect(() => {
+    if (strategyPhase === "building" && !architecturePositionsRef.current) {
+      const id = requestAnimationFrame(() => {
+        architecturePositionsRef.current = new Map(nodePositionsRef.current);
+      });
+      return () => cancelAnimationFrame(id);
+    }
+    if (strategyPhase !== "building") {
+      architecturePositionsRef.current = null;
+    }
+  }, [strategyPhase]);
 
   // --- Auto-center on a specific page when centerOnPageId changes ---
   useEffect(() => {
@@ -492,29 +559,6 @@ export default function Home() {
     canvasTool.setActiveTool("cursor");
   }, [viewport, canvasStore, canvasTool]);
 
-  // Handle canvas mode change via ViewModeToggle
-  const handleCanvasModeChange = useCallback((newMode: CanvasMode) => {
-    // Collapse expanded frame and restore viewport if needed
-    if (isFrameExpanded && expandSavedViewport.current) {
-      setViewport(expandSavedViewport.current);
-      expandSavedViewport.current = null;
-    }
-    setIsFrameExpanded(false);
-    if (canvasMode === "flow" && newMode === "prototype") {
-      // Flow → Prototype: set active route from currently active frame
-      const activePage = flowManifest.pages.find((p) => p.id === activeFrameId);
-      if (activePage) {
-        setActiveRoute(activePage.route);
-      }
-    }
-    // Animated transition for both directions (collapsing skips viewport animation)
-    const currentActiveId = canvasMode === "prototype" ? activePageId : activeFrameId;
-    if (currentActiveId) {
-      transition.start(canvasMode, newMode, currentActiveId, nodePositions, viewport, setViewport, containerDimensions);
-    }
-    setCanvasMode(newMode);
-  }, [canvasMode, isFrameExpanded, activePageId, activeFrameId, flowManifest.pages, transition, nodePositions, viewport, setViewport, containerDimensions]);
-
   // Unified materialization handler (works for both modes)
   const handleMaterialize = useCallback(
     async (node: CanvasNode, nodes: Map<string, CanvasNode>, iframeDropPoint: { x: number; y: number }, pageId?: string) => {
@@ -610,6 +654,36 @@ export default function Home() {
     return () => window.removeEventListener("message", handleMessage);
   }, []);
 
+  // Handle navigation in Prototype View.
+  // When the iframe's Router intercepts a navigation (because __novumFlowModeActive
+  // may still be true due to broadcast timing), it posts novum:navigation-intent.
+  // We forward this to the active iframe via novum:navigate-to so navigation
+  // happens within the same frame — no FlowFrame switch, no dissolve effect.
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (!event.data) return;
+
+      if (event.data.type === "novum:navigation-intent" && isFrameExpanded) {
+        const { targetRoute } = event.data.payload as { targetRoute: string };
+        if (!targetRoute) return;
+
+        // Send navigate-to message to the active iframe
+        const frameId = activeFrameId ?? activePageId;
+        const container = document.querySelector(`[data-flow-page-id="${frameId}"]`);
+        const iframe = container?.querySelector<HTMLIFrameElement>('iframe[title="Sandpack Preview"]');
+        if (iframe?.contentWindow) {
+          iframe.contentWindow.postMessage(
+            { type: "novum:navigate-to", payload: { route: targetRoute } },
+            "*"
+          );
+        }
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [isFrameExpanded, activeFrameId, activePageId]);
+
   // Dismiss context menu when inspection mode is turned off
   useEffect(() => {
     if (!inspection.inspectionMode) {
@@ -674,6 +748,49 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manifestoData !== null || streamingOverview !== null, strategyPhase === "manifesto"]);
 
+  // Animate viewport when personas appear + slide floating chat beside them
+  const hasAnimatedToPersonas = useRef(false);
+  useEffect(() => {
+    const showPersonas = personaData || streamingPersonas;
+    if (strategyPhase === "persona" && showPersonas && !hasAnimatedToPersonas.current) {
+      hasAnimatedToPersonas.current = true;
+
+      const chatWidth = 630;
+      const chatHeight = 720;
+      const gap = 20;
+
+      // Total world width: manifesto + gap + two persona cards
+      const personasWorldRight = personaPositions[1].x + PERSONA_CARD_WIDTH;
+      const totalWorldWidth = personasWorldRight - manifestoPos.x;
+      const combinedWidth = totalWorldWidth + gap + chatWidth;
+
+      const screenW = window.innerWidth;
+      const screenH = window.innerHeight;
+
+      const scale = Math.min(1, (screenW - 80) / combinedWidth);
+
+      const targetViewport = {
+        x: (screenW - combinedWidth * scale) / 2 - manifestoPos.x * scale,
+        y: (screenH - chatHeight) / 2 - manifestoPos.y * scale,
+        scale,
+      };
+      animateViewport(viewport, targetViewport, setViewport, { duration: 400 });
+
+      const chatScreenX = (screenW - combinedWidth * scale) / 2 + totalWorldWidth * scale + gap;
+      const chatScreenY = (screenH - chatHeight) / 2;
+
+      setFloatingAnimate(true);
+      setFloatingRect((prev) => ({
+        ...prev,
+        x: chatScreenX,
+        y: chatScreenY,
+      }));
+      const timer = setTimeout(() => setFloatingAnimate(false), 500);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [personaData !== null || streamingPersonas !== null, strategyPhase === "persona"]);
+
   // Animate viewport when strategy flow appears + slide floating chat beside flow
   useEffect(() => {
     if (strategyPhase === "flow" && flowData) {
@@ -716,8 +833,71 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flowData !== null && strategyPhase === "flow"]);
 
-  const handlePhaseAction = useCallback((action: "approve-manifesto" | "approve-flow") => {
+  // Incrementally position wireframe cards as they stream in
+  useEffect(() => {
+    if (strategyPhase !== "wireframe" || !activeWireframeData) return;
+
+    const pageCount = activeWireframeData.pages.length;
+    const startX = strategyFlowOffsetX;
+    const startY = strategyFlowOffsetY + 300; // below strategy flow
+
+    setWireframePositions((prev) => {
+      if (prev.length >= pageCount) return prev;
+      const positions = [...prev];
+      for (let i = prev.length; i < pageCount; i++) {
+        positions.push({
+          x: startX + i * (WIREFRAME_CARD_WIDTH + WIREFRAME_GAP),
+          y: startY,
+        });
+      }
+      return positions;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWireframeData?.pages.length, strategyPhase]);
+
+  // Animate viewport on first wireframe appearance (streaming or final)
+  const hasAnimatedToWireframes = useRef(false);
+  useEffect(() => {
+    if (strategyPhase !== "wireframe" || !activeWireframeData || hasAnimatedToWireframes.current) return;
+    hasAnimatedToWireframes.current = true;
+
+    const startX = strategyFlowOffsetX;
+    const startY = strategyFlowOffsetY + 300;
+    const cardTotalHeight = WIREFRAME_CARD_HEIGHT + 36;
+    // Estimate width for the number of pages we expect (at least what we have so far)
+    const estWidth = Math.max(1, activeWireframeData.pages.length) * WIREFRAME_CARD_WIDTH
+      + Math.max(0, activeWireframeData.pages.length - 1) * WIREFRAME_GAP;
+    const rects = [
+      { x: manifestoPos.x, y: manifestoPos.y, width: MANIFESTO_WIDTH, height: 400 },
+      { x: startX, y: startY, width: estWidth, height: cardTotalHeight },
+    ];
+    const target = calculateFitAllViewport(rects, containerDimensions.width, containerDimensions.height);
+    animateViewport(viewportRef.current, target, setViewport, { duration: 400 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWireframeData !== null && strategyPhase === "wireframe"]);
+
+  // Final fit-all animation when all wireframes are complete
+  useEffect(() => {
+    if (strategyPhase !== "wireframe" || !wireframeData) return;
+
+    const pageCount = wireframeData.pages.length;
+    const startX = strategyFlowOffsetX;
+    const startY = strategyFlowOffsetY + 300;
+    const totalWidth = pageCount * WIREFRAME_CARD_WIDTH + (pageCount - 1) * WIREFRAME_GAP;
+    const cardTotalHeight = WIREFRAME_CARD_HEIGHT + 36;
+    const rects = [
+      { x: manifestoPos.x, y: manifestoPos.y, width: MANIFESTO_WIDTH, height: 400 },
+      { x: startX, y: startY, width: totalWidth, height: cardTotalHeight },
+    ];
+    const target = calculateFitAllViewport(rects, containerDimensions.width, containerDimensions.height);
+    animateViewport(viewportRef.current, target, setViewport, { duration: 400 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wireframeData !== null && strategyPhase === "wireframe"]);
+
+  const handlePhaseAction = useCallback((action: "approve-manifesto" | "approve-persona" | "approve-flow" | "approve-wireframe") => {
     if (action === "approve-manifesto") {
+      useStrategyStore.getState().setPhase("persona");
+    } else if (action === "approve-persona") {
       useStrategyStore.getState().setPhase("flow");
     } else if (action === "approve-flow") {
       const currentFlowData = useStrategyStore.getState().flowData;
@@ -745,28 +925,60 @@ export default function Home() {
         writeFile("/flow.json", JSON.stringify(flowJson, null, 2));
       }
 
-      useStrategyStore.getState().setPhase("building");
-      setCanvasMode("flow");
+      // Transition to wireframe phase (not building)
+      useStrategyStore.getState().setPhase("wireframe");
 
-      // Position FlowFrames below strategy content (keep manifesto in place)
-      const strategyBottom = manifestoPos.y + 700; // generous height estimate for manifesto + strategy flow
-      const flowYOffset = strategyBottom + 120;     // 120px gap below strategy content
-      setFlowLayoutOffset({ x: manifestoPos.x - 50, y: flowYOffset - 50 }); // subtract auto-layout MARGIN(50)
-
-      // Dock the chat panel to the sidebar for building phase
+      // Dock the chat panel to the sidebar for wireframe phase
       setChatMode("docked");
+    } else if (action === "approve-wireframe") {
+      // Wireframe data is already in the store (set by ChatTab's JSON extraction)
+      // ChatTab will serialize it as text context when sending the first build message
+      useStrategyStore.getState().setPhase("building");
 
-      // Animate viewport to show strategy content + first FlowFrame area
+      // Step 1: Compute strategyBottom dynamically from all strategy elements
+      const strategyBottom = Math.max(
+        manifestoPos.y + 500,
+        ...personaPositions.map(p => p.y + 500),
+        strategyFlowOffsetY + 400,
+        ...(wireframePositions.length > 0
+          ? wireframePositions.map(p => p.y + WIREFRAME_CARD_HEIGHT + 36)
+          : [0]),
+      );
+
+      const flowYOffset = strategyBottom + 120;
+      const offsetX = manifestoPos.x - 50;
+      const offsetY = flowYOffset - 50;
+      setFlowLayoutOffset({ x: offsetX, y: offsetY });
+
+      // Step 2: Apply offset to ALL existing node positions
+      // The layout effect skips nodes already in nodePositions, so we must
+      // offset them directly here.
+      const offsetPositions = new Map<string, FlowNodePosition>();
+      for (const [id, pos] of nodePositionsRef.current) {
+        offsetPositions.set(id, {
+          ...pos,
+          x: pos.x + offsetX,
+          y: pos.y + offsetY,
+        });
+      }
+      setNodePositions(offsetPositions);
+
+      // Step 3: Eagerly set the architecture snapshot so that subsequent pages
+      // added during building get correctly-offset positions from this snapshot.
+      // The existing effect's `!architecturePositionsRef.current` guard prevents overwrite.
+      architecturePositionsRef.current = offsetPositions;
+
+      // Step 4: Animate viewport to show strategy content + first FlowFrame area
       requestAnimationFrame(() => {
         const rects = [
-          { x: manifestoPos.x, y: manifestoPos.y, width: MANIFESTO_WIDTH, height: 600 },
-          { x: manifestoPos.x, y: flowYOffset, width: DEFAULT_FRAME_WIDTH, height: DEFAULT_FRAME_HEIGHT },
+          { x: manifestoPos.x, y: manifestoPos.y, width: MANIFESTO_WIDTH, height: strategyBottom - manifestoPos.y },
+          { x: offsetX, y: flowYOffset, width: DEFAULT_FRAME_WIDTH, height: DEFAULT_FRAME_HEIGHT },
         ];
         const target = calculateFitAllViewport(rects, containerDimensions.width, containerDimensions.height);
         animateViewport(viewportRef.current, target, setViewport, { duration: 500 });
       });
     }
-  }, [writeFile, setViewport, manifestoPos, containerDimensions]);
+  }, [writeFile, setViewport, manifestoPos, containerDimensions, wireframePositions, personaPositions, strategyFlowOffsetY, setNodePositions]);
 
   // Handle "Approve & Build Next Page" — animate viewport to the next page's FlowFrame
   const handleApproveAndBuildNext = useCallback((nextPageId: string) => {
@@ -790,41 +1002,27 @@ export default function Home() {
   }, []);
 
   // Determine if we're in an early strategy phase (no Sandpack needed)
-  const isEarlyStrategyPhase = strategyPhase === "hero" || strategyPhase === "manifesto" || strategyPhase === "flow";
+  const isEarlyStrategyPhase = strategyPhase === "hero" || strategyPhase === "manifesto" || strategyPhase === "persona" || strategyPhase === "flow" || strategyPhase === "wireframe";
   // Hide RightPanel during hero phase, and during early strategy phases when chat is floating (no Design tab)
   const showRightPanel = strategyPhase !== "hero" && !(isEarlyStrategyPhase && chatMode === "floating");
   const showNav = strategyPhase !== "hero";
 
   // --- Frame visibility helpers ---
+  // Use activeFrameId (not activePageId) so that in-iframe navigation
+  // doesn't switch the visible FlowFrame (avoids dissolve effect).
+  const expandedFrameId = activeFrameId ?? activePageId;
   const isFrameVisible = useCallback((pageId: string): boolean => {
-    if (transition.isTransitioning) return true; // During transition, opacity is controlled by transitionStyle
-    if (canvasMode === "flow") return true;
-    // Prototype mode: only active page visible
-    return pageId === activePageId;
-  }, [transition.isTransitioning, canvasMode, activePageId]);
-
-  const getTransitionStyle = useCallback((pageId: string): React.CSSProperties | undefined => {
-    if (!transition.isTransitioning) return undefined;
-    const target = transition.frameTargets.get(pageId);
-    if (!target) return undefined;
-    const isActive = pageId === activePageId;
-    return {
-      opacity: target.opacity,
-      transform: `translate(${target.translateX}px, ${target.translateY}px) scale(${target.scale})`,
-      transition: "opacity 300ms ease-out, transform 300ms ease-out",
-      pointerEvents: isActive ? "auto" as const : "none" as const,
-      transformOrigin: "center center",
-    };
-  }, [transition.isTransitioning, transition.frameTargets, activePageId]);
+    if (isFrameExpanded) return pageId === expandedFrameId;
+    return true; // All frames always visible in flow mode
+  }, [isFrameExpanded, expandedFrameId]);
 
   // Determine which frame is "active" (ring highlight + inspection)
   const isFrameActive = useCallback((pageId: string): boolean => {
-    if (canvasMode === "prototype") return pageId === activePageId;
     return pageId === activeFrameId;
-  }, [canvasMode, activePageId, activeFrameId]);
+  }, [activeFrameId]);
 
-  // Determine connection opacity (fades in/out during transitions)
-  const connectionOpacity = transition.isTransitioning ? transition.connectionOpacity : (canvasMode === "flow" ? 1 : 0);
+  // Connections hidden when a frame is expanded
+  const connectionOpacity = isFrameExpanded ? 0 : 1;
 
   return (
     <main className="w-screen h-screen overflow-hidden flex flex-col">
@@ -849,20 +1047,47 @@ export default function Home() {
               <div className="flex items-center gap-2">
                 <span className="text-sm text-neutral-500">
                   {strategyPhase === "manifesto" && "Defining Overview"}
+                  {strategyPhase === "persona" && "Defining Personas"}
                   {strategyPhase === "flow" && "Designing Architecture"}
+                  {strategyPhase === "wireframe" && "Creating Wireframes"}
                 </span>
               </div>
             )}
           </div>
 
-          {/* Design System button on far right */}
+          {/* Action buttons on far right */}
           {!isEarlyStrategyPhase && viewMode === "app" && (
-            <button
-              onClick={() => setViewMode("design-system")}
-              className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
-            >
-              Design System
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handlePrototypeToggle}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
+              >
+                {isFrameExpanded ? (
+                  <>
+                    <GitBranch className="w-4 h-4" />
+                    Flow
+                  </>
+                ) : (
+                  <>
+                    <Smartphone className="w-4 h-4" />
+                    Prototype
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => setViewMode("design-system")}
+                className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
+              >
+                Design System
+              </button>
+              <button
+                onClick={() => setPublishDialogOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
+              >
+                <Share className="w-4 h-4" />
+                Publish
+              </button>
+            </div>
           )}
         </nav>
       )}
@@ -893,6 +1118,20 @@ export default function Home() {
                 onMove={(nx, ny) => setManifestoPos({ x: nx, y: ny })}
               />
             )}
+            {(personaData || streamingPersonas) && (personaData || streamingPersonas)!.map((persona, index) => (
+              <PersonaCard
+                key={index}
+                persona={persona}
+                x={personaPositions[index]?.x ?? defaultPersonaX + index * (PERSONA_CARD_WIDTH + PERSONA_GAP)}
+                y={personaPositions[index]?.y ?? DEFAULT_MANIFESTO_Y}
+                index={index}
+                onMove={(nx, ny) => setPersonaPositions((prev) => {
+                  const updated = [...prev];
+                  updated[index] = { x: nx, y: ny };
+                  return updated;
+                })}
+              />
+            ))}
             {flowData && (
               <StrategyFlowCanvas
                 flowData={flowData}
@@ -901,8 +1140,23 @@ export default function Home() {
               />
             )}
 
-            {/* FlowConnections — visible in flow mode, fades in/out during transitions */}
-            {!isEarlyStrategyPhase && (connectionOpacity > 0 || transition.isTransitioning) && (
+            {/* Wireframe Cards — rendered during wireframe phase (streaming or final) */}
+            {activeWireframeData && wireframePositions.length > 0 && activeWireframeData.pages.map((page, index) => (
+              <WireframeCard
+                key={page.id}
+                page={page}
+                x={wireframePositions[index]?.x ?? 0}
+                y={wireframePositions[index]?.y ?? 0}
+                onMove={(nx, ny) => setWireframePositions((prev) => {
+                  const updated = [...prev];
+                  updated[index] = { x: nx, y: ny };
+                  return updated;
+                })}
+              />
+            ))}
+
+            {/* FlowConnections — visible when not expanded */}
+            {!isEarlyStrategyPhase && connectionOpacity > 0 && (
               <FlowConnections
                 connections={visibleConnections}
                 nodePositions={nodePositions}
@@ -920,7 +1174,7 @@ export default function Home() {
               const basePosition = nodePositions.get(page.id);
               if (!basePosition) return null;
 
-              const isThisFrameExpanded = isFrameExpanded && canvasMode === "prototype" && page.id === activePageId;
+              const isThisFrameExpanded = isFrameExpanded && page.id === expandedFrameId;
               // When expanded, override position to fill the canvas area at viewport origin
               const position = isThisFrameExpanded
                 ? { ...basePosition, x: 0, y: 0, width: containerDimensions.width, height: containerDimensions.height - 36 }
@@ -943,15 +1197,13 @@ export default function Home() {
                   canvasScale={viewport.scale}
                   onPreviewModeChange={handleFramePreviewModeChange}
                   onInspectionModeChange={inspection.setInspectionMode}
-                  flowModeActive={canvasMode === "flow"}
+                  flowModeActive={!isFrameExpanded}
                   isVisible={isFrameVisible(page.id)}
-                  transitionStyle={getTransitionStyle(page.id)}
                   selectedPageId={inspection.selectedElement?.pageId}
                   selectedSelector={inspection.selectedElement?.selector}
                   animateEntrance={strategyPhase === "building"}
                   isExpanded={isThisFrameExpanded || undefined}
-                  onExpandToggle={canvasMode === "prototype" && page.id === activePageId ? handleExpandToggle : undefined}
-                  forceStreamingOverlay={canvasMode === "prototype" && page.id === activePageId ? true : undefined}
+                  forceStreamingOverlay={isThisFrameExpanded || undefined}
                 />
               );
             })}
@@ -969,22 +1221,14 @@ export default function Home() {
                 viewport={viewport}
                 containerRef={canvasContainerRef}
                 files={files}
-                frameState={canvasMode === "prototype" ? activeFrameState : undefined}
-                flowFrameStates={canvasMode === "flow" ? visibleFlowFrameStates : undefined}
+                frameState={isFrameExpanded ? activeFrameState : undefined}
+                flowFrameStates={!isFrameExpanded ? visibleFlowFrameStates : undefined}
                 onMaterialize={handleMaterialize}
                 inspectionMode={inspection.inspectionMode}
               />
             )}
           </InfiniteCanvas>
 
-          {/* ViewModeToggle — fixed position in canvas UI layer */}
-          {!isEarlyStrategyPhase && !isFrameExpanded && (
-            <ViewModeToggle
-              mode={canvasMode}
-              onModeChange={handleCanvasModeChange}
-              className="absolute bottom-4 left-4 z-20"
-            />
-          )}
         </div>
 
         {/* Design System: Full-width preview */}
@@ -1013,7 +1257,7 @@ export default function Home() {
           onTabChange={setRightPanelTab}
           onSelectedElementSourceUpdate={inspection.updateSelectedElementSource}
           onClearSelection={inspection.clearSelection}
-          canvasMode={canvasMode}
+          isFrameExpanded={isFrameExpanded}
           strategyPhase={strategyPhase}
           onPhaseAction={handlePhaseAction}
           className={`shrink-0 ${
@@ -1046,6 +1290,14 @@ export default function Home() {
         onClose={() => setComponentDialogOpen(false)}
         onSelect={handleComponentSelect}
         files={files}
+      />
+
+      {/* Publish dialog */}
+      <PublishDialog
+        isOpen={publishDialogOpen}
+        onClose={() => setPublishDialogOpen(false)}
+        files={files}
+        defaultName={manifestoData?.title ?? "My App"}
       />
 
       {/* Inspector context menu (right-click "Add to AI Chat") */}

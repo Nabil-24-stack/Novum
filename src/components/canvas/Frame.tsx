@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect, MouseEvent, PointerEvent } from "react";
 import { SandpackPreview, SandpackCodeViewer } from "@codesandbox/sandpack-react";
-import { GripHorizontal, Sun, Moon, Pencil, Layers, Eye, Code, RefreshCw, Maximize2, Minimize2 } from "lucide-react";
+import { GripHorizontal, Sun, Moon, Pencil, Layers, Eye, Code, RefreshCw } from "lucide-react";
 import { useCanvasScale } from "./InfiniteCanvas";
 import { LayersPanel } from "./LayersPanel";
 import { StreamingOverlay } from "./StreamingOverlay";
@@ -47,7 +47,6 @@ interface FrameProps {
   onExternalDragEnd?: () => void;
   // Expand/collapse for fullscreen-like prototype preview
   isExpanded?: boolean;
-  onExpandToggle?: () => void;
   // Force streaming overlay to show (active frame in Prototype View)
   forceStreamingOverlay?: boolean;
 }
@@ -94,7 +93,6 @@ export function Frame({
   onExternalDragStart,
   onExternalDragEnd,
   isExpanded,
-  onExpandToggle,
   forceStreamingOverlay,
 }: FrameProps) {
 
@@ -106,18 +104,6 @@ export function Frame({
   const resizeDirectionRef = useRef<ResizeDirection | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasScale = useCanvasScale();
-
-  // Escape key to collapse expanded frame
-  useEffect(() => {
-    if (!isExpanded) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onExpandToggle?.();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isExpanded, onExpandToggle]);
 
   // Local DOM tree state for this Frame's layers panel
   const [localDomTree, setLocalDomTree] = useState<DOMTreeNode | null>(null);
@@ -563,18 +549,6 @@ export function Frame({
             title="Refresh preview"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-          </button>
-        )}
-
-        {/* Expand/Collapse toggle */}
-        {onExpandToggle && viewMode === "preview" && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onExpandToggle(); }}
-            onPointerDown={(e) => e.stopPropagation()}
-            className="p-1.5 rounded transition-colors pointer-events-auto bg-neutral-100 text-neutral-400 hover:text-neutral-600"
-            title={isExpanded ? "Collapse frame" : "Expand frame"}
-          >
-            {isExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>
         )}
 

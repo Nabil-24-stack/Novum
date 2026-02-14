@@ -29,8 +29,6 @@ interface FlowFrameProps {
   flowModeActive?: boolean;
   /** Whether this frame is rendered visually (iframes stay mounted even when hidden) */
   isVisible?: boolean;
-  /** CSS transition overrides during mode animation */
-  transitionStyle?: React.CSSProperties;
   /** Page ID of the currently selected element (for auto-opening layers) */
   selectedPageId?: string;
   /** Selector of the currently selected element */
@@ -39,8 +37,6 @@ interface FlowFrameProps {
   animateEntrance?: boolean;
   /** Whether this frame is expanded (fullscreen-like) */
   isExpanded?: boolean;
-  /** Toggle expand/collapse */
-  onExpandToggle?: () => void;
   /** Force streaming overlay to show (active frame in Prototype View) */
   forceStreamingOverlay?: boolean;
 }
@@ -60,12 +56,10 @@ export function FlowFrame({
   onInspectionModeChange,
   flowModeActive = false,
   isVisible = true,
-  transitionStyle,
   selectedPageId,
   selectedSelector,
   animateEntrance = false,
   isExpanded,
-  onExpandToggle,
   forceStreamingOverlay,
 }: FlowFrameProps) {
   const frameRef = useRef<HTMLDivElement>(null);
@@ -145,11 +139,9 @@ export function FlowFrame({
         width: position.width,
         height: position.height + 36, // +36 for Frame header
         opacity: isVisible ? 1 : 0,
-        visibility: isVisible || transitionStyle ? "visible" : "hidden",
+        visibility: isVisible ? "visible" : "hidden",
         pointerEvents: isVisible ? "auto" : "none",
         animation: animateEntrance && isVisible ? 'dissolveIn 700ms ease-out both' : undefined,
-        willChange: transitionStyle ? "transform, opacity" : undefined,
-        ...transitionStyle, // Must remain LAST to override opacity, pointerEvents
       }}
       onClick={handleFrameClick}
     >
@@ -191,7 +183,6 @@ export function FlowFrame({
           onExternalDragMove={handleHeaderDragMove}
           onExternalDragStart={handleHeaderDragStart}
           isExpanded={isExpanded}
-          onExpandToggle={onExpandToggle}
           forceStreamingOverlay={forceStreamingOverlay}
         />
       </SandpackWrapper>

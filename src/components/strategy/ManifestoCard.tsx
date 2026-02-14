@@ -20,7 +20,7 @@ export function ManifestoCard({ manifestoData, x, y, onMove }: ManifestoCardProp
   const hasProblem = manifestoData.problemStatement !== undefined;
   const hasUser = manifestoData.targetUser !== undefined;
   const hasJtbd = manifestoData.jtbd !== undefined && manifestoData.jtbd.length > 0;
-  const hasSolution = manifestoData.solution !== undefined;
+  const hasHmw = manifestoData.hmw !== undefined && manifestoData.hmw.length > 0;
 
   const handlePointerDown = useCallback((e: PointerEvent<HTMLDivElement>) => {
     if (!onMove) return;
@@ -119,20 +119,32 @@ export function ManifestoCard({ manifestoData, x, y, onMove }: ManifestoCardProp
           </>
         )}
 
-        {/* Divider before Solution */}
-        {(hasJtbd || hasUser) && hasSolution && (
+        {/* Divider before How Might We */}
+        {(hasJtbd || hasUser) && hasHmw && (
           <div className="border-t border-neutral-200/60 mt-6 mb-5" />
         )}
 
-        {/* The Solution */}
-        {hasSolution && (
+        {/* How Might We */}
+        {hasHmw && (
           <>
-            <h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider mb-2">
-              The Solution
+            <h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider mb-3">
+              How Might We
             </h3>
-            <p className="text-base text-neutral-700 leading-relaxed">
-              {manifestoData.solution}
-            </p>
+            <ol className="space-y-3">
+              {manifestoData.hmw!.map((question, index) => (
+                <li
+                  key={index}
+                  className="flex items-start gap-3"
+                >
+                  <span className="text-sm font-semibold text-amber-500 mt-0.5 shrink-0 w-5 text-center">
+                    {index + 1}
+                  </span>
+                  <span className="text-base text-neutral-700 leading-relaxed italic">
+                    {question}
+                  </span>
+                </li>
+              ))}
+            </ol>
           </>
         )}
       </div>

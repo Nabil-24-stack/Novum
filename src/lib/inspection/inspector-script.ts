@@ -1503,6 +1503,16 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       hideDropZone();
     }
 
+    // Navigate to a route (sent from parent in Prototype View)
+    if (e.data.type === 'novum:navigate-to') {
+      const route = e.data.payload?.route;
+      if (route) {
+        // Disable flow mode so navigation proceeds normally
+        setFlowModeActive(false);
+        window.location.hash = '#' + route;
+      }
+    }
+
     // Remove placeholder after materialization completes
     if (e.data.type === 'novum:remove-placeholder') {
       if (placeholderElement && placeholderElement.parentNode) {

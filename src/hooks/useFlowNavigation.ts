@@ -4,7 +4,6 @@ import { useEffect, useRef, useCallback } from "react";
 import { toast } from "sonner";
 import type { FlowManifest, FlowNodePosition } from "@/lib/flow/types";
 import type { ViewportState } from "@/components/canvas/InfiniteCanvas";
-import type { CanvasMode } from "@/components/flow/ViewModeToggle";
 import type { NavigationIntentPayload, InspectionMessage } from "@/lib/inspection/types";
 import {
   animateViewport,
@@ -12,8 +11,8 @@ import {
 } from "@/lib/canvas/viewport-animation";
 
 interface UseFlowNavigationOptions {
-  /** Current canvas mode (prototype/flow) */
-  canvasMode: CanvasMode;
+  /** Whether a frame is currently expanded (prototype-like mode) */
+  isExpanded: boolean;
   /** Flow manifest containing pages and connections */
   manifest: FlowManifest;
   /** Map of node positions by page ID */
@@ -36,14 +35,14 @@ interface UseFlowNavigationOptions {
  * - Shows toast if target route not found
  */
 export function useFlowNavigation({
-  canvasMode,
+  isExpanded,
   manifest,
   nodePositions,
   viewport,
   onViewportChange,
   containerDimensions,
 }: UseFlowNavigationOptions) {
-  const isFlowMode = canvasMode === "flow";
+  const isFlowMode = !isExpanded;
   const cancelAnimationRef = useRef<(() => void) | null>(null);
 
   // Broadcast flow mode state to all Sandpack iframes

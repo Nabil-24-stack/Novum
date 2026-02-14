@@ -104,10 +104,58 @@ export function App() {
 }
 `,
 
+  "/lib/router.tsx": `import * as React from "react";
+
+// Parse route from URL (supports both path and hash-based routes)
+export function getRouteFromUrl(): string {
+  const path = window.location.pathname;
+  const hash = window.location.hash;
+
+  // Design system route (special case)
+  if (path.includes("design-system") || hash.includes("design-system")) {
+    return "design-system";
+  }
+
+  // Hash-based routing: #/dashboard -> /dashboard
+  if (hash.startsWith("#/")) {
+    return hash.slice(1); // Remove the # prefix
+  }
+
+  // Pathname-based routing
+  if (path && path !== "/") {
+    return path;
+  }
+
+  return "/";
+}
+
+// Router context to share current route with components
+export const RouterContext = React.createContext<{
+  route: string;
+  navigate: (to: string) => void;
+}>({ route: "/", navigate: () => {} });
+
+export function useRouter() {
+  return React.useContext(RouterContext);
+}
+
+// Extend Window interface for flow mode navigation interception
+declare global {
+  interface Window {
+    __novumFlowModeActive?: boolean;
+    __novumInterceptNavigation?: (route: string) => void;
+  }
+}
+`,
+
   "/index.tsx": `import * as React from "react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { getRouteFromUrl, RouterContext } from "./lib/router";
+
+// Re-export useRouter for backwards compatibility
+export { useRouter } from "./lib/router";
 
 // Pre-compile all UI components for instant drag-and-drop
 import "./warmup";
@@ -141,47 +189,6 @@ class ErrorBoundary extends React.Component<
   }
 }
 
-// Parse route from URL (supports both path and hash-based routes)
-function getRouteFromUrl(): string {
-  const path = window.location.pathname;
-  const hash = window.location.hash;
-
-  // Design system route (special case)
-  if (path.includes("design-system") || hash.includes("design-system")) {
-    return "design-system";
-  }
-
-  // Hash-based routing: #/dashboard -> /dashboard
-  if (hash.startsWith("#/")) {
-    return hash.slice(1); // Remove the # prefix
-  }
-
-  // Pathname-based routing
-  if (path && path !== "/") {
-    return path;
-  }
-
-  return "/";
-}
-
-// Router context to share current route with components
-const RouterContext = React.createContext<{
-  route: string;
-  navigate: (to: string) => void;
-}>({ route: "/", navigate: () => {} });
-
-export function useRouter() {
-  return React.useContext(RouterContext);
-}
-
-// Extend Window interface for flow mode navigation interception
-declare global {
-  interface Window {
-    __novumFlowModeActive?: boolean;
-    __novumInterceptNavigation?: (route: string) => void;
-  }
-}
-
 // Simple routing based on URL path or hash
 function Router() {
   const [route, setRoute] = React.useState(getRouteFromUrl);
@@ -207,6 +214,13 @@ function Router() {
       window.removeEventListener("popstate", handleChange);
     };
   }, []);
+
+  // Notify host app when route changes
+  React.useEffect(() => {
+    if (route !== "design-system") {
+      window.parent.postMessage({ type: "novum:route-changed", payload: { route } }, "*");
+    }
+  }, [route]);
 
   if (route === "design-system") {
     return (
