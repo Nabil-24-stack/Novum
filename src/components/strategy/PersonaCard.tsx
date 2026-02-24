@@ -8,6 +8,9 @@ import type { PersonaData } from "@/hooks/useStrategyStore";
 const ACCENT_COLORS = [
   { bg: "bg-blue-100", text: "text-blue-700", border: "border-blue-200" },
   { bg: "bg-violet-100", text: "text-violet-700", border: "border-violet-200" },
+  { bg: "bg-emerald-100", text: "text-emerald-700", border: "border-emerald-200" },
+  { bg: "bg-amber-100", text: "text-amber-700", border: "border-amber-200" },
+  { bg: "bg-rose-100", text: "text-rose-700", border: "border-rose-200" },
 ] as const;
 
 interface PersonaCardProps {
@@ -15,10 +18,11 @@ interface PersonaCardProps {
   x: number;
   y: number;
   onMove?: (x: number, y: number) => void;
-  index: number; // 0 or 1, for color theming
+  index: number; // 0-based index for color theming
+  coveragePercent?: number; // 0-100, undefined means no coverage data yet
 }
 
-export function PersonaCard({ persona, x, y, onMove, index }: PersonaCardProps) {
+export function PersonaCard({ persona, x, y, onMove, index, coveragePercent }: PersonaCardProps) {
   const canvasScale = useCanvasScale();
   const [isDragging, setIsDragging] = useState(false);
 
@@ -167,6 +171,22 @@ export function PersonaCard({ persona, x, y, onMove, index }: PersonaCardProps) 
               </p>
             </div>
           </>
+        )}
+
+        {/* Coverage progress bar (Product Brain) */}
+        {coveragePercent !== undefined && (
+          <div className="mt-4 pt-3 border-t border-neutral-200/60">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-medium text-neutral-500">Coverage</span>
+              <span className="text-xs font-semibold text-emerald-600">{coveragePercent}%</span>
+            </div>
+            <div className="h-1.5 bg-neutral-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-emerald-400 rounded-full transition-all duration-500"
+                style={{ width: `${coveragePercent}%` }}
+              />
+            </div>
+          </div>
         )}
       </div>
     </div>

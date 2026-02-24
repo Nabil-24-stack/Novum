@@ -1,16 +1,84 @@
 "use client";
 
 import { useEffect, useRef, useSyncExternalStore, useCallback } from "react";
-import { useStreamingStore } from "@/hooks/useStreamingStore";
+import { useStreamingStore, type VerificationStatus } from "@/hooks/useStreamingStore";
 
 const FADE_DURATION = 400; // ms
+const VERIFY_BADGE_VISIBLE_MS = 1500; // how long to show pass/fail badge
 
 type Phase = "hidden" | "active" | "fading";
+
+function VerificationBadge({ pageId }: { pageId?: string }) {
+  const parallelMode = useStreamingStore((s) => s.parallelMode);
+  // In parallel mode, read per-page verification state; otherwise global
+  const verificationStatus = useStreamingStore((s) =>
+    parallelMode && pageId ? (s.pageBuilds[pageId]?.verificationStatus ?? "idle") : s.verificationStatus
+  );
+  const verificationAttempt = useStreamingStore((s) =>
+    parallelMode && pageId ? (s.pageBuilds[pageId]?.verificationAttempt ?? 0) : s.verificationAttempt
+  );
+  const resetVerification = useStreamingStore((s) => s.resetVerification);
+  const updatePageVerification = useStreamingStore((s) => s.updatePageVerification);
+
+  // Auto-hide passed/failed badges after a delay
+  useEffect(() => {
+    if (verificationStatus === "passed" || verificationStatus === "failed") {
+      const timer = setTimeout(() => {
+        if (parallelMode && pageId) {
+          updatePageVerification(pageId, "idle", { attempt: 0, issues: [] });
+        } else {
+          resetVerification();
+        }
+      }, verificationStatus === "passed" ? VERIFY_BADGE_VISIBLE_MS : VERIFY_BADGE_VISIBLE_MS * 2);
+      return () => clearTimeout(timer);
+    }
+  }, [verificationStatus, resetVerification, updatePageVerification, parallelMode, pageId]);
+
+  if (verificationStatus === "idle") return null;
+
+  const config: Record<VerificationStatus, { dot: string; text: string; animate?: boolean }> = {
+    idle: { dot: "", text: "" },
+    capturing: { dot: "bg-blue-400", text: "Capturing preview...", animate: true },
+    reviewing: { dot: "bg-blue-400", text: "Reviewing...", animate: true },
+    fixing: { dot: "bg-yellow-400", text: `Fixing (attempt ${verificationAttempt}/3)...`, animate: true },
+    passed: { dot: "bg-green-400", text: "Verified" },
+    failed: { dot: "bg-orange-400", text: "Issues detected" },
+  };
+
+  const { dot, text, animate } = config[verificationStatus];
+
+  return (
+    <div
+      className="flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium text-white/90 backdrop-blur-sm"
+      style={{
+        backgroundColor: "rgba(13, 17, 23, 0.75)",
+        animation: verificationStatus === "passed"
+          ? `verify-fade-in 0.2s ease-out`
+          : verificationStatus === "failed"
+            ? `verify-fade-in 0.2s ease-out`
+            : undefined,
+      }}
+    >
+      <span
+        className={`w-1.5 h-1.5 rounded-full ${dot} ${animate ? "animate-pulse" : ""}`}
+      />
+      <span>{text}</span>
+    </div>
+  );
+}
 
 export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; forceShow?: boolean }) {
   const isStreaming = useStreamingStore((s) => s.isStreaming);
   const targetPageId = useStreamingStore((s) => s.targetPageId);
   const currentFile = useStreamingStore((s) => s.currentFile);
+  const parallelMode = useStreamingStore((s) => s.parallelMode);
+  const pageBuild = useStreamingStore((s) =>
+    s.parallelMode ? s.pageBuilds[pageId ?? ""] : null
+  );
+  const verificationStatus = useStreamingStore((s) =>
+    s.parallelMode && pageId ? (s.pageBuilds[pageId]?.verificationStatus ?? "idle") : s.verificationStatus
+  );
+
   const codeEndRef = useRef<HTMLDivElement>(null);
   const phaseRef = useRef<Phase>("hidden");
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -33,10 +101,13 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
 
   const phase = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
-  // Only activate if this overlay's pageId matches the target
-  // targetPageId === null means "all frames" (prototype mode)
-  // forceShow overrides targeting — used for the active frame in Prototype View
-  const shouldBeActive = isStreaming && (targetPageId === null || targetPageId === pageId || forceShow === true);
+  // Determine if this overlay should be active
+  const shouldBeActive = parallelMode
+    ? pageBuild?.status === "streaming" || pageBuild?.status === "pending"
+    : isStreaming && (targetPageId === null || targetPageId === pageId || forceShow === true);
+
+  // Select the display file based on mode
+  const displayFile = parallelMode ? pageBuild?.currentFile : currentFile;
 
   // Drive phase transitions from shouldBeActive
   useEffect(() => {
@@ -63,12 +134,30 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
 
   // Auto-scroll to bottom as code streams in
   useEffect(() => {
-    if (currentFile?.content) {
+    if (displayFile?.content) {
       codeEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [currentFile?.content]);
+  }, [displayFile?.content]);
 
-  if (phase === "hidden") return null;
+  // Show verification badge even when streaming overlay has faded
+  const showVerificationOnly = phase === "hidden" && verificationStatus !== "idle";
+
+  if (phase === "hidden" && !showVerificationOnly) return null;
+
+  // Verification-only mode: just show the badge
+  if (showVerificationOnly) {
+    return (
+      <div className="absolute inset-x-0 bottom-3 z-10 flex justify-center pointer-events-none">
+        <VerificationBadge pageId={pageId} />
+        <style>{`
+          @keyframes verify-fade-in {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+        `}</style>
+      </div>
+    );
+  }
 
   const opacity = phase === "active" ? 1 : 0;
 
@@ -82,10 +171,10 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
       }}
     >
       {/* File path header */}
-      {currentFile && (
+      {displayFile && (
         <div className="flex items-center px-3 py-2 border-b border-[#21262d] shrink-0">
           <span className="text-[#8b949e] text-xs font-mono truncate">
-            {currentFile.path}
+            {displayFile.path}
           </span>
           <div className="ml-auto flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
@@ -96,9 +185,9 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
 
       {/* Code content or waiting state */}
       <div className="flex-1 overflow-auto p-3">
-        {currentFile ? (
+        {displayFile ? (
           <pre className="text-[#c9d1d9] text-xs font-mono leading-relaxed whitespace-pre-wrap break-words">
-            {currentFile.content}
+            {displayFile.content}
             {/* Blinking cursor */}
             {phase === "active" && (
               <span className="inline-block w-[6px] h-[14px] bg-[#58a6ff] ml-0.5 align-middle animate-[blink_1s_steps(2)_infinite]" />
@@ -122,6 +211,10 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
         @keyframes blink {
           0%, 100% { opacity: 1; }
           50% { opacity: 0; }
+        }
+        @keyframes verify-fade-in {
+          from { opacity: 0; transform: translateY(4px); }
+          to { opacity: 1; transform: translateY(0); }
         }
       `}</style>
     </div>

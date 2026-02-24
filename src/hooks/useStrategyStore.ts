@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 
-export type StrategyPhase = "hero" | "manifesto" | "persona" | "flow" | "wireframe" | "building" | "complete";
+export type StrategyPhase = "hero" | "problem-overview" | "ideation" | "solution-design" | "building" | "complete";
 
 export interface ConfidenceDimension {
   score: number;    // 0-100
@@ -14,9 +14,9 @@ export interface ConfidenceData {
   dimensions: {
     targetUser: ConfidenceDimension;
     coreProblem: ConfidenceDimension;
-    jobsToBeDone: ConfidenceDimension;
-    constraints: ConfidenceDimension;
-    successMetrics: ConfidenceDimension;
+    currentWorkflow: ConfidenceDimension;
+    domainContext: ConfidenceDimension;
+    stakesAndImpact: ConfidenceDimension;
   };
 }
 
@@ -27,6 +27,56 @@ export interface PersonaData {
   goals: string[];     // 2-3 goals
   painPoints: string[];// 2-3 pain points
   quote: string;       // First-person key quote
+}
+
+export interface JourneyStage {
+  stage: string;         // AI-decided stage name (e.g. "Awareness", "Onboarding")
+  actions: string[];     // What the user does
+  thoughts: string[];    // What the user thinks
+  emotion: string;       // Single emoji or short word (e.g. "frustrated", "hopeful")
+  painPoints: string[];  // Friction points
+  opportunities: string[]; // Design opportunities
+}
+
+export interface JourneyMapData {
+  personaName: string;   // Links to which persona this map belongs to
+  stages: JourneyStage[];
+}
+
+export interface IdeaData {
+  id: string;
+  title: string;
+  description: string;
+  keyFeatures: string[];
+  pros: string[];
+  cons: string[];
+  illustrations: string[];
+}
+
+export interface WireframeElement {
+  type: "button" | "input" | "toggle" | "search" | "select" | "badge" | "avatar" | "checkbox" | "textarea";
+  label: string;
+  variant?: "primary" | "secondary" | "outline" | "destructive" | "ghost";
+}
+
+export interface WireframeSection {
+  label: string;
+  flex?: number;
+  type?: "header" | "row" | "grid" | "block" | "list";
+  children?: WireframeSection[];
+  columns?: number;
+  items?: string[];
+  elements?: WireframeElement[];
+}
+
+export interface WireframePage {
+  id: string;
+  name: string;
+  sections: WireframeSection[];
+}
+
+export interface WireframeData {
+  pages: WireframePage[];
 }
 
 export interface ManifestoData {
@@ -55,32 +105,6 @@ export interface FlowData {
   connections: StrategyConnection[];
 }
 
-export interface WireframeElement {
-  type: "button" | "input" | "toggle" | "search" | "select" | "badge" | "avatar" | "checkbox" | "textarea";
-  label: string;
-  variant?: "primary" | "secondary" | "outline" | "destructive" | "ghost";
-}
-
-export interface WireframeSection {
-  label: string;
-  flex?: number;                 // flex-grow weight (default 1)
-  type?: "header" | "row" | "grid" | "block" | "list";
-  children?: WireframeSection[]; // for row type (horizontal children)
-  columns?: number;              // for grid type
-  items?: string[];              // for grid/list types
-  elements?: WireframeElement[]; // inline component placeholders at natural size
-}
-
-export interface WireframePage {
-  id: string;
-  name: string;
-  sections: WireframeSection[];
-}
-
-export interface WireframeData {
-  pages: WireframePage[];
-}
-
 interface StrategyState {
   phase: StrategyPhase;
   userPrompt: string;
@@ -90,11 +114,19 @@ interface StrategyState {
   streamingPersonas: Partial<PersonaData>[] | null;
   flowData: FlowData | null;
   confidenceData: ConfidenceData | null;
-  wireframeData: WireframeData | null;
-  streamingWireframes: WireframeData | null;
+  journeyMapData: JourneyMapData[] | null;
+  streamingJourneyMaps: Partial<JourneyMapData>[] | null;
+  ideaData: IdeaData[] | null;
+  streamingIdeas: Partial<IdeaData>[] | null;
+  selectedIdeaId: string | null;
   completedPages: string[];
   currentBuildingPage: string | null;
+  currentBuildingPages: string[];
   pendingApprovalPage: string | null;
+
+  // Wireframe data (JSON wireframes from solution-design phase)
+  wireframeData: WireframeData | null;
+  streamingWireframes: WireframeData | null;
 
   // Actions
   setPhase: (phase: StrategyPhase) => void;
@@ -105,11 +137,17 @@ interface StrategyState {
   setStreamingPersonas: (data: Partial<PersonaData>[] | null) => void;
   setFlowData: (data: FlowData) => void;
   setConfidenceData: (data: ConfidenceData) => void;
-  setWireframeData: (data: WireframeData | null) => void;
-  setStreamingWireframes: (data: WireframeData | null) => void;
+  setJourneyMapData: (data: JourneyMapData[]) => void;
+  setStreamingJourneyMaps: (data: Partial<JourneyMapData>[] | null) => void;
+  setIdeaData: (data: IdeaData[]) => void;
+  setStreamingIdeas: (data: Partial<IdeaData>[] | null) => void;
+  setSelectedIdeaId: (id: string | null) => void;
   addCompletedPage: (pageId: string) => void;
   setBuildingPage: (pageId: string | null) => void;
+  setBuildingPages: (pageIds: string[]) => void;
   setPendingApprovalPage: (pageId: string | null) => void;
+  setWireframeData: (data: WireframeData) => void;
+  setStreamingWireframes: (data: WireframeData | null) => void;
   reset: () => void;
 }
 
@@ -122,11 +160,17 @@ const initialState = {
   streamingPersonas: null as Partial<PersonaData>[] | null,
   flowData: null as FlowData | null,
   confidenceData: null as ConfidenceData | null,
-  wireframeData: null as WireframeData | null,
-  streamingWireframes: null as WireframeData | null,
+  journeyMapData: null as JourneyMapData[] | null,
+  streamingJourneyMaps: null as Partial<JourneyMapData>[] | null,
+  ideaData: null as IdeaData[] | null,
+  streamingIdeas: null as Partial<IdeaData>[] | null,
+  selectedIdeaId: null as string | null,
   completedPages: [] as string[],
   currentBuildingPage: null as string | null,
+  currentBuildingPages: [] as string[],
   pendingApprovalPage: null as string | null,
+  wireframeData: null as WireframeData | null,
+  streamingWireframes: null as WireframeData | null,
 };
 
 export const useStrategyStore = create<StrategyState>((set) => ({
@@ -148,9 +192,15 @@ export const useStrategyStore = create<StrategyState>((set) => ({
 
   setConfidenceData: (data) => set({ confidenceData: data }),
 
-  setWireframeData: (data) => set({ wireframeData: data, streamingWireframes: null }),
+  setJourneyMapData: (data) => set({ journeyMapData: data, streamingJourneyMaps: null }),
 
-  setStreamingWireframes: (data) => set({ streamingWireframes: data }),
+  setStreamingJourneyMaps: (data) => set({ streamingJourneyMaps: data }),
+
+  setIdeaData: (data) => set({ ideaData: data, streamingIdeas: null }),
+
+  setStreamingIdeas: (data) => set({ streamingIdeas: data }),
+
+  setSelectedIdeaId: (id) => set({ selectedIdeaId: id }),
 
   addCompletedPage: (pageId) =>
     set((state) => ({
@@ -161,7 +211,13 @@ export const useStrategyStore = create<StrategyState>((set) => ({
 
   setBuildingPage: (pageId) => set({ currentBuildingPage: pageId }),
 
+  setBuildingPages: (pageIds) => set({ currentBuildingPages: pageIds, currentBuildingPage: null }),
+
   setPendingApprovalPage: (pageId) => set({ pendingApprovalPage: pageId }),
+
+  setWireframeData: (data) => set({ wireframeData: data, streamingWireframes: null }),
+
+  setStreamingWireframes: (data) => set({ streamingWireframes: data }),
 
   reset: () => set(initialState),
 }));

@@ -11,6 +11,10 @@ export interface ParentLayoutInfo {
   direction: "row" | "column";
   isReverse: boolean;
   parentSource?: SourceLocation;
+  /** Number of columns in a grid layout (for row-jumping with ArrowUp/Down) */
+  numCols?: number;
+  /** Whether grid children use explicit placement (col-start-*, row-start-*) */
+  hasExplicitPlacement?: boolean;
 }
 
 /** Structured reasons for reorder failures */
@@ -63,6 +67,8 @@ export interface SelectedElement {
   parentLayout?: ParentLayoutInfo;
   /** Which FlowFrame page this selection came from (Flow View only) */
   pageId?: string;
+  /** Strategy connection IDs from data-strategy-id attributes in element's ancestry */
+  strategyIds?: string[];
 }
 
 export interface DOMTreeNode {
@@ -109,10 +115,24 @@ export interface ShowDropZonePayload {
   y: number;
 }
 
+/** Payload sent to iframe to show a live drop preview (component placeholder inside container) */
+export interface ShowDropPreviewPayload {
+  x: number;
+  y: number;
+  componentType: string;
+  ghostType: string;
+  textContent?: string;
+}
+
 /** Payload for swapping elements (keyboard reordering) */
 export interface SwapElementsPayload {
   selector: string;
   direction: "prev" | "next";
+}
+
+/** Payload for moving an element by N sibling positions (grid row jumps) */
+export interface MoveByOffsetPayload {
+  offset: number;
 }
 
 /** Payload for moving an element (mouse drag-and-drop) */
@@ -172,6 +192,12 @@ export interface RouteChangedPayload {
   route: string;
 }
 
+/** Response from iframe with screenshot data */
+export interface ScreenshotCapturedPayload {
+  dataUrl: string | null;
+  error?: string;
+}
+
 export interface InspectionMessage {
   type:
     | "novum:element-selected"
@@ -191,7 +217,10 @@ export interface InspectionMessage {
     | "novum:drop-target-found"
     | "novum:show-drop-zone"
     | "novum:hide-drop-zone"
+    | "novum:show-drop-preview"
+    | "novum:hide-drop-preview"
     | "novum:swap-elements"
+    | "novum:move-element-by-offset"
     | "novum:keyboard-event"
     | "novum:insert-placeholder"
     | "novum:remove-placeholder"
@@ -201,6 +230,9 @@ export interface InspectionMessage {
     | "novum:flow-mode-state"
     | "novum:navigation-intent"
     | "novum:context-menu"
-    | "novum:route-changed";
-  payload?: SelectedElement | { enabled: boolean } | DOMTreeNode | { selector: string } | UpdateClassesPayload | RollbackClassesPayload | UpdateTextPayload | RollbackTextPayload | FindDropTargetPayload | DropTargetFoundPayload | ShowDropZonePayload | SwapElementsPayload | { key: string } | InsertPlaceholderPayload | MoveElementPayload | OptimisticMovePayload | FlowModeStatePayload | NavigationIntentPayload | ContextMenuPayload | RouteChangedPayload;
+    | "novum:route-changed"
+    | "novum:clear-selection"
+    | "novum:capture-screenshot"
+    | "novum:screenshot-captured";
+  payload?: SelectedElement | { enabled: boolean } | DOMTreeNode | { selector: string } | UpdateClassesPayload | RollbackClassesPayload | UpdateTextPayload | RollbackTextPayload | FindDropTargetPayload | DropTargetFoundPayload | ShowDropZonePayload | ShowDropPreviewPayload | SwapElementsPayload | MoveByOffsetPayload | { key: string } | InsertPlaceholderPayload | MoveElementPayload | OptimisticMovePayload | FlowModeStatePayload | NavigationIntentPayload | ContextMenuPayload | RouteChangedPayload | ScreenshotCapturedPayload;
 }

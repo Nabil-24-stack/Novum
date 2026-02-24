@@ -10,7 +10,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
   let flowModeActive = false; // Flow mode navigation interception
   let currentHighlight = null;
   let highlightOverlay = null;
-  let selectionOverlay = null;
   let layersHighlightOverlay = null;
   let dropZoneOverlay = null;
   let placeholderElement = null;
@@ -140,7 +139,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       position: fixed;
       pointer-events: none;
       border: 2px solid #3b82f6;
-      background: rgba(59, 130, 246, 0.1);
       z-index: 999999;
       transition: all 0.1s ease-out;
       display: none;
@@ -149,49 +147,29 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     return highlightOverlay;
   }
 
-  // Get or create selection overlay (lazy retrieval - self-heals after HMR)
-  function getSelectionOverlay() {
-    // Check if element exists in live DOM
-    let el = document.getElementById('novum-selection-overlay');
-    if (el) {
-      selectionOverlay = el;
-      return el;
-    }
-
-    // Create new overlay
-    selectionOverlay = document.createElement('div');
-    selectionOverlay.id = 'novum-selection-overlay';
-    selectionOverlay.style.cssText = \`
-      position: fixed;
-      pointer-events: none;
-      border: 2px solid #3b82f6;
-      background: rgba(59, 130, 246, 0.1);
-      z-index: 999999;
-      display: none;
-    \`;
-    document.body.appendChild(selectionOverlay);
-    return selectionOverlay;
-  }
-
-  // Update selection overlay position
-  function updateSelectionOverlay(element) {
+  // Apply selection outline directly on the element (moves with it naturally)
+  function applySelectionStyle(element) {
     if (!element) return;
-
-    const overlay = getSelectionOverlay();
-    const rect = element.getBoundingClientRect();
-    overlay.style.display = 'block';
-    overlay.style.top = rect.top + 'px';
-    overlay.style.left = rect.left + 'px';
-    overlay.style.width = rect.width + 'px';
-    overlay.style.height = rect.height + 'px';
+    element.style.outline = '2px solid #3b82f6';
+    element.style.outlineOffset = '0px';
   }
 
-  function scheduleSelectionOverlaySync() {
+  // Remove selection outline from an element
+  function removeSelectionStyle(element) {
+    if (element && element.isConnected) {
+      element.style.outline = '';
+      element.style.outlineOffset = '';
+    }
+  }
+
+  // Re-find selected element after Sandpack re-render (element replaced in DOM)
+  function scheduleSelectionRevalidation() {
     if (selectedOverlayRafId !== null) return;
     selectedOverlayRafId = requestAnimationFrame(() => {
       selectedOverlayRafId = null;
       if (currentSelectedElement && currentSelectedElement.isConnected) {
-        updateSelectionOverlay(currentSelectedElement);
+        // Element still exists - ensure outline is applied (may have been lost during HMR)
+        applySelectionStyle(currentSelectedElement);
         return;
       }
       if (!currentSelectedSelector) return;
@@ -199,7 +177,7 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
         const next = document.querySelector(currentSelectedSelector);
         if (next) {
           currentSelectedElement = next;
-          updateSelectionOverlay(next);
+          applySelectionStyle(next);
         }
       } catch (err) {
         // ignore
@@ -207,12 +185,9 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     });
   }
 
-  // Hide selection overlay
+  // Clear selection state and remove outline from current element
   function hideSelectionOverlay() {
-    const overlay = document.getElementById('novum-selection-overlay');
-    if (overlay) {
-      overlay.style.display = 'none';
-    }
+    removeSelectionStyle(currentSelectedElement);
     currentSelectedElement = null;
     currentSelectedSelector = null;
     currentSelectionId = null;
@@ -223,7 +198,7 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     if (reselectionObserver) return;
 
     reselectionObserver = new MutationObserver(() => {
-      scheduleSelectionOverlaySync();
+      scheduleSelectionRevalidation();
 
       // Check if the selected element is still in the DOM
       if (currentSelectedElement && !currentSelectedElement.isConnected) {
@@ -233,7 +208,7 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
             const newElement = document.querySelector(currentSelectedSelector);
             if (newElement) {
               currentSelectedElement = newElement;
-              updateSelectionOverlay(newElement);
+              applySelectionStyle(newElement);
               const payload = buildSelectionPayload(newElement);
               currentSelectionId = payload.selectionId;
               window.parent.postMessage({
@@ -276,7 +251,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       position: fixed;
       pointer-events: none;
       border: 2px solid #3b82f6;
-      background: rgba(59, 130, 246, 0.15);
       z-index: 999998;
       transition: all 0.1s ease-out;
       display: none;
@@ -362,7 +336,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
 
       // Skip our overlay elements
       if (target.id === 'novum-inspector-overlay' ||
-          target.id === 'novum-selection-overlay' ||
           target.id === 'novum-layers-highlight-overlay' ||
           target.id === 'novum-drop-zone-overlay') {
         target = target.parentElement;
@@ -401,6 +374,162 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     if (overlay) {
       overlay.style.display = 'none';
     }
+  }
+
+  // ============================================================================
+  // Drop Preview System (live placeholder inside container during drag)
+  // ============================================================================
+
+  let dropPreviewElement = null;
+  let dropPreviewContainer = null;
+
+  // Component-specific placeholder dimensions
+  const previewConfigs = {
+    'Button': { h: 40, w: 100, r: '6px', label: 'Button' },
+    'Badge': { h: 24, w: 60, r: '9999px', label: 'Badge' },
+    'Input': { h: 40, w: 200, r: '6px', label: 'Input' },
+    'Select': { h: 40, w: 180, r: '6px', label: 'Select' },
+    'Card': { h: 120, w: 280, r: '8px', label: 'Card' },
+    'Dialog': { h: 150, w: 300, r: '8px', label: 'Dialog' },
+    'Accordion': { h: 100, w: 240, r: '6px', label: 'Accordion' },
+    'Switch': { h: 24, w: 44, r: '12px', label: 'Switch' },
+    'Checkbox': { h: 20, w: 20, r: '4px', label: '' },
+    'Avatar': { h: 40, w: 40, r: '9999px', label: '' },
+    'Tabs': { h: 40, w: 200, r: '6px', label: 'Tabs' },
+    'Slider': { h: 20, w: 200, r: '9999px', label: 'Slider' },
+    'Separator': { h: 2, w: null, r: '0', label: '' },
+    'Label': { h: 20, w: 80, r: '0', label: 'Label' },
+    'Textarea': { h: 80, w: 200, r: '6px', label: 'Textarea' },
+    'Progress': { h: 8, w: 200, r: '9999px', label: '' },
+    'Skeleton': { h: 40, w: 200, r: '6px', label: 'Skeleton' },
+    'Table': { h: 120, w: 300, r: '6px', label: 'Table' },
+    'Alert': { h: 60, w: 280, r: '6px', label: 'Alert' },
+    'Tooltip': { h: 32, w: 100, r: '6px', label: 'Tooltip' },
+    'Popover': { h: 100, w: 200, r: '8px', label: 'Popover' },
+    'RadioGroup': { h: 80, w: 160, r: '6px', label: 'Radio' },
+    'Toggle': { h: 36, w: 36, r: '6px', label: '' },
+    'DatePicker': { h: 40, w: 200, r: '6px', label: 'DatePicker' },
+    'Breadcrumb': { h: 24, w: 200, r: '0', label: 'Breadcrumb' },
+    'AspectRatio': { h: 120, w: 200, r: '6px', label: 'AspectRatio' },
+  };
+
+  // Show drop preview at coordinates (finds container, inserts placeholder as last child)
+  function showDropPreview(x, y, componentType, ghostType, textContent) {
+    const overlay = getDropZoneOverlay();
+
+    // Valid container element tags
+    const containerTags = ['div', 'section', 'article', 'main', 'aside', 'nav', 'header', 'footer', 'form', 'fieldset'];
+    const invalidTargetTags = ['body', 'html', 'span', 'p', 'button', 'a', 'label', 'input', 'textarea', 'img', 'svg'];
+
+    // Hide the preview element temporarily so it doesn't interfere with elementFromPoint
+    if (dropPreviewElement) {
+      dropPreviewElement.style.display = 'none';
+    }
+
+    const element = document.elementFromPoint(x, y);
+
+    if (!element) {
+      hideDropPreview();
+      return;
+    }
+
+    // Traverse up to find a valid container
+    let target = element;
+    while (target && target !== document.body && target !== document.documentElement) {
+      const tagName = target.tagName.toLowerCase();
+
+      // Skip our overlay/preview elements
+      if (target.id && target.id.startsWith('novum-')) {
+        target = target.parentElement;
+        continue;
+      }
+
+      // If it's an invalid/inline element, keep traversing
+      if (invalidTargetTags.includes(tagName)) {
+        target = target.parentElement;
+        continue;
+      }
+
+      // Check if it's a valid container
+      const isContainer = containerTags.includes(tagName) || target.hasAttribute('data-component');
+
+      if (isContainer) {
+        // Show green container outline (same as existing drop zone)
+        const rect = target.getBoundingClientRect();
+        overlay.style.display = 'block';
+        overlay.style.top = rect.top + 'px';
+        overlay.style.left = rect.left + 'px';
+        overlay.style.width = rect.width + 'px';
+        overlay.style.height = rect.height + 'px';
+
+        // Get config for this component
+        const config = previewConfigs[componentType] || { h: 40, w: 120, r: '6px', label: componentType || ghostType };
+        const label = config.label || componentType || ghostType || '';
+        const showLabel = config.h >= 24 && label;
+
+        // Create or reuse the preview element
+        if (!dropPreviewElement) {
+          dropPreviewElement = document.createElement('div');
+          dropPreviewElement.id = 'novum-drop-preview';
+        }
+
+        dropPreviewElement.style.cssText = \`
+          height: \${config.h}px;
+          width: \${config.w ? config.w + 'px' : '100%'};
+          max-width: 100%;
+          opacity: 0.6;
+          border: 2px dashed #3b82f6;
+          background: rgba(59, 130, 246, 0.08);
+          border-radius: \${config.r};
+          color: #3b82f6;
+          font-size: 11px;
+          font-weight: 500;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          pointer-events: none;
+          box-sizing: border-box;
+          flex-shrink: 0;
+          transition: opacity 0.15s ease;
+        \`;
+
+        dropPreviewElement.textContent = showLabel ? label : '';
+
+        // If container changed, move the preview to the new container
+        if (dropPreviewContainer !== target) {
+          // Remove from old container
+          if (dropPreviewElement.parentNode) {
+            dropPreviewElement.parentNode.removeChild(dropPreviewElement);
+          }
+          // Append as last child of new container
+          target.appendChild(dropPreviewElement);
+          dropPreviewContainer = target;
+        } else if (!dropPreviewElement.parentNode) {
+          // Re-append if somehow detached
+          target.appendChild(dropPreviewElement);
+        }
+
+        dropPreviewElement.style.display = 'flex';
+        return;
+      }
+
+      target = target.parentElement;
+    }
+
+    // No valid container found
+    hideDropPreview();
+  }
+
+  // Hide drop preview and green outline
+  function hideDropPreview() {
+    // Remove preview element from container
+    if (dropPreviewElement && dropPreviewElement.parentNode) {
+      dropPreviewElement.parentNode.removeChild(dropPreviewElement);
+    }
+    dropPreviewContainer = null;
+
+    // Hide green outline
+    hideDropZone();
   }
 
   // ============================================================================
@@ -818,7 +947,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     const skipTags = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG'];
     if (skipTags.includes(root.tagName) ||
         root.id === 'novum-inspector-overlay' ||
-        root.id === 'novum-selection-overlay' ||
         root.id === 'novum-layers-highlight-overlay') {
       return null;
     }
@@ -963,7 +1091,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     const target = e.target;
     // Skip our overlay elements
     if (target.id === 'novum-inspector-overlay' ||
-        target.id === 'novum-selection-overlay' ||
         target.id === 'novum-layers-highlight-overlay' ||
         target.id === 'novum-drop-zone-overlay' ||
         target.id === 'novum-drag-ghost' ||
@@ -1059,6 +1186,8 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     let layout = 'block';
     let direction = 'column';
     let isReverse = false;
+    let numCols = undefined;
+    let hasExplicitPlacement = false;
 
     if (display === 'flex' || display === 'inline-flex') {
       layout = 'flex';
@@ -1067,10 +1196,35 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     } else if (display === 'grid' || display === 'inline-grid') {
       layout = 'grid';
       direction = 'row';
+
+      // Detect grid column count
+      const className =
+        typeof element.className === 'string'
+          ? element.className
+          : (element.getAttribute && element.getAttribute('class')) || '';
+
+      // Try className pattern first: grid-cols-N
+      const colsMatch = className.match(/(?:^|\\s)grid-cols-(\\d+)(?:\\s|$)/);
+      if (colsMatch) {
+        numCols = parseInt(colsMatch[1], 10);
+      } else {
+        // Fallback: count tracks from computed gridTemplateColumns
+        const templateCols = styles.gridTemplateColumns;
+        if (templateCols && templateCols !== 'none') {
+          numCols = templateCols.trim().split(/\\s+/).length;
+        }
+      }
+
+      // Check if children have explicit grid placement (col-start-*, row-start-*)
+      const children = Array.from(element.children);
+      hasExplicitPlacement = children.some(function(child) {
+        const childClass = typeof child.className === 'string' ? child.className : '';
+        return /(?:^|\\s)(?:col-start-|row-start-)/.test(childClass);
+      });
     }
 
     // Fallback to class-intent detection when computed styles are not reliable.
-    if (layout !== 'flex') {
+    if (layout !== 'flex' && layout !== 'grid') {
       const className =
         typeof element.className === 'string'
           ? element.className
@@ -1107,7 +1261,10 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       }
     }
 
-    return { layout: layout, direction: direction, isReverse: isReverse, display: display };
+    var result = { layout: layout, direction: direction, isReverse: isReverse, display: display };
+    if (numCols !== undefined) result.numCols = numCols;
+    if (hasExplicitPlacement) result.hasExplicitPlacement = hasExplicitPlacement;
+    return result;
   }
 
   // Get parent layout information for keyboard reordering.
@@ -1152,6 +1309,18 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     };
   }
 
+  // Collect all data-strategy-id values from element up to body
+  function collectStrategyIds(element) {
+    var ids = [];
+    var current = element;
+    while (current && current !== document.body && current !== document.documentElement) {
+      var sid = current.getAttribute('data-strategy-id');
+      if (sid) ids.push(sid);
+      current = current.parentElement;
+    }
+    return ids;
+  }
+
   function buildSelectionPayload(target) {
     const rect = target.getBoundingClientRect();
     const textInfo = getTextInfo(target);
@@ -1160,8 +1329,9 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     const parentLayout = getParentLayoutInfo(target);
     const preciseSelector = generatePreciseSelector(target);
     const selectionId = generateSelectionId(target, source || instanceSource, preciseSelector);
+    const strategyIds = collectStrategyIds(target);
 
-    return {
+    var payload = {
       tagName: target.tagName.toLowerCase(),
       className: target.className || '',
       id: target.id || undefined,
@@ -1182,6 +1352,10 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       editScope: instanceSource ? 'instance' : 'component',
       parentLayout: parentLayout,
     };
+    if (strategyIds.length > 0) {
+      payload.strategyIds = strategyIds;
+    }
+    return payload;
   }
 
   // Handle click (selection)
@@ -1198,16 +1372,16 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     const target = e.target;
     // Skip our overlay elements
     if (target.id === 'novum-inspector-overlay' ||
-        target.id === 'novum-selection-overlay' ||
         target.id === 'novum-layers-highlight-overlay' ||
         target.id === 'novum-drop-zone-overlay' ||
         target.id === 'novum-drag-ghost' ||
         target.id === 'novum-drop-indicator') return;
 
-    // Store reference to selected element and show selection overlay
+    // Remove outline from previous selection, then apply to new target
+    removeSelectionStyle(currentSelectedElement);
     currentSelectedElement = target;
     currentSelectedSelector = generatePreciseSelector(target);
-    updateSelectionOverlay(target);
+    applySelectionStyle(target);
     setupReselectionObserver();
     const payload = buildSelectionPayload(target);
     currentSelectionId = payload.selectionId;
@@ -1231,16 +1405,16 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     const target = e.target;
     // Skip our overlay elements
     if (target.id === 'novum-inspector-overlay' ||
-        target.id === 'novum-selection-overlay' ||
         target.id === 'novum-layers-highlight-overlay' ||
         target.id === 'novum-drop-zone-overlay' ||
         target.id === 'novum-drag-ghost' ||
         target.id === 'novum-drop-indicator') return;
 
     // Select the element (same logic as handleClick)
+    removeSelectionStyle(currentSelectedElement);
     currentSelectedElement = target;
     currentSelectedSelector = generatePreciseSelector(target);
-    updateSelectionOverlay(target);
+    applySelectionStyle(target);
     setupReselectionObserver();
     const payload = buildSelectionPayload(target);
     currentSelectionId = payload.selectionId;
@@ -1345,6 +1519,15 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       setFlowModeActive(e.data.payload.enabled);
     }
 
+    // Handle dark mode toggle via postMessage (avoids iframe remount)
+    if (e.data.type === 'novum:toggle-dark-mode') {
+      if (e.data.payload.isDark) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    }
+
     // Handle DOM tree request
     if (e.data.type === 'novum:request-dom-tree') {
       nodeIdCounter = 0; // Reset counter for consistent IDs
@@ -1375,10 +1558,11 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
         try {
           const element = document.querySelector(selector);
           if (element) {
-            // Store reference and show selection overlay
+            // Remove outline from previous selection, apply to new
+            removeSelectionStyle(currentSelectedElement);
             currentSelectedElement = element;
             currentSelectedSelector = generatePreciseSelector(element);
-            updateSelectionOverlay(element);
+            applySelectionStyle(element);
             setupReselectionObserver();
             const payload = buildSelectionPayload(element);
             currentSelectionId = payload.selectionId;
@@ -1405,7 +1589,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
             element.className = newClassName;
             if (element === currentSelectedElement) {
               currentSelectedSelector = generatePreciseSelector(element);
-              scheduleSelectionOverlaySync();
             }
           }
         } catch (err) {
@@ -1424,7 +1607,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
             element.className = originalClassName;
             if (element === currentSelectedElement) {
               currentSelectedSelector = generatePreciseSelector(element);
-              scheduleSelectionOverlaySync();
             }
           }
         } catch (err) {
@@ -1452,9 +1634,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
                 }
               }
             }
-            if (element === currentSelectedElement) {
-              scheduleSelectionOverlaySync();
-            }
           }
         } catch (err) {
           console.warn('Failed to update text:', selector, err);
@@ -1480,9 +1659,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
                 }
               }
             }
-            if (element === currentSelectedElement) {
-              scheduleSelectionOverlaySync();
-            }
           }
         } catch (err) {
           console.warn('Failed to rollback text:', selector, err);
@@ -1501,6 +1677,19 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     // Hide drop zone indicator
     if (e.data.type === 'novum:hide-drop-zone') {
       hideDropZone();
+    }
+
+    // Show live drop preview (component placeholder inside container)
+    if (e.data.type === 'novum:show-drop-preview') {
+      const { x, y, componentType, ghostType, textContent } = e.data.payload || {};
+      if (typeof x === 'number' && typeof y === 'number') {
+        showDropPreview(x, y, componentType || '', ghostType || '', textContent);
+      }
+    }
+
+    // Hide drop preview
+    if (e.data.type === 'novum:hide-drop-preview') {
+      hideDropPreview();
     }
 
     // Navigate to a route (sent from parent in Prototype View)
@@ -1560,42 +1749,20 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
             sibling.style.transform = \`translate(\${siblingDeltaX}px, \${siblingDeltaY}px)\`;
             sibling.style.transition = 'none';
 
-            // Include selection overlay in FLIP animation (sync with element)
-            const selOverlay = document.getElementById('novum-selection-overlay');
-            if (selOverlay) {
-              // Disable CSS transitions, update to final position, apply same inverse transform
-              selOverlay.style.transition = 'none';
-              selOverlay.style.top = elementFinalRect.top + 'px';
-              selOverlay.style.left = elementFinalRect.left + 'px';
-              selOverlay.style.width = elementFinalRect.width + 'px';
-              selOverlay.style.height = elementFinalRect.height + 'px';
-              selOverlay.style.transform = \`translate(\${elementDeltaX}px, \${elementDeltaY}px)\`;
-            }
-
             // Force reflow
             element.offsetHeight;
 
             // FLIP Animation: Play - animate to final positions
+            // (Selection outline follows the element automatically since it's inline)
             element.style.transition = 'transform 0.15s ease-out';
             element.style.transform = '';
             sibling.style.transition = 'transform 0.15s ease-out';
             sibling.style.transform = '';
 
-            // Animate overlay transform in sync
-            if (selOverlay) {
-              selOverlay.style.transition = 'transform 0.15s ease-out';
-              selOverlay.style.transform = '';
-            }
-
             // Clean up transition styles after animation
             setTimeout(() => {
               element.style.transition = '';
               sibling.style.transition = '';
-              // Clear overlay transition (selection switches should be instant)
-              const overlay = document.getElementById('novum-selection-overlay');
-              if (overlay) {
-                overlay.style.transition = '';
-              }
             }, 150);
 
             // Update the precise selector since position changed
@@ -1613,6 +1780,82 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       }
     }
 
+    // Move element by N positions for grid row jumps (optimistic DOM update with FLIP animation)
+    if (e.data.type === 'novum:move-element-by-offset') {
+      var moveOffset = e.data.payload?.offset;
+      var moveElement = currentSelectedElement;
+      if (moveElement && moveElement.parentNode && typeof moveOffset === 'number') {
+        try {
+          // Collect element siblings
+          var allSiblings = Array.from(moveElement.parentNode.children);
+          var curIdx = allSiblings.indexOf(moveElement);
+          var tgtIdx = curIdx + moveOffset;
+
+          if (curIdx >= 0 && tgtIdx >= 0 && tgtIdx < allSiblings.length) {
+            // FLIP: First - record positions of all affected elements
+            var rangeStart = Math.min(curIdx, tgtIdx);
+            var rangeEnd = Math.max(curIdx, tgtIdx);
+            var affectedEls = [];
+            for (var ai = rangeStart; ai <= rangeEnd; ai++) {
+              affectedEls.push({
+                el: allSiblings[ai],
+                rect: allSiblings[ai].getBoundingClientRect()
+              });
+            }
+
+            // Perform the DOM move
+            if (moveOffset > 0) {
+              // Moving forward - insert after target
+              var afterTarget = allSiblings[tgtIdx].nextSibling;
+              moveElement.parentNode.insertBefore(moveElement, afterTarget);
+            } else {
+              // Moving backward - insert before target
+              moveElement.parentNode.insertBefore(moveElement, allSiblings[tgtIdx]);
+            }
+
+            // FLIP: Last + Invert - calculate deltas and apply inverse transforms
+            for (var fi = 0; fi < affectedEls.length; fi++) {
+              var aEl = affectedEls[fi].el;
+              var oldRect = affectedEls[fi].rect;
+              var newRect = aEl.getBoundingClientRect();
+              var dx = oldRect.left - newRect.left;
+              var dy = oldRect.top - newRect.top;
+              aEl.style.transform = 'translate(' + dx + 'px, ' + dy + 'px)';
+              aEl.style.transition = 'none';
+            }
+
+            // Force reflow
+            moveElement.offsetHeight;
+
+            // FLIP: Play - animate to final positions
+            // (Selection outline follows the element automatically since it's inline)
+            for (var pi = 0; pi < affectedEls.length; pi++) {
+              affectedEls[pi].el.style.transition = 'transform 0.15s ease-out';
+              affectedEls[pi].el.style.transform = '';
+            }
+
+            // Clean up transition styles
+            setTimeout(function() {
+              for (var ci = 0; ci < affectedEls.length; ci++) {
+                affectedEls[ci].el.style.transition = '';
+              }
+            }, 150);
+
+            // Update selector and notify parent
+            currentSelectedSelector = generatePreciseSelector(moveElement);
+            var movePayload = buildSelectionPayload(moveElement);
+            currentSelectionId = movePayload.selectionId;
+            window.parent.postMessage({
+              type: 'novum:selection-revalidated',
+              payload: movePayload,
+            }, '*');
+          }
+        } catch (moveErr) {
+          console.warn('Failed to move element by offset:', moveErr);
+        }
+      }
+    }
+
     // Optimistic delete for keyboard delete (remove element from DOM instantly)
     if (e.data.type === 'novum:delete-element') {
       if (currentSelectedElement && currentSelectedElement.parentNode) {
@@ -1622,6 +1865,103 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       currentSelectedElement = null;
       currentSelectedSelector = null;
       currentSelectionId = null;
+    }
+
+    // Clear selection overlay (sent to non-active iframes in Flow View)
+    if (e.data.type === 'novum:clear-selection') {
+      hideSelectionOverlay();
+    }
+
+    // Capture screenshot of current page for verification
+    if (e.data.type === 'novum:capture-screenshot') {
+      (async function() {
+        try {
+          var maxW = 1280;
+          var maxH = 960;
+          var bodyW = document.documentElement.scrollWidth || document.body.scrollWidth;
+          var bodyH = document.documentElement.scrollHeight || document.body.scrollHeight;
+          var scale = Math.min(1, maxW / bodyW, maxH / bodyH);
+          var canvasW = Math.round(bodyW * scale);
+          var canvasH = Math.round(bodyH * scale);
+
+          // Use html2canvas-style approach: render to an offscreen canvas via SVG foreignObject
+          // First, clone the body and inline computed styles
+          var clone = document.body.cloneNode(true);
+
+          // Remove inspector overlays from clone
+          var overlayIds = ['novum-inspector-overlay', 'novum-layers-highlight-overlay', 'novum-drop-zone-overlay', 'novum-drag-ghost', 'novum-drop-indicator', 'novum-drop-preview', 'novum-drop-placeholder', 'novum-placeholder-styles'];
+          overlayIds.forEach(function(id) {
+            var el = clone.querySelector('#' + id);
+            if (el) el.parentNode.removeChild(el);
+          });
+
+          // Remove data-source-loc attributes to clean up
+          var allEls = clone.querySelectorAll('[data-source-loc]');
+          allEls.forEach(function(el) { el.removeAttribute('data-source-loc'); });
+
+          // Inline computed styles for accurate rendering
+          function inlineStyles(source, target) {
+            if (source.nodeType !== 1) return;
+            var computed = window.getComputedStyle(source);
+            var cssText = '';
+            for (var i = 0; i < computed.length; i++) {
+              var prop = computed[i];
+              cssText += prop + ':' + computed.getPropertyValue(prop) + ';';
+            }
+            target.style.cssText = cssText;
+
+            var sourceChildren = source.children;
+            var targetChildren = target.children;
+            for (var j = 0; j < sourceChildren.length && j < targetChildren.length; j++) {
+              inlineStyles(sourceChildren[j], targetChildren[j]);
+            }
+          }
+          inlineStyles(document.body, clone);
+
+          // Build SVG foreignObject
+          var svgNS = 'http://www.w3.org/2000/svg';
+          var xhtmlNS = 'http://www.w3.org/1999/xhtml';
+          var svgStr = '<svg xmlns="' + svgNS + '" width="' + bodyW + '" height="' + bodyH + '">'
+            + '<foreignObject width="100%" height="100%">'
+            + '<div xmlns="' + xhtmlNS + '">'
+            + clone.outerHTML
+            + '</div></foreignObject></svg>';
+
+          var svgBlob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+          var url = URL.createObjectURL(svgBlob);
+
+          var img = new Image();
+          img.onload = function() {
+            var canvas = document.createElement('canvas');
+            canvas.width = canvasW;
+            canvas.height = canvasH;
+            var ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.scale(scale, scale);
+              ctx.drawImage(img, 0, 0);
+            }
+            URL.revokeObjectURL(url);
+            var dataUrl = canvas.toDataURL('image/png', 0.8);
+            window.parent.postMessage({
+              type: 'novum:screenshot-captured',
+              payload: { dataUrl: dataUrl },
+            }, '*');
+          };
+          img.onerror = function() {
+            URL.revokeObjectURL(url);
+            window.parent.postMessage({
+              type: 'novum:screenshot-captured',
+              payload: { dataUrl: null, error: 'Image render failed' },
+            }, '*');
+          };
+          img.src = url;
+        } catch (captureErr) {
+          window.parent.postMessage({
+            type: 'novum:screenshot-captured',
+            payload: { dataUrl: null, error: String(captureErr) },
+          }, '*');
+        }
+      })();
     }
 
     // Optimistic move for drag-and-drop (DOM update with FLIP animation)
@@ -1668,6 +2008,7 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
         sourceEl.style.transform = '';
 
         // Update selection if this element was selected
+        // (Outline follows the element automatically since it's inline)
         if (sourceEl === currentSelectedElement) {
           currentSelectedSelector = generatePreciseSelector(sourceEl);
           const payload = buildSelectionPayload(sourceEl);
@@ -1676,10 +2017,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
             type: 'novum:selection-revalidated',
             payload: payload,
           }, '*');
-          // Update selection overlay after animation
-          setTimeout(() => {
-            updateSelectionOverlay(sourceEl);
-          }, 200);
         }
 
         // Clean up transition styles after animation
@@ -1844,7 +2181,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
 
     // Pre-create overlays for immediate use (lazy getters will recreate if HMR deletes them)
     getOverlay();
-    getSelectionOverlay();
     getLayersOverlay();
     getDropZoneOverlay();
 
@@ -1867,8 +2203,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     document.addEventListener('keydown', handleKeyDown, true);
     document.addEventListener('mousedown', handleDragStart, true);
     document.addEventListener('contextmenu', handleContextMenu, true);
-    window.addEventListener('scroll', scheduleSelectionOverlaySync, true);
-    window.addEventListener('resize', scheduleSelectionOverlaySync, true);
 
     // Signal to parent that inspector is ready (for state sync after iframe reload)
     window.parent.postMessage({ type: 'novum:inspector-ready' }, '*');
@@ -1881,8 +2215,6 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       document.removeEventListener('keydown', handleKeyDown, true);
       document.removeEventListener('mousedown', handleDragStart, true);
       document.removeEventListener('contextmenu', handleContextMenu, true);
-      window.removeEventListener('scroll', scheduleSelectionOverlaySync, true);
-      window.removeEventListener('resize', scheduleSelectionOverlaySync, true);
       cancelDrag(); // Clean up any in-progress drag
       if (hoverRafId !== null) {
         cancelAnimationFrame(hoverRafId);
@@ -1896,8 +2228,15 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
         reselectionObserver.disconnect();
         reselectionObserver = null;
       }
+      // Clean up drop preview
+      if (dropPreviewElement && dropPreviewElement.parentNode) {
+        dropPreviewElement.parentNode.removeChild(dropPreviewElement);
+      }
+      dropPreviewElement = null;
+      dropPreviewContainer = null;
+
       // Clean up overlay elements by ID (more reliable than cached references)
-      ['novum-inspector-overlay', 'novum-selection-overlay', 'novum-layers-highlight-overlay', 'novum-drop-zone-overlay', 'novum-drag-ghost', 'novum-drop-indicator'].forEach(function(id) {
+      ['novum-inspector-overlay', 'novum-layers-highlight-overlay', 'novum-drop-zone-overlay', 'novum-drag-ghost', 'novum-drop-indicator'].forEach(function(id) {
         const el = document.getElementById(id);
         if (el && el.parentNode) {
           el.parentNode.removeChild(el);

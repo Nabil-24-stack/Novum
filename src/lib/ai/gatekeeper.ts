@@ -22,6 +22,7 @@ import { enforceColors, type ColorViolation } from "./color-mapper";
 import { enforceSpacing, type SpacingViolation } from "./spacing-mapper";
 import { enforceLayout, type LayoutViolation } from "./layout-mapper";
 import { enforceTypography, type TypographyViolation } from "./typography-mapper";
+import { enforceLayoutDeclarations, type LayoutDeclarationAddition } from "./layout-declaration-mapper";
 import { defaultTokenState } from "@/lib/tokens/defaults";
 import type { TokenState } from "@/lib/tokens/types";
 
@@ -46,6 +47,7 @@ export interface GatekeeperReport {
   layoutViolations: LayoutViolation[];
   typographyViolations: TypographyViolation[];
   componentPromotions: ComponentPromotion[];
+  layoutDeclarationAdditions: LayoutDeclarationAddition[];
 }
 
 // ============================================================================
@@ -189,6 +191,7 @@ export function runGatekeeper(
     layoutViolations: [],
     typographyViolations: [],
     componentPromotions: [],
+    layoutDeclarationAdditions: [],
   };
 
   // Extension guard
@@ -203,6 +206,16 @@ export function runGatekeeper(
   const allLayoutViolations: LayoutViolation[] = [];
   const allTypographyViolations: TypographyViolation[] = [];
   let allPromotions: ComponentPromotion[] = [];
+  let allLayoutDeclarationAdditions: LayoutDeclarationAddition[] = [];
+
+  // ── Phase 0: Layout Declaration Enforcement (AST-based) ──
+  try {
+    const { code: layoutEnforced, additions } = enforceLayoutDeclarations(currentCode);
+    currentCode = layoutEnforced;
+    allLayoutDeclarationAdditions = additions;
+  } catch (err) {
+    console.warn("[Gatekeeper] Layout declaration enforcement failed, skipping:", err);
+  }
 
   // ── Phase 1: Component Promotion ──
   try {
@@ -284,7 +297,8 @@ export function runGatekeeper(
     allSpacingViolations.length > 0 ||
     allLayoutViolations.length > 0 ||
     allTypographyViolations.length > 0 ||
-    allPromotions.length > 0;
+    allPromotions.length > 0 ||
+    allLayoutDeclarationAdditions.length > 0;
 
   return {
     code: currentCode,
@@ -295,6 +309,7 @@ export function runGatekeeper(
       layoutViolations: allLayoutViolations,
       typographyViolations: allTypographyViolations,
       componentPromotions: allPromotions,
+      layoutDeclarationAdditions: allLayoutDeclarationAdditions,
     },
   };
 }

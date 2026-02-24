@@ -2,6 +2,7 @@
 
 import { useEffect, useCallback, useRef } from "react";
 import { deleteNodeAtLocation } from "@/lib/ast/writer";
+import { sendToIframe } from "@/lib/inspection/iframe-messaging";
 import { toast } from "sonner";
 import type { SelectedElement } from "@/lib/inspection/types";
 
@@ -38,17 +39,12 @@ export function useKeyboardDelete({
   useEffect(() => { selectedElementRef.current = selectedElement; });
   useEffect(() => { inspectionModeRef.current = inspectionMode; });
 
-  // Broadcast delete message to all Sandpack iframes for optimistic DOM removal
+  // Send delete message to the correct Sandpack iframe (page-aware for Flow View)
   const broadcastDelete = useCallback(() => {
-    const iframes = document.querySelectorAll<HTMLIFrameElement>(
-      'iframe[title="Sandpack Preview"]'
+    sendToIframe(
+      { type: "novum:delete-element" },
+      selectedElementRef.current?.pageId
     );
-    iframes.forEach((iframe) => {
-      iframe.contentWindow?.postMessage(
-        { type: "novum:delete-element" },
-        "*"
-      );
-    });
   }, []);
 
   // Core delete logic - shared by both event sources

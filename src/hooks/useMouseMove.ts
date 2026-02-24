@@ -2,15 +2,17 @@
 
 import { useEffect, useCallback } from "react";
 import { moveElementAtLocation } from "@/lib/ast/writer";
+import { getPageIdFromMessageSource } from "@/lib/inspection/iframe-messaging";
 import type { MoveElementPayload, OptimisticMovePayload } from "@/lib/inspection/types";
 
 interface UseMouseMoveOptions {
-  files: Record<string, string>;
   writeFile: (path: string, content: string) => void;
   /** Called before move to flush any pending draft changes */
   flushDraft: () => void;
-  /** Called to perform optimistic DOM move in iframe */
-  onOptimisticMove: (payload: OptimisticMovePayload) => void;
+  /** Called to perform optimistic DOM move in iframe (with optional pageId for Flow View) */
+  onOptimisticMove: (payload: OptimisticMovePayload, pageId?: string) => void;
+  /** Read the latest file content synchronously (includes writes not yet in React state) */
+  getLatestFile: (path: string) => string | undefined;
 }
 
 /**
@@ -19,10 +21,10 @@ interface UseMouseMoveOptions {
  * the AST-based move in the VFS.
  */
 export function useMouseMove({
-  files,
   writeFile,
   flushDraft,
   onOptimisticMove,
+  getLatestFile,
 }: UseMouseMoveOptions) {
   // Handle move requests from the iframe
   const handleMessage = useCallback(
@@ -48,23 +50,26 @@ export function useMouseMove({
         return;
       }
 
+      // Detect which FlowFrame page the message came from (for targeted optimistic update)
+      const pageId = getPageIdFromMessageSource(e);
+
       // Flush any pending draft changes first
       flushDraft();
 
-      // Get the file content
+      // Get the file content via immediate ref (includes writes not yet in React state)
       const fileName = sourceLocation.fileName;
-      const fileContent = files[fileName];
+      const fileContent = getLatestFile(fileName);
       if (!fileContent) {
         console.warn(`File not found: ${fileName}`);
         return;
       }
 
-      // Perform optimistic DOM move in iframe
+      // Perform optimistic DOM move in the correct iframe
       onOptimisticMove({
         sourceSelector,
         targetSelector,
         position,
-      });
+      }, pageId);
 
       // Perform AST-based move in VFS
       const result = moveElementAtLocation(
@@ -81,7 +86,7 @@ export function useMouseMove({
         // Note: Optimistic move already happened, iframe will re-sync on next render
       }
     },
-    [files, writeFile, flushDraft, onOptimisticMove]
+    [writeFile, flushDraft, onOptimisticMove, getLatestFile]
   );
 
   useEffect(() => {

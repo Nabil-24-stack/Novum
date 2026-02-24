@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { MousePointer, RotateCcw, Lock, FileCode, AlignLeft, AlignCenter, AlignRight, Type, Settings2, ToggleLeft, ToggleRight, X } from "lucide-react";
+import { StrategicContext } from "./StrategicContext";
 import type { SelectedElement } from "@/lib/inspection/types";
 import type { ParsedProp } from "@/hooks/useWriter";
 import type { ClassEditMode } from "@/hooks/useWriter";
@@ -26,6 +27,11 @@ import {
   detectBorderColor,
   detectShadow,
   detectOpacity,
+  detectGridCols,
+  detectGridRows,
+  detectColSpan,
+  detectRowSpan,
+  detectPlaceItems,
   SPACING_SCALE,
   FONT_SIZE_SCALE,
   FONT_WEIGHT_SCALE,
@@ -37,6 +43,11 @@ import {
   BORDER_COLOR_OPTIONS,
   SHADOW_SCALE,
   OPACITY_SCALE,
+  GRID_COLS_SCALE,
+  GRID_ROWS_SCALE,
+  COL_SPAN_SCALE,
+  ROW_SPAN_SCALE,
+  PLACE_ITEMS_OPTIONS,
   type ClassCategory,
 } from "@/lib/inspection/class-manager";
 
@@ -166,6 +177,18 @@ export function PropertiesTab({
     'th', 'td', 'dt', 'dd', 'figcaption', 'blockquote'
   ]);
 
+  // Tags where Typography controls are relevant (text-bearing elements)
+  const TYPOGRAPHY_TAGS = new Set([
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'p', 'span', 'label', 'button', 'a', 'li',
+    'th', 'td', 'dt', 'dd', 'figcaption', 'blockquote',
+    'cite', 'em', 'strong', 'small', 'abbr', 'code', 'pre',
+    'time', 'mark', 'sub', 'sup', 'legend', 'caption',
+  ]);
+
+  const showTypography =
+    TYPOGRAPHY_TAGS.has(tagName.toLowerCase()) || isTextElement;
+
   // Smart Content visibility: only show for text-heavy elements
   const isTextEditableElement =
     isTextElement &&
@@ -238,6 +261,16 @@ export function PropertiesTab({
   const shadow = detectShadow(className || "");
   const opacity = detectOpacity(className || "");
 
+  // Detect grid values
+  const gridCols = detectGridCols(className || "");
+  const gridRows = detectGridRows(className || "");
+  const colSpan = detectColSpan(className || "");
+  const rowSpan = detectRowSpan(className || "");
+  const placeItems = detectPlaceItems(className || "");
+
+  // Whether parent is a grid (for child span controls)
+  const parentIsGrid = selectedElement?.parentLayout?.layout === "grid";
+
   // Whether flex/grid controls should be shown
   const showFlexControls = layoutMode === "flex";
   const showGridControls = layoutMode === "grid";
@@ -266,6 +299,9 @@ export function PropertiesTab({
           </p>
         )}
       </div>
+
+      {/* Strategic Context (Product Brain) */}
+      <StrategicContext strategyIds={selectedElement.strategyIds} />
 
       {/* Component Props */}
       {hasDisplayableProps && (
@@ -488,6 +524,91 @@ export function PropertiesTab({
               </div>
             )}
 
+            {/* Grid Container Controls (Grid only) */}
+            {showGridControls && (
+              <>
+                <div>
+                  <label className="text-sm text-neutral-500 mb-2 block">
+                    Columns
+                  </label>
+                  <GridValueSelect
+                    value={gridCols}
+                    options={GRID_COLS_SCALE}
+                    disabled={isDisabled}
+                    onChange={(value) =>
+                      handleClassUpdate("gridCols", value ? `grid-cols-${value}` : null)
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-neutral-500 mb-2 block">
+                    Rows
+                  </label>
+                  <GridValueSelect
+                    value={gridRows}
+                    options={GRID_ROWS_SCALE}
+                    disabled={isDisabled}
+                    onChange={(value) =>
+                      handleClassUpdate("gridRows", value ? `grid-rows-${value}` : null)
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-neutral-500 mb-2 block">
+                    Place Items
+                  </label>
+                  <div className="flex bg-neutral-100 rounded-lg p-0.5">
+                    {PLACE_ITEMS_OPTIONS.map((opt) => (
+                      <LayoutModeButton
+                        key={opt.value}
+                        label={opt.label}
+                        active={placeItems === opt.value}
+                        disabled={isDisabled}
+                        onClick={() =>
+                          handleClassUpdate(
+                            "placeItems",
+                            placeItems === opt.value ? null : `place-items-${opt.value}`
+                          )
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Grid Child Controls (when parent is grid) */}
+            {parentIsGrid && (
+              <>
+                <div>
+                  <label className="text-sm text-neutral-500 mb-2 block">
+                    Column Span
+                  </label>
+                  <GridValueSelect
+                    value={colSpan}
+                    options={COL_SPAN_SCALE}
+                    disabled={isDisabled}
+                    onChange={(value) =>
+                      handleClassUpdate("colSpan", value ? `col-span-${value}` : null)
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-neutral-500 mb-2 block">
+                    Row Span
+                  </label>
+                  <GridValueSelect
+                    value={rowSpan}
+                    options={ROW_SPAN_SCALE}
+                    disabled={isDisabled}
+                    onChange={(value) =>
+                      handleClassUpdate("rowSpan", value ? `row-span-${value}` : null)
+                    }
+                  />
+                </div>
+              </>
+            )}
+
             {/* Gap Input (Flex/Grid) */}
             {showSpacingControls && (
               <div>
@@ -529,42 +650,44 @@ export function PropertiesTab({
         )}
       </div>
 
-      {/* Typography Section */}
-      <div className="p-4 border-b border-neutral-200">
-        <h3 className="text-sm font-medium text-neutral-500 uppercase tracking-wide mb-3">
-          Typography
-        </h3>
-        {!isNativeElement ? (
-          <div className="text-sm text-neutral-400 italic">Managed by Component</div>
-        ) : (
-          <div className="space-y-4">
-            <div>
-              <label className="text-sm text-neutral-500 mb-2 block">Font Size</label>
-              <FontSizeSelect
-                value={fontSize}
-                disabled={isDisabled}
-                onChange={(v) => handleClassUpdate("fontSize", v ? `text-${v}` : null)}
-              />
+      {/* Typography Section - only for text-bearing elements */}
+      {showTypography && (
+        <div className="p-4 border-b border-neutral-200">
+          <h3 className="text-sm font-medium text-neutral-500 uppercase tracking-wide mb-3">
+            Typography
+          </h3>
+          {!isNativeElement ? (
+            <div className="text-sm text-neutral-400 italic">Managed by Component</div>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-neutral-500 mb-2 block">Font Size</label>
+                <FontSizeSelect
+                  value={fontSize}
+                  disabled={isDisabled}
+                  onChange={(v) => handleClassUpdate("fontSize", v ? `text-${v}` : null)}
+                />
+              </div>
+              <div>
+                <label className="text-sm text-neutral-500 mb-2 block">Weight</label>
+                <FontWeightButtons
+                  value={fontWeight}
+                  disabled={isDisabled}
+                  onChange={(v) => handleClassUpdate("fontWeight", v ? `font-${v}` : null)}
+                />
+              </div>
+              <div>
+                <label className="text-sm text-neutral-500 mb-2 block">Align</label>
+                <TextAlignButtons
+                  value={textAlign}
+                  disabled={isDisabled}
+                  onChange={(v) => handleClassUpdate("textAlign", v ? `text-${v}` : null)}
+                />
+              </div>
             </div>
-            <div>
-              <label className="text-sm text-neutral-500 mb-2 block">Weight</label>
-              <FontWeightButtons
-                value={fontWeight}
-                disabled={isDisabled}
-                onChange={(v) => handleClassUpdate("fontWeight", v ? `font-${v}` : null)}
-              />
-            </div>
-            <div>
-              <label className="text-sm text-neutral-500 mb-2 block">Align</label>
-              <TextAlignButtons
-                value={textAlign}
-                disabled={isDisabled}
-                onChange={(v) => handleClassUpdate("textAlign", v ? `text-${v}` : null)}
-              />
-            </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       {/* Fill Section */}
       <div className="p-4 border-b border-neutral-200">
@@ -890,6 +1013,34 @@ function SpacingSelect({
       {SPACING_SCALE.map(({ value: v, px }) => (
         <option key={v} value={v}>
           {v} ({px}px)
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function GridValueSelect({
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  value: string | null;
+  options: Array<{ value: string; label: string }>;
+  disabled?: boolean;
+  onChange: (value: string | null) => void;
+}) {
+  return (
+    <select
+      value={value || ""}
+      onChange={(e) => onChange(e.target.value || null)}
+      disabled={disabled}
+      className="w-full px-2 py-1.5 text-sm bg-white border border-neutral-200 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      <option value="">Auto</option>
+      {options.map(({ value: v, label }) => (
+        <option key={v} value={v}>
+          {label}
         </option>
       ))}
     </select>

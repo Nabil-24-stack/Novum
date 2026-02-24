@@ -16,6 +16,8 @@ export interface MaterializeResult {
   success: boolean;
   error?: string;
   shouldRefresh?: boolean;
+  /** Which page the component was materialized into (for targeted refresh) */
+  targetPageId?: string;
 }
 
 export interface UseMaterializerProps {
@@ -309,12 +311,12 @@ export function useMaterializer({
       // 7. Write to VFS
       currentWriteFile(targetFile, insertResult.newCode!);
 
-      // 8. Remove placeholder after a brief delay to let HMR paint the real component first
+      // 8. Remove placeholder after delay to let HMR + fallback complete first
       setTimeout(() => {
         sendToIframe({ type: "novum:remove-placeholder" }, targetPageId);
-      }, 100);
+      }, 800);
 
-      return { success: true, shouldRefresh: true };
+      return { success: true, shouldRefresh: true, targetPageId };
     },
     [findDropTarget, findAppRootLocation, sendToIframe]
   );
@@ -443,12 +445,12 @@ export function useMaterializer({
       // 7. Write to VFS
       currentWriteFile(targetFile, insertResult.newCode!);
 
-      // 8. Remove placeholder
+      // 8. Remove placeholder after delay to let HMR + fallback complete first
       setTimeout(() => {
         sendToIframe({ type: "novum:remove-placeholder" }, targetPageId);
-      }, 100);
+      }, 800);
 
-      return { success: true, shouldRefresh: true };
+      return { success: true, shouldRefresh: true, targetPageId };
     },
     [findDropTarget, findAppRootLocation, sendToIframe]
   );

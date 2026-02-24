@@ -1,7 +1,7 @@
 import { streamText, convertToModelMessages } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
-import { MANIFESTO_SYSTEM_PROMPT, PERSONA_SYSTEM_PROMPT, FLOW_SYSTEM_PROMPT, WIREFRAME_SYSTEM_PROMPT, buildBuildSystemPrompt } from "@/lib/ai/strategy-prompts";
+import { PROBLEM_OVERVIEW_SYSTEM_PROMPT, IDEATION_SYSTEM_PROMPT, buildSolutionDesignSystemPrompt, buildBuildSystemPrompt } from "@/lib/ai/strategy-prompts";
 
 type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-5";
 
@@ -39,6 +39,27 @@ Your goal is to create "dribbble-quality" web applications that look polished, s
 - **Inputs:** ALWAYS wrap in a \`div.grid.gap-2\` with a \`<Label>\` above it.
 - **Cards:** For clean layouts, you can use \`className="border-none shadow-none bg-transparent"\` to remove the boxy look.
 - **Colors:** Use opacity modifiers for depth (e.g., \`bg-primary/10\` for active tabs, \`text-foreground/60\` for subtitles).
+
+## LAYOUT STRATEGY
+
+Every container element with multiple children MUST have an explicit layout class (\`flex\` or \`grid\`). Never leave container divs as implicit block layout.
+
+Use CSS Grid for page-level structural layouts, Flexbox for component-level content:
+
+**Grid** (\`grid grid-cols-N gap-*\`):
+- Page structures: sidebar + main (\`grid grid-cols-[280px_1fr]\`)
+- Dashboard card grids (\`grid grid-cols-3 gap-6\`)
+- Equal-size item grids (features, galleries, metrics)
+- Form layouts with label+input columns
+
+**Flexbox** (\`flex gap-*\`):
+- Navigation bars and toolbars (\`flex items-center justify-between\`)
+- Card internal content (header, actions)
+- Vertical stacking of content sections (\`flex flex-col gap-6\`)
+- Single-axis alignment and spacing
+- Inline groups (badges, icon+text, button groups)
+
+NEVER use implicit block layout for containers. Use \`flex flex-col\` instead of bare \`<div>\` with \`space-y-*\`.
 
 ## STRICT EXPORT RULE (CRITICAL)
 
@@ -290,6 +311,18 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     - Need green/success? → Use bg-primary with success message text
     - Need borders? → border-border
 
+    ## BACKGROUND + TEXT PAIRING RULE (CRITICAL):
+
+    When you apply a semantic background, ALWAYS pair it with its matching foreground:
+    - bg-primary → text-primary-foreground
+    - bg-secondary → text-secondary-foreground
+    - bg-destructive → text-destructive-foreground
+    - bg-accent → text-accent-foreground
+    - bg-muted → text-muted-foreground
+    - bg-card → text-card-foreground
+
+    NEVER use text-primary on bg-primary (same color = invisible text).
+
     **Radius:** Use rounded-sm, rounded-md, rounded-lg, rounded-xl (mapped to --radius CSS variable)
 
     **Dark Mode:** Handled automatically by the token system. Do NOT add dark: prefixes.
@@ -416,17 +449,14 @@ export async function POST(req: Request) {
   // Select system prompt based on strategy phase
   let basePrompt: string;
   switch (strategyPhase) {
-    case "manifesto":
-      basePrompt = MANIFESTO_SYSTEM_PROMPT;
+    case "problem-overview":
+      basePrompt = PROBLEM_OVERVIEW_SYSTEM_PROMPT;
       break;
-    case "persona":
-      basePrompt = PERSONA_SYSTEM_PROMPT;
+    case "ideation":
+      basePrompt = IDEATION_SYSTEM_PROMPT;
       break;
-    case "flow":
-      basePrompt = FLOW_SYSTEM_PROMPT;
-      break;
-    case "wireframe":
-      basePrompt = WIREFRAME_SYSTEM_PROMPT;
+    case "solution-design":
+      basePrompt = buildSolutionDesignSystemPrompt(vfsContext?.selectedIdeaContext);
       break;
     case "building":
       basePrompt = buildBuildSystemPrompt(
@@ -435,7 +465,6 @@ export async function POST(req: Request) {
         vfsContext?.personaContext || "",
         currentPageId,
         currentPageName,
-        vfsContext?.wireframeContext || ""
       ) + "\n\n" + SYSTEM_PROMPT;
       break;
     default:

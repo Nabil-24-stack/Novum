@@ -36,6 +36,13 @@ export const CATEGORY_PATTERNS = {
   paddingX: /^px-(\d+|px|\[.+\])$/,
   paddingY: /^py-(\d+|px|\[.+\])$/,
 
+  // Grid
+  gridCols: /^grid-cols-(\d+|none)$/,
+  gridRows: /^grid-rows-(\d+|none)$/,
+  colSpan: /^col-span-(\d+|full)$/,
+  rowSpan: /^row-span-(\d+|full)$/,
+  placeItems: /^place-items-(start|end|center|stretch|baseline)$/,
+
   // Typography
   fontSize: /^text-(xs|sm|base|lg|xl|2xl|3xl|4xl|5xl)$/,
   fontWeight: /^font-(normal|medium|semibold|bold)$/,
@@ -162,6 +169,11 @@ export function removeLayoutClasses(originalClasses: string): string {
     "padding",
     "paddingX",
     "paddingY",
+    "gridCols",
+    "gridRows",
+    "colSpan",
+    "rowSpan",
+    "placeItems",
   ];
 
   const filtered = classes.filter((cls) => {
@@ -594,6 +606,131 @@ export function detectOpacity(className: string): string | null {
     if (match) {
       return match[1];
     }
+  }
+  return null;
+}
+
+// ============================================================================
+// Grid Detection Functions
+// ============================================================================
+
+/** Grid columns scale (1-12) */
+export const GRID_COLS_SCALE: Array<{ value: string; label: string }> = [
+  { value: "1", label: "1" },
+  { value: "2", label: "2" },
+  { value: "3", label: "3" },
+  { value: "4", label: "4" },
+  { value: "5", label: "5" },
+  { value: "6", label: "6" },
+  { value: "7", label: "7" },
+  { value: "8", label: "8" },
+  { value: "9", label: "9" },
+  { value: "10", label: "10" },
+  { value: "11", label: "11" },
+  { value: "12", label: "12" },
+];
+
+/** Grid rows scale (1-6) */
+export const GRID_ROWS_SCALE: Array<{ value: string; label: string }> = [
+  { value: "1", label: "1" },
+  { value: "2", label: "2" },
+  { value: "3", label: "3" },
+  { value: "4", label: "4" },
+  { value: "5", label: "5" },
+  { value: "6", label: "6" },
+];
+
+/** Column span scale (1-12 + full) */
+export const COL_SPAN_SCALE: Array<{ value: string; label: string }> = [
+  { value: "1", label: "1" },
+  { value: "2", label: "2" },
+  { value: "3", label: "3" },
+  { value: "4", label: "4" },
+  { value: "5", label: "5" },
+  { value: "6", label: "6" },
+  { value: "7", label: "7" },
+  { value: "8", label: "8" },
+  { value: "9", label: "9" },
+  { value: "10", label: "10" },
+  { value: "11", label: "11" },
+  { value: "12", label: "12" },
+  { value: "full", label: "Full" },
+];
+
+/** Row span scale (1-6) */
+export const ROW_SPAN_SCALE: Array<{ value: string; label: string }> = [
+  { value: "1", label: "1" },
+  { value: "2", label: "2" },
+  { value: "3", label: "3" },
+  { value: "4", label: "4" },
+  { value: "5", label: "5" },
+  { value: "6", label: "6" },
+];
+
+/** Place items options */
+export const PLACE_ITEMS_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "start", label: "Start" },
+  { value: "center", label: "Center" },
+  { value: "end", label: "End" },
+  { value: "stretch", label: "Stretch" },
+];
+
+/**
+ * Detect grid-cols-N from a className string.
+ */
+export function detectGridCols(className: string): string | null {
+  const classes = parseClasses(className);
+  for (const cls of classes) {
+    const match = cls.match(/^grid-cols-(\d+|none)$/);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/**
+ * Detect grid-rows-N from a className string.
+ */
+export function detectGridRows(className: string): string | null {
+  const classes = parseClasses(className);
+  for (const cls of classes) {
+    const match = cls.match(/^grid-rows-(\d+|none)$/);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/**
+ * Detect col-span-N from a className string.
+ */
+export function detectColSpan(className: string): string | null {
+  const classes = parseClasses(className);
+  for (const cls of classes) {
+    const match = cls.match(/^col-span-(\d+|full)$/);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/**
+ * Detect row-span-N from a className string.
+ */
+export function detectRowSpan(className: string): string | null {
+  const classes = parseClasses(className);
+  for (const cls of classes) {
+    const match = cls.match(/^row-span-(\d+|full)$/);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/**
+ * Detect place-items-* from a className string.
+ */
+export function detectPlaceItems(className: string): string | null {
+  const classes = parseClasses(className);
+  for (const cls of classes) {
+    const match = cls.match(/^place-items-(start|end|center|stretch|baseline)$/);
+    if (match) return match[1];
   }
   return null;
 }

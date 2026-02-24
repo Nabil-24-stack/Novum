@@ -13,6 +13,7 @@ import { useDraftEditor, type DraftState } from "@/hooks/useDraftEditor";
 import { useKeyboardMove } from "@/hooks/useKeyboardMove";
 import { useKeyboardDelete } from "@/hooks/useKeyboardDelete";
 import { useMouseMove } from "@/hooks/useMouseMove";
+import { sendToIframe } from "@/lib/inspection/iframe-messaging";
 import type { SelectedElement, OptimisticMovePayload, SourceLocation } from "@/lib/inspection/types";
 import type { StrategyPhase } from "@/hooks/useStrategyStore";
 
@@ -88,7 +89,7 @@ interface RightPanelProps {
   /** Current strategy phase */
   strategyPhase?: StrategyPhase;
   /** Called when user clicks approve buttons in chat */
-  onPhaseAction?: (action: "approve-manifesto" | "approve-persona" | "approve-flow" | "approve-wireframe") => void;
+  onPhaseAction?: (action: "approve-problem-overview" | "approve-ideation" | "approve-solution-design") => void;
   /** Whether chat is currently in a floating panel */
   chatFloating?: boolean;
   /** Called when user clicks the pop-out button */
@@ -107,6 +108,8 @@ interface RightPanelProps {
   onHeroSubmit?: () => void;
   /** Called when user approves a built page and wants to build the next one */
   onApproveAndBuildNext?: (nextPageId: string) => void;
+  /** Read the latest file content synchronously (includes writes not yet in React state) */
+  getLatestFile: (path: string) => string | undefined;
 }
 
 export function RightPanel({
@@ -131,6 +134,7 @@ export function RightPanel({
   floatingAnimate,
   onHeroSubmit,
   onApproveAndBuildNext,
+  getLatestFile,
 }: RightPanelProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [internalActiveTab, setInternalActiveTab] = useState<TabType>("chat");
@@ -340,8 +344,10 @@ export function RightPanel({
     }
     const result = writer.getComponentProps(source);
     if (result.success && result.props) {
+      console.debug(`[RightPanel] componentProps resolved: ${result.props.length} props`, result.props.map(p => `${p.name}${p.options ? `(${p.options.length} options)` : ""}`));
       return result.props;
     }
+    console.debug(`[RightPanel] getComponentProps failed:`, result.error);
     return null;
   }, [selectedElement, writer]);
 
@@ -356,13 +362,14 @@ export function RightPanel({
         originalClassName,
         newClassName,
         selectedElement?.source,
-        selectedElement?.selectionId
+        selectedElement?.selectionId,
+        selectedElement?.pageId
       );
 
       // Update working className immediately for editability checks
       setWorkingClassName(newClassName);
     },
-    [draftEditor, selectedElement?.source, selectedElement?.preciseSelector, selectedElement?.selectionId]
+    [draftEditor, selectedElement?.source, selectedElement?.preciseSelector, selectedElement?.selectionId, selectedElement?.pageId]
   );
 
   // Handler for text updates from PropertiesTab (non-optimistic, immediate VFS write)
@@ -398,7 +405,8 @@ export function RightPanel({
         originalText,
         newText,
         selectedElement.source,
-        selectedElement.selectionId
+        selectedElement.selectionId,
+        selectedElement.pageId
       );
     },
     [selectedElement, draftEditor]
@@ -442,46 +450,48 @@ export function RightPanel({
     [selectedElement, writer]
   );
 
-  // Broadcast swap message to all Sandpack iframes (optimistic DOM update)
+  // Send swap message to the correct Sandpack iframe (page-aware for Flow View)
   const broadcastSwap = useCallback(
     (selector: string, direction: "prev" | "next") => {
-      const iframes = document.querySelectorAll<HTMLIFrameElement>(
-        'iframe[title="Sandpack Preview"]'
+      sendToIframe(
+        { type: "novum:swap-elements", payload: { selector, direction } },
+        selectedElement?.pageId
       );
-      iframes.forEach((iframe) => {
-        iframe.contentWindow?.postMessage(
-          { type: "novum:swap-elements", payload: { selector, direction } },
-          "*"
-        );
-      });
     },
-    []
+    [selectedElement?.pageId]
   );
 
-  // Broadcast move message to all Sandpack iframes (optimistic DOM update for drag-drop)
-  const broadcastMove = useCallback(
-    (payload: OptimisticMovePayload) => {
-      const iframes = document.querySelectorAll<HTMLIFrameElement>(
-        'iframe[title="Sandpack Preview"]'
+  // Send move-by-offset message to iframe (for grid row jumps)
+  const broadcastMoveByOffset = useCallback(
+    (offset: number) => {
+      sendToIframe(
+        { type: "novum:move-element-by-offset", payload: { offset } },
+        selectedElement?.pageId
       );
-      iframes.forEach((iframe) => {
-        iframe.contentWindow?.postMessage(
-          { type: "novum:optimistic-move", payload },
-          "*"
-        );
-      });
+    },
+    [selectedElement?.pageId]
+  );
+
+  // Send move message to the correct Sandpack iframe (page-aware for Flow View)
+  const broadcastMove = useCallback(
+    (payload: OptimisticMovePayload, pageId?: string) => {
+      sendToIframe(
+        { type: "novum:optimistic-move", payload },
+        pageId
+      );
     },
     []
   );
 
   // Enable keyboard reordering when an element is selected
   useKeyboardMove({
-    files,
     writeFile,
     selectedElement,
     flushDraft: draftEditor.flush,
     onOptimisticSwap: broadcastSwap,
+    onOptimisticMoveByOffset: broadcastMoveByOffset,
     onSourceLocationUpdate: onSelectedElementSourceUpdate,
+    getLatestFile,
   });
 
   // Enable keyboard delete when an element is selected
@@ -496,10 +506,10 @@ export function RightPanel({
 
   // Enable mouse drag-and-drop for element reordering
   useMouseMove({
-    files,
     writeFile,
     flushDraft: draftEditor.flush,
     onOptimisticMove: broadcastMove,
+    getLatestFile,
   });
 
   return (

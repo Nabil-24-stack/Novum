@@ -19,6 +19,7 @@ export function SandpackFileSync({ files }: SandpackFileSyncProps) {
   const deletedPathsRef = useRef<Set<string>>(new Set());
   const hasNewFilesRef = useRef(false);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const hmrFallbackTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Create a stable JSON representation for comparison
   const filesJson = JSON.stringify(files);
@@ -65,6 +66,12 @@ export function SandpackFileSync({ files }: SandpackFileSyncProps) {
       sandpack.deleteFile(path);
     });
 
+    // Clear any pending HMR fallback timer from previous sync
+    if (hmrFallbackTimerRef.current) {
+      clearTimeout(hmrFallbackTimerRef.current);
+      hmrFallbackTimerRef.current = null;
+    }
+
     if (needsFullRestart) {
       console.log("[SandpackSync] Structural change detected, running full reset", {
         hasNewFiles,
@@ -74,6 +81,16 @@ export function SandpackFileSync({ files }: SandpackFileSyncProps) {
       sandpack.runSandpack();
     } else {
       console.log("[SandpackSync] Minor change, triggered HMR via updateFile");
+
+      // HMR fallback: if Sandpack doesn't settle within 500ms, force full reset.
+      // Sandpack HMR can silently fail for structural JSX changes (new children + imports).
+      hmrFallbackTimerRef.current = setTimeout(() => {
+        hmrFallbackTimerRef.current = null;
+        if (sandpack.status !== "idle") {
+          console.log("[SandpackSync] HMR didn't complete, forcing full reset");
+          sandpack.runSandpack();
+        }
+      }, 500);
     }
   }, [sandpack]);
 
@@ -122,6 +139,9 @@ export function SandpackFileSync({ files }: SandpackFileSyncProps) {
     return () => {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
+      }
+      if (hmrFallbackTimerRef.current) {
+        clearTimeout(hmrFallbackTimerRef.current);
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps

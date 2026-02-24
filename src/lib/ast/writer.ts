@@ -298,9 +298,11 @@ export function getPropsAtLocation(
       // Only scan for custom components (PascalCase)
       if (componentName && componentName[0] === componentName[0].toUpperCase()) {
         const componentPath = resolveComponentFilePath(componentName, vfsFiles);
+        console.debug(`[writer] getPropsAtLocation: component=${componentName}, resolvedPath=${componentPath}`);
 
         if (componentPath && vfsFiles[componentPath]) {
           const schema = scanComponentPropSchema(vfsFiles[componentPath], componentName);
+          console.debug(`[writer] getPropsAtLocation: schema for ${componentName}:`, schema ? Object.keys(schema.enumProps) : null);
 
           if (schema?.enumProps) {
             // Track which props already exist in the instance
@@ -860,6 +862,15 @@ export function updateCodeAtLocation(
       const line = lines.length;
       const column = lines[lines.length - 1].length;
 
+      // Post-swap verification: character at newElementStart should be '<'
+      const charAtPos = newCode.charAt(newElementStart);
+      if (charAtPos !== "<") {
+        console.warn(
+          `[writer] Post-swap verification: expected '<' at offset ${newElementStart}, ` +
+          `got '${charAtPos}'. Computed location: ${line}:${column}`
+        );
+      }
+
       newSourceLocation = {
         fileName: location.fileName,
         line,
@@ -1011,19 +1022,346 @@ export function swapSiblingAtLocation(
   });
 }
 
+/**
+ * Move an element by N sibling positions (for grid row jumps).
+ * For offset ±1, delegates to swapSiblingAtLocation for proven behavior.
+ * For |offset| > 1, extracts element and re-inserts at target index.
+ */
+export function moveBySiblingOffsetAtLocation(
+  code: string,
+  location: SourceLocation,
+  offset: number
+): ASTWriteResult {
+  // For adjacent moves, delegate to existing swap
+  if (offset === 1) {
+    return swapSiblingAtLocation(code, location, "next");
+  }
+  if (offset === -1) {
+    return swapSiblingAtLocation(code, location, "prev");
+  }
+
+  try {
+    const ast = parse(code, {
+      sourceType: "module",
+      plugins: ["jsx", "typescript"],
+      ranges: true,
+    });
+
+    const found = findJSXElementAtLocation(ast, location);
+    if (!found) {
+      return {
+        success: false,
+        error: `Could not find JSX element at ${location.fileName}:${location.line}:${location.column}`,
+        reorderFailureReason: ReorderFailureReason.STALE_SOURCE_LOCATION,
+      };
+    }
+
+    // Get all JSXElement siblings (skip JSXText whitespace nodes)
+    const parentPath = found.path.parentPath;
+    if (!parentPath) {
+      return {
+        success: false,
+        error: "Element has no parent",
+        reorderFailureReason: ReorderFailureReason.NON_REORDERABLE_CONTEXT,
+      };
+    }
+
+    // Collect sibling JSXElement paths
+    const siblingPaths: NodePath<t.JSXElement>[] = [];
+    let currentIndex = -1;
+
+    if (parentPath.isJSXElement() || parentPath.isJSXFragment()) {
+      const children = parentPath.get("children");
+      if (Array.isArray(children)) {
+        for (const child of children) {
+          if (child.isJSXElement()) {
+            if (child.node === found.node) {
+              currentIndex = siblingPaths.length;
+            }
+            siblingPaths.push(child as NodePath<t.JSXElement>);
+          }
+        }
+      }
+    }
+
+    if (currentIndex === -1) {
+      return {
+        success: false,
+        error: "Could not find element among siblings",
+        reorderFailureReason: ReorderFailureReason.STALE_SOURCE_LOCATION,
+      };
+    }
+
+    const targetIndex = currentIndex + offset;
+    if (targetIndex < 0 || targetIndex >= siblingPaths.length) {
+      return {
+        success: false,
+        error: "Target position out of bounds",
+        reorderFailureReason: ReorderFailureReason.NO_SIBLING_IN_DIRECTION,
+      };
+    }
+
+    // Extract current element source text
+    const nodeStart = found.node.start;
+    const nodeEnd = found.node.end;
+    if (nodeStart == null || nodeEnd == null) {
+      return { success: false, error: "Element has no position info" };
+    }
+
+    const elementCode = code.slice(nodeStart, nodeEnd);
+
+    // Determine what to delete (include leading whitespace)
+    let deleteStart = nodeStart;
+    const beforeNode = code.slice(Math.max(0, nodeStart - 100), nodeStart);
+    const lastNewline = beforeNode.lastIndexOf("\n");
+    if (lastNewline !== -1) {
+      const afterNewline = beforeNode.slice(lastNewline + 1);
+      if (/^\s*$/.test(afterNewline)) {
+        deleteStart = nodeStart - afterNewline.length;
+      }
+    }
+    let deleteEnd = nodeEnd;
+    if (code[nodeEnd] === "\n") {
+      deleteEnd = nodeEnd + 1;
+    }
+
+    // Find target sibling to insert before/after
+    const targetSibling = siblingPaths[targetIndex].node;
+    const targetStart = targetSibling.start;
+    if (targetStart == null) {
+      return { success: false, error: "Target sibling has no position" };
+    }
+
+    // Determine indentation from target position
+    const beforeTarget = code.slice(Math.max(0, targetStart - 100), targetStart);
+    const targetLastNewline = beforeTarget.lastIndexOf("\n");
+    const indent = targetLastNewline !== -1
+      ? beforeTarget.slice(targetLastNewline + 1)
+      : "";
+
+    // Build insertion text
+    let insertPoint: number;
+    let insertCode: string;
+
+    if (offset > 0) {
+      // Moving forward - insert after target
+      const targetEnd = targetSibling.end;
+      if (targetEnd == null) {
+        return { success: false, error: "Target sibling has no end position" };
+      }
+      insertPoint = targetEnd;
+      insertCode = "\n" + indent + elementCode;
+    } else {
+      // Moving backward - insert before target
+      insertPoint = targetStart;
+      insertCode = elementCode + "\n" + indent;
+    }
+
+    // Apply edits in correct order to preserve offsets
+    let result = code;
+
+    if (insertPoint > deleteStart) {
+      // Insert is after delete - do insert first, then delete
+      result = result.slice(0, insertPoint) + insertCode + result.slice(insertPoint);
+      result = result.slice(0, deleteStart) + result.slice(deleteEnd);
+    } else {
+      // Delete is after insert - do delete first, then insert
+      result = result.slice(0, deleteStart) + result.slice(deleteEnd);
+      // Insert point is before the deleted region, no offset adjustment needed
+      result = result.slice(0, insertPoint) + insertCode + result.slice(insertPoint);
+    }
+
+    // Calculate new source location
+    let newElementStart: number;
+    if (offset > 0) {
+      // Moved forward: element was deleted first, insertion point shifted
+      // Need to find where the element code starts in the result
+      const deletedLen = deleteEnd - deleteStart;
+      const adjustedInsertPoint = insertPoint - deletedLen;
+      // insertCode = "\n" + indent + elementCode
+      newElementStart = adjustedInsertPoint + 1 + indent.length;
+    } else {
+      // Moved backward: inserted first, element code starts at insertPoint
+      // insertCode = elementCode + "\n" + indent
+      newElementStart = insertPoint;
+    }
+
+    const beforeElement = result.slice(0, newElementStart);
+    const lines = beforeElement.split("\n");
+    const newSourceLocation: SourceLocation = {
+      fileName: location.fileName,
+      line: lines.length,
+      column: lines[lines.length - 1].length,
+    };
+
+    return {
+      success: true,
+      newCode: result,
+      newSourceLocation,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: `Move by offset failed: ${String(error)}`,
+      reorderFailureReason: ReorderFailureReason.UNKNOWN,
+    };
+  }
+}
+
+/**
+ * Lightweight preflight for move-by-offset operations.
+ * Checks if the target position exists without modifying code.
+ */
+export function preflightMoveBySiblingOffset(
+  code: string,
+  location: SourceLocation,
+  offset: number,
+  tagName?: string
+): SwapPreflightResult {
+  // For adjacent moves, use existing preflight
+  if (Math.abs(offset) === 1) {
+    return preflightSwapSiblingAtLocation(
+      code,
+      location,
+      offset === 1 ? "next" : "prev",
+      tagName
+    );
+  }
+
+  try {
+    const ast = parse(code, {
+      sourceType: "module",
+      plugins: ["jsx", "typescript"],
+    });
+
+    let found = findJSXElementAtLocation(ast, location);
+    let correctedLocation: SourceLocation | undefined;
+
+    // Recovery: try finding nearby element by tag name
+    if (!found && tagName) {
+      const nearby = findNearbyElement(ast, location, tagName);
+      if (nearby) {
+        const nearbyLoc = nearby.node.openingElement.loc?.start;
+        if (nearbyLoc) {
+          console.warn(
+            `[writer] Offset preflight recovery: '${tagName}' not at ` +
+            `${location.line}:${location.column}, found nearby at ` +
+            `${nearbyLoc.line}:${nearbyLoc.column}`
+          );
+          found = nearby;
+          correctedLocation = {
+            fileName: location.fileName,
+            line: nearbyLoc.line,
+            column: nearbyLoc.column,
+          };
+        }
+      }
+    }
+
+    if (!found) {
+      return { success: false, reason: ReorderFailureReason.STALE_SOURCE_LOCATION };
+    }
+
+    const parentPath = found.path.parentPath;
+    if (!parentPath) {
+      return { success: false, reason: ReorderFailureReason.NON_REORDERABLE_CONTEXT };
+    }
+
+    // Count siblings and find current index
+    let currentIndex = -1;
+    let siblingCount = 0;
+
+    if (parentPath.isJSXElement() || parentPath.isJSXFragment()) {
+      const children = parentPath.get("children");
+      if (Array.isArray(children)) {
+        for (const child of children) {
+          if (child.isJSXElement()) {
+            if (child.node === found.node) {
+              currentIndex = siblingCount;
+            }
+            siblingCount++;
+          }
+        }
+      }
+    }
+
+    if (currentIndex === -1) {
+      return { success: false, reason: ReorderFailureReason.STALE_SOURCE_LOCATION };
+    }
+
+    const targetIndex = currentIndex + offset;
+    if (targetIndex < 0 || targetIndex >= siblingCount) {
+      return { success: false, reason: ReorderFailureReason.NO_SIBLING_IN_DIRECTION };
+    }
+
+    return { success: true, correctedLocation };
+  } catch {
+    return { success: false, reason: ReorderFailureReason.UNKNOWN };
+  }
+}
+
 export interface SwapPreflightResult {
   success: boolean;
   reason?: ReorderFailureReason;
+  /** If the element was found at a different location than requested, this is the corrected location */
+  correctedLocation?: SourceLocation;
+}
+
+/**
+ * When an element is not found at the expected source location,
+ * search nearby positions for a JSXElement with a matching tag name.
+ */
+function findNearbyElement(
+  ast: t.File,
+  location: SourceLocation,
+  tagName: string,
+  searchRadius: number = 5
+): FoundNode | null {
+  let bestMatch: FoundNode | null = null;
+  let bestDistance = Infinity;
+
+  traverse(ast, {
+    JSXElement(path) {
+      const loc = path.node.openingElement.loc?.start;
+      if (!loc) return;
+
+      const lineDiff = Math.abs(loc.line - location.line);
+      if (lineDiff > searchRadius) return;
+
+      // Tag name must match
+      const opening = path.node.openingElement.name;
+      const elementTagName =
+        opening.type === "JSXIdentifier"
+          ? opening.name
+          : opening.type === "JSXMemberExpression"
+          ? opening.property.name
+          : null;
+
+      if (elementTagName?.toLowerCase() !== tagName.toLowerCase()) return;
+
+      // Prefer closest match (skip exact match — it already failed)
+      const distance = lineDiff * 1000 + Math.abs(loc.column - location.column);
+      if (distance > 0 && distance < bestDistance) {
+        bestDistance = distance;
+        bestMatch = { path, node: path.node };
+      }
+    },
+  });
+
+  return bestMatch;
 }
 
 /**
  * Lightweight preflight for keyboard reordering.
  * This avoids optimistic DOM swaps when AST cannot perform the real swap.
+ * If the element is not found at the stored location, attempts recovery
+ * by searching nearby positions for a matching tag name.
  */
 export function preflightSwapSiblingAtLocation(
   code: string,
   location: SourceLocation,
-  direction: "prev" | "next"
+  direction: "prev" | "next",
+  tagName?: string
 ): SwapPreflightResult {
   try {
     const ast = parse(code, {
@@ -1031,7 +1369,30 @@ export function preflightSwapSiblingAtLocation(
       plugins: ["jsx", "typescript"],
     });
 
-    const found = findJSXElementAtLocation(ast, location);
+    let found = findJSXElementAtLocation(ast, location);
+    let correctedLocation: SourceLocation | undefined;
+
+    // If not found at exact location, try nearby recovery using tag name
+    if (!found && tagName) {
+      const nearby = findNearbyElement(ast, location, tagName);
+      if (nearby) {
+        const nearbyLoc = nearby.node.openingElement.loc?.start;
+        if (nearbyLoc) {
+          console.warn(
+            `[writer] Preflight recovery: '${tagName}' not at ` +
+            `${location.line}:${location.column}, found nearby at ` +
+            `${nearbyLoc.line}:${nearbyLoc.column}`
+          );
+          found = nearby;
+          correctedLocation = {
+            fileName: location.fileName,
+            line: nearbyLoc.line,
+            column: nearbyLoc.column,
+          };
+        }
+      }
+    }
+
     if (!found) {
       return { success: false, reason: ReorderFailureReason.STALE_SOURCE_LOCATION };
     }
@@ -1048,7 +1409,7 @@ export function preflightSwapSiblingAtLocation(
       return { success: false, reason: ReorderFailureReason.NO_SIBLING_IN_DIRECTION };
     }
 
-    return { success: true };
+    return { success: true, correctedLocation };
   } catch {
     return { success: false, reason: ReorderFailureReason.UNKNOWN };
   }

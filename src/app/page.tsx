@@ -14,6 +14,8 @@ import { useCanvasStore } from "@/hooks/useCanvasStore";
 import { useCanvasKeyboard } from "@/hooks/useCanvasKeyboard";
 import { useChatContextStore, type PinnedElement } from "@/hooks/useChatContextStore";
 import { useStrategyStore } from "@/hooks/useStrategyStore";
+import { useProductBrainStore } from "@/hooks/useProductBrainStore";
+import { computeCoverage } from "@/lib/product-brain/coverage";
 import { useFlowNavigation } from "@/hooks/useFlowNavigation";
 import { SandpackWrapper } from "@/components/providers/SandpackWrapper";
 import { InfiniteCanvas, type ViewportState } from "@/components/canvas/InfiniteCanvas";
@@ -27,8 +29,13 @@ import { FlowFrame } from "@/components/flow/FlowFrame";
 import { FlowConnections } from "@/components/flow/FlowConnections";
 import { ManifestoCard } from "@/components/strategy/ManifestoCard";
 import { PersonaCard } from "@/components/strategy/PersonaCard";
+import { JourneyMapCard } from "@/components/strategy/JourneyMapCard";
+import { CoverageCard } from "@/components/strategy/CoverageCard";
+import { IdeaCard } from "@/components/strategy/IdeaCard";
 import { WireframeCard, WIREFRAME_CARD_WIDTH, WIREFRAME_CARD_HEIGHT } from "@/components/strategy/WireframeCard";
 import { StrategyFlowCanvas } from "@/components/strategy/StrategyFlowCanvas";
+import { calculateHorizontalLayout, type GroupId, type GroupConfig, type GroupOrigin } from "@/lib/strategy/section-layout";
+import { calculateStrategyLayout } from "@/lib/strategy/strategy-layout";
 import { initializeTestAPI, updateTestAPI } from "@/lib/ast/test-utils";
 import { PublishDialog } from "@/components/editor/PublishDialog";
 import { Smartphone, GitBranch, Share } from "lucide-react";
@@ -42,14 +49,11 @@ import type { PreviewMode } from "@/lib/tokens";
 type ViewMode = "app" | "design-system";
 
 // Strategy layout defaults (world-space positions)
-const DEFAULT_MANIFESTO_X = 100;
-const DEFAULT_MANIFESTO_Y = 100;
-const MANIFESTO_WIDTH = 600;
+const STRATEGY_ORIGIN = { x: 100, y: 100 };
 const PERSONA_CARD_WIDTH = 320;
-const PERSONA_GAP = 20;
 
 export default function Home() {
-  const { files, writeFile } = useVirtualFiles();
+  const { files, writeFile, getLatestFile } = useVirtualFiles();
 
   // Generate shadow files with data-source-loc attributes for Sandpack
   // Clean files remain pristine for editing in RightPanel
@@ -73,43 +77,227 @@ export default function Home() {
   const personaData = useStrategyStore((s) => s.personaData);
   const streamingPersonas = useStrategyStore((s) => s.streamingPersonas);
   const flowData = useStrategyStore((s) => s.flowData);
+  const journeyMapData = useStrategyStore((s) => s.journeyMapData);
+  const streamingJourneyMaps = useStrategyStore((s) => s.streamingJourneyMaps);
+  const ideaData = useStrategyStore((s) => s.ideaData);
+  const streamingIdeas = useStrategyStore((s) => s.streamingIdeas);
+  const selectedIdeaId = useStrategyStore((s) => s.selectedIdeaId);
   const wireframeData = useStrategyStore((s) => s.wireframeData);
   const streamingWireframes = useStrategyStore((s) => s.streamingWireframes);
+  const activeWireframeData = wireframeData || streamingWireframes;
   const completedPages = useStrategyStore((s) => s.completedPages);
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
+  const currentBuildingPages = useStrategyStore((s) => s.currentBuildingPages);
+
+  // Product Brain state
+  const brainData = useProductBrainStore((s) => s.brainData);
+  const coverageSummary = useMemo(() => {
+    if (!brainData || !manifestoData || !personaData) return null;
+    return computeCoverage(brainData, manifestoData, personaData, journeyMapData ?? []);
+  }, [brainData, manifestoData, personaData, journeyMapData]);
 
   // Compute visible page IDs for progressive FlowFrame rendering
   const visiblePageIds = useMemo(() => {
-    if (strategyPhase !== "building") return undefined; // Show all pages when not building (including wireframe)
+    if (strategyPhase !== "building") return undefined; // Show all pages when not building
     const ids = new Set(completedPages);
     if (currentBuildingPage) ids.add(currentBuildingPage);
+    for (const pid of currentBuildingPages) ids.add(pid);
     return ids;
-  }, [strategyPhase, completedPages, currentBuildingPage]);
+  }, [strategyPhase, completedPages, currentBuildingPage, currentBuildingPages]);
 
   // State for auto-centering viewport on newly built pages
   const [centerOnPageId, setCenterOnPageId] = useState<string | null>(null);
 
-  // Draggable overview card position (world-space)
-  const [manifestoPos, setManifestoPos] = useState({ x: DEFAULT_MANIFESTO_X, y: DEFAULT_MANIFESTO_Y });
-  // Persona card positions (world-space, to the right of manifesto)
-  const defaultPersonaX = DEFAULT_MANIFESTO_X + MANIFESTO_WIDTH + 40;
-  const [personaPositions, setPersonaPositions] = useState([
-    { x: defaultPersonaX, y: DEFAULT_MANIFESTO_Y },
-    { x: defaultPersonaX + PERSONA_CARD_WIDTH + PERSONA_GAP, y: DEFAULT_MANIFESTO_Y },
-  ]);
-  // Active wireframe data (streaming or final)
-  const activeWireframeData = wireframeData || streamingWireframes;
-
-  // Wireframe card positions (world-space, below strategy flow)
-  const WIREFRAME_GAP = 20;
-  const [wireframePositions, setWireframePositions] = useState<{ x: number; y: number }[]>([]);
+  // --- Horizontal group layout state ---
+  // Group origin positions (top-left of each group in world-space).
+  // Set once when a group first becomes visible, then preserved if user drags cards.
+  const [groupPositions, setGroupPositions] = useState<Map<GroupId, { x: number; y: number }>>(
+    () => new Map()
+  );
+  // Cached layout rects (for viewport animations)
+  const [groupRects, setGroupRects] = useState<GroupOrigin[]>([]);
 
   // Y offset to push FlowFrames below strategy content during building
   const [flowLayoutOffset, setFlowLayoutOffset] = useState({ x: 0, y: 0 });
-  // Derived flow offset — always to the right of the overview card (accounting for persona cards)
-  const personasRightEdge = personaPositions[1].x + PERSONA_CARD_WIDTH;
-  const strategyFlowOffsetX = Math.max(manifestoPos.x + MANIFESTO_WIDTH + 60, personasRightEdge + 40);
-  const strategyFlowOffsetY = manifestoPos.y;
+
+  // --- Build group configs from current strategy data ---
+  const buildGroupConfigs = useCallback((): GroupConfig[] => {
+    const configs: GroupConfig[] = [];
+
+    configs.push({
+      id: "product-overview",
+      width: 600,
+      height: 450,
+      visible: !!(manifestoData || streamingOverview),
+    });
+
+    const personaCount = (personaData || streamingPersonas)?.length ?? 0;
+    configs.push({
+      id: "personas",
+      width: personaCount > 0 ? personaCount * (PERSONA_CARD_WIDTH + 20) - 20 : 0,
+      height: 420,
+      visible: personaCount > 0,
+    });
+
+    const journeyCount = (journeyMapData || streamingJourneyMaps)?.length ?? 0;
+    configs.push({
+      id: "journey-maps",
+      width: 900,
+      height: journeyCount > 0 ? journeyCount * 550 - 30 : 0,
+      visible: journeyCount > 0,
+    });
+
+    const ideaCount = (ideaData || streamingIdeas)?.length ?? 0;
+    const ideaRows = Math.ceil(ideaCount / 4);
+    configs.push({
+      id: "ideas",
+      width: ideaCount > 0 ? Math.min(ideaCount, 4) * IDEA_CARD_COL_WIDTH - 20 : 0,
+      height: ideaCount > 0 ? ideaRows * IDEA_CARD_ESTIMATED_HEIGHT + (ideaRows - 1) * IDEA_CARD_ROW_GAP : 0,
+      visible: ideaCount > 0,
+    });
+
+    if (flowData) {
+      const layout = calculateStrategyLayout(flowData.nodes, flowData.connections);
+      configs.push({ id: "architecture", width: layout.width, height: layout.height, visible: true });
+    } else {
+      configs.push({ id: "architecture", width: 0, height: 0, visible: false });
+    }
+
+    // Wireframes group (below architecture)
+    const wireframePageCount = activeWireframeData?.pages?.length ?? 0;
+    const WIREFRAME_HEADER = 36;
+    configs.push({
+      id: "wireframes",
+      width: wireframePageCount > 0 ? Math.min(wireframePageCount, 3) * (WIREFRAME_CARD_WIDTH + 40) - 40 : 0,
+      height: wireframePageCount > 0 ? Math.ceil(wireframePageCount / 3) * (WIREFRAME_CARD_HEIGHT + WIREFRAME_HEADER + 40) - 40 : 0,
+      visible: wireframePageCount > 0,
+    });
+
+    return configs;
+  }, [manifestoData, streamingOverview, personaData, streamingPersonas, journeyMapData, streamingJourneyMaps, ideaData, streamingIdeas, flowData, activeWireframeData]);
+
+  // --- Layout effect: compute horizontal group origins when groups appear ---
+  useEffect(() => {
+    const configs = buildGroupConfigs();
+    const origins = calculateHorizontalLayout(configs, STRATEGY_ORIGIN);
+    if (origins.length === 0) return;
+
+    setGroupRects(origins);
+    setGroupPositions((prev) => {
+      const next = new Map(prev);
+      let changed = false;
+      for (const o of origins) {
+        if (!next.has(o.id)) {
+          next.set(o.id, { x: o.x, y: o.y });
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [buildGroupConfigs]);
+
+  // Helper: get effective position for a group (user-dragged or computed)
+  const getGroupOrigin = useCallback((id: GroupId) => {
+    return groupPositions.get(id) ?? groupRects.find((r) => r.id === id) ?? null;
+  }, [groupPositions, groupRects]);
+
+  // --- Per-card positions for individually draggable cards ---
+  const [personaPositions, setPersonaPositions] = useState<{ x: number; y: number }[]>([]);
+  const [journeyMapPositions, setJourneyMapPositions] = useState<{ x: number; y: number }[]>([]);
+  const [ideaPositions, setIdeaPositions] = useState<{ x: number; y: number }[]>([]);
+  const [wireframePositions, setWireframePositions] = useState<{ x: number; y: number }[]>([]);
+  const [coverageCardPos, setCoverageCardPos] = useState<{ x: number; y: number } | null>(null);
+
+  // Estimated height per journey map card (accounts for table with 5+ rows)
+  const JOURNEY_CARD_ESTIMATED_HEIGHT = 520;
+  const JOURNEY_CARD_GAP = 30;
+
+  // Estimated height per idea card row (cards have illustrations + title + description + features + pros/cons)
+  const IDEA_CARD_ESTIMATED_HEIGHT = 620;
+  const IDEA_CARD_COL_WIDTH = 320;
+  const IDEA_CARD_ROW_GAP = 40;
+
+  // Initialize persona positions from group origin when persona count changes
+  useEffect(() => {
+    const count = (personaData || streamingPersonas)?.length ?? 0;
+    if (count === 0) return;
+    const g = getGroupOrigin("personas");
+    if (!g) return;
+
+    setPersonaPositions((prev) => {
+      if (prev.length === count) return prev;
+      return Array.from({ length: count }, (_, i) =>
+        prev[i] ?? { x: g.x + i * (PERSONA_CARD_WIDTH + 20), y: g.y }
+      );
+    });
+  }, [(personaData || streamingPersonas)?.length, getGroupOrigin]);
+
+  // Initialize journey map positions from group origin when count changes
+  useEffect(() => {
+    const count = (journeyMapData || streamingJourneyMaps)?.length ?? 0;
+    if (count === 0) return;
+    const g = getGroupOrigin("journey-maps");
+    if (!g) return;
+
+    setJourneyMapPositions((prev) => {
+      if (prev.length === count) return prev;
+      return Array.from({ length: count }, (_, i) =>
+        prev[i] ?? { x: g.x, y: g.y + i * (JOURNEY_CARD_ESTIMATED_HEIGHT + JOURNEY_CARD_GAP) }
+      );
+    });
+  }, [(journeyMapData || streamingJourneyMaps)?.length, getGroupOrigin]);
+
+  // Initialize idea positions from group origin when count changes (2x4 grid layout)
+  useEffect(() => {
+    const count = (ideaData || streamingIdeas)?.length ?? 0;
+    if (count === 0) return;
+    const g = getGroupOrigin("ideas");
+    if (!g) return;
+
+    setIdeaPositions((prev) => {
+      if (prev.length === count) return prev;
+      return Array.from({ length: count }, (_, i) =>
+        prev[i] ?? {
+          x: g.x + (i % 4) * IDEA_CARD_COL_WIDTH,
+          y: g.y + Math.floor(i / 4) * (IDEA_CARD_ESTIMATED_HEIGHT + IDEA_CARD_ROW_GAP),
+        }
+      );
+    });
+  }, [(ideaData || streamingIdeas)?.length, getGroupOrigin]);
+
+  // Initialize wireframe positions from group origin when count changes (3-column grid)
+  const WIREFRAME_HEADER_HEIGHT = 36;
+  const WIREFRAME_COL_GAP = 40;
+  useEffect(() => {
+    const count = activeWireframeData?.pages?.length ?? 0;
+    if (count === 0) return;
+    const g = getGroupOrigin("wireframes");
+    if (!g) return;
+
+    setWireframePositions((prev) => {
+      if (prev.length === count) return prev;
+      return Array.from({ length: count }, (_, i) =>
+        prev[i] ?? {
+          x: g.x + (i % 3) * (WIREFRAME_CARD_WIDTH + WIREFRAME_COL_GAP),
+          y: g.y + Math.floor(i / 3) * (WIREFRAME_CARD_HEIGHT + WIREFRAME_HEADER_HEIGHT + WIREFRAME_COL_GAP),
+        }
+      );
+    });
+  }, [activeWireframeData?.pages?.length, getGroupOrigin]);
+
+  // Initialize product brain from VFS on mount
+  useEffect(() => {
+    const brainJson = files["/product-brain.json"];
+    if (brainJson && !useProductBrainStore.getState().brainData) {
+      try {
+        const parsed = JSON.parse(brainJson);
+        if (parsed.version === 1 && Array.isArray(parsed.pages)) {
+          useProductBrainStore.getState().setBrainData(parsed);
+        }
+      } catch { /* ignore malformed brain data */ }
+    }
+  }, [files]);
+
   // Floating chat state (rect managed here for animation control)
   const [chatMode, setChatMode] = useState<"docked" | "floating">("floating");
   const [floatingRect, setFloatingRect] = useState({ x: 0, y: 0, width: 630, height: 720 });
@@ -343,7 +531,7 @@ export default function Home() {
     isExpanded: isFrameExpanded,
     manifest: flowManifest,
     nodePositions,
-    viewport,
+    viewportRef,
     onViewportChange: setViewport,
     containerDimensions,
   });
@@ -525,6 +713,9 @@ export default function Home() {
     return flowFrameStates.filter((s) => visiblePageIds.has(s.pageId));
   }, [flowFrameStates, visiblePageIds]);
 
+  // --- Materialization refresh signals (per-page counter to force iframe refresh after drop) ---
+  const [materializeRefreshMap, setMaterializeRefreshMap] = useState<Map<string, number>>(() => new Map());
+
   // --- Active frame state for CanvasOverlay (prototype mode drop detection) ---
   const activeFrameState: FrameState | undefined = useMemo(() => {
     if (!activePageId) return undefined;
@@ -532,12 +723,6 @@ export default function Home() {
     if (!pos) return undefined;
     return { x: pos.x, y: pos.y, width: pos.width, height: pos.height };
   }, [activePageId, nodePositions]);
-
-  // --- Strategy flow offset derived from manifesto position ---
-  const manifestoX = manifestoPos.x;
-  const manifestoY = manifestoPos.y;
-  const buildingFlowOffsetX = manifestoX + 660;
-  const buildingFlowOffsetY = manifestoY;
 
   // Handle component selection from dialog
   const handleComponentSelect = useCallback((componentType: string, defaultWidth: number, defaultHeight: number) => {
@@ -572,6 +757,19 @@ export default function Home() {
       if (result.success) {
         canvasStore.removeNode(node.id);
         console.log("[Materializer] Node materialized successfully:", node.type, "→ page:", targetPageId);
+
+        // Safety net: schedule a forced refresh on the target FlowFrame after 600ms
+        // This guarantees the iframe updates even if HMR and SandpackFileSync fallback both fail
+        const refreshPageId = result.targetPageId ?? targetPageId;
+        if (refreshPageId) {
+          setTimeout(() => {
+            setMaterializeRefreshMap((prev) => {
+              const next = new Map(prev);
+              next.set(refreshPageId, (prev.get(refreshPageId) ?? 0) + 1);
+              return next;
+            });
+          }, 600);
+        }
       } else {
         console.error("[Materializer] Failed to materialize node:", result.error);
       }
@@ -710,196 +908,74 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Mount only
 
-  // Animate viewport when overview starts appearing (streaming or final) + slide floating chat beside it
-  const hasAnimatedToOverview = useRef(false);
+  // --- Unified viewport animation: fit all visible groups + floating chat ---
+  const prevVisibleGroupsRef = useRef<string>("");
   useEffect(() => {
-    const showOverview = manifestoData || streamingOverview;
-    if (strategyPhase === "manifesto" && showOverview && !hasAnimatedToOverview.current) {
-      hasAnimatedToOverview.current = true;
+    const visibleIds = Array.from(groupPositions.keys()).sort().join(",");
+    if (visibleIds === prevVisibleGroupsRef.current || visibleIds === "") return;
+    prevVisibleGroupsRef.current = visibleIds;
 
-      const overviewWidth = 600;
-      const chatWidth = 630;
-      const chatHeight = 720;
-      const gap = 20;
-      const combinedWidth = overviewWidth + gap + chatWidth;
-
-      const screenW = window.innerWidth;
-      const screenH = window.innerHeight;
-
-      const targetViewport = {
-        x: (screenW - combinedWidth) / 2 - manifestoPos.x,
-        y: (screenH - chatHeight) / 2 - manifestoPos.y,
-        scale: 1,
-      };
-      animateViewport(viewport, targetViewport, setViewport, { duration: 400 });
-
-      const chatScreenX = (screenW - combinedWidth) / 2 + overviewWidth + gap;
-      const chatScreenY = (screenH - chatHeight) / 2;
-
-      setFloatingAnimate(true);
-      setFloatingRect((prev) => ({
-        ...prev,
-        x: chatScreenX,
-        y: chatScreenY,
-      }));
-      const timer = setTimeout(() => setFloatingAnimate(false), 500);
-      return () => clearTimeout(timer);
+    // Build world-space rects from group positions + computed dimensions
+    const rects: { x: number; y: number; width: number; height: number }[] = [];
+    for (const gr of groupRects) {
+      const pos = groupPositions.get(gr.id);
+      if (pos) {
+        rects.push({ x: pos.x, y: pos.y, width: gr.width, height: gr.height });
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manifestoData !== null || streamingOverview !== null, strategyPhase === "manifesto"]);
+    if (rects.length === 0) return;
 
-  // Animate viewport when personas appear + slide floating chat beside them
-  const hasAnimatedToPersonas = useRef(false);
-  useEffect(() => {
-    const showPersonas = personaData || streamingPersonas;
-    if (strategyPhase === "persona" && showPersonas && !hasAnimatedToPersonas.current) {
-      hasAnimatedToPersonas.current = true;
+    const screenW = window.innerWidth;
+    const screenH = window.innerHeight;
+    const chatWidth = 630;
+    const chatHeight = 720;
+    const gap = 20;
 
-      const chatWidth = 630;
-      const chatHeight = 720;
-      const gap = 20;
-
-      // Total world width: manifesto + gap + two persona cards
-      const personasWorldRight = personaPositions[1].x + PERSONA_CARD_WIDTH;
-      const totalWorldWidth = personasWorldRight - manifestoPos.x;
+    if (chatMode === "floating") {
+      const worldLeft = Math.min(...rects.map((r) => r.x));
+      const worldRight = Math.max(...rects.map((r) => r.x + r.width));
+      const worldTop = Math.min(...rects.map((r) => r.y));
+      const worldBottom = Math.max(...rects.map((r) => r.y + r.height));
+      const totalWorldWidth = worldRight - worldLeft;
+      const totalWorldHeight = worldBottom - worldTop;
       const combinedWidth = totalWorldWidth + gap + chatWidth;
 
-      const screenW = window.innerWidth;
-      const screenH = window.innerHeight;
-
-      const scale = Math.min(1, (screenW - 80) / combinedWidth);
+      const scaleX = (screenW - 80) / combinedWidth;
+      const scaleY = (screenH - 80) / totalWorldHeight;
+      const scale = Math.min(1, scaleX, scaleY);
 
       const targetViewport = {
-        x: (screenW - combinedWidth * scale) / 2 - manifestoPos.x * scale,
-        y: (screenH - chatHeight) / 2 - manifestoPos.y * scale,
+        x: (screenW - combinedWidth * scale) / 2 - worldLeft * scale,
+        y: (screenH - totalWorldHeight * scale) / 2 - worldTop * scale,
         scale,
       };
-      animateViewport(viewport, targetViewport, setViewport, { duration: 400 });
+      animateViewport(viewportRef.current, targetViewport, setViewport, { duration: 400 });
 
       const chatScreenX = (screenW - combinedWidth * scale) / 2 + totalWorldWidth * scale + gap;
       const chatScreenY = (screenH - chatHeight) / 2;
 
       setFloatingAnimate(true);
-      setFloatingRect((prev) => ({
-        ...prev,
-        x: chatScreenX,
-        y: chatScreenY,
-      }));
+      setFloatingRect((prev) => ({ ...prev, x: chatScreenX, y: chatScreenY }));
       const timer = setTimeout(() => setFloatingAnimate(false), 500);
       return () => clearTimeout(timer);
+    } else {
+      const target = calculateFitAllViewport(rects, screenW, screenH);
+      animateViewport(viewportRef.current, target, setViewport, { duration: 400 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [personaData !== null || streamingPersonas !== null, strategyPhase === "persona"]);
+  }, [groupPositions, groupRects, chatMode]);
 
-  // Animate viewport when strategy flow appears + slide floating chat beside flow
-  useEffect(() => {
-    if (strategyPhase === "flow" && flowData) {
-      const nodeCount = flowData.nodes.length;
-      const estimatedFlowWidth = Math.max(520, nodeCount * 260);
-      const estimatedFlowHeight = Math.max(200, Math.ceil(nodeCount / 3) * 180);
-      const chatWidth = 630;
-      const chatHeight = 720;
-      const gap = 20;
+  const handlePhaseAction = useCallback((action: "approve-problem-overview" | "approve-ideation" | "approve-solution-design") => {
+    if (action === "approve-problem-overview") {
+      useStrategyStore.getState().setPhase("ideation");
+      // Chat stays floating during ideation
+    } else if (action === "approve-ideation") {
+      useStrategyStore.getState().setPhase("solution-design");
 
-      const totalWorldWidth = (strategyFlowOffsetX - manifestoPos.x) + estimatedFlowWidth;
-      const combinedWidth = totalWorldWidth + gap + chatWidth;
-
-      const screenW = window.innerWidth;
-      const screenH = window.innerHeight;
-
-      const scale = Math.min(1, (screenW - 80) / combinedWidth);
-
-      const contentHeight = Math.max(estimatedFlowHeight, chatHeight / scale);
-      const targetViewport = {
-        x: (screenW - combinedWidth * scale) / 2 - manifestoPos.x * scale,
-        y: (screenH - contentHeight * scale) / 2 - manifestoPos.y * scale,
-        scale,
-      };
-      animateViewport(viewport, targetViewport, setViewport, { duration: 400 });
-
-      const flowScreenRight =
-        (strategyFlowOffsetX + estimatedFlowWidth) * scale + targetViewport.x + gap;
-      const chatScreenY = (screenH - chatHeight) / 2;
-
-      setFloatingAnimate(true);
-      setFloatingRect((prev) => ({
-        ...prev,
-        x: flowScreenRight,
-        y: chatScreenY,
-      }));
-      const timer = setTimeout(() => setFloatingAnimate(false), 500);
-      return () => clearTimeout(timer);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flowData !== null && strategyPhase === "flow"]);
-
-  // Incrementally position wireframe cards as they stream in
-  useEffect(() => {
-    if (strategyPhase !== "wireframe" || !activeWireframeData) return;
-
-    const pageCount = activeWireframeData.pages.length;
-    const startX = strategyFlowOffsetX;
-    const startY = strategyFlowOffsetY + 300; // below strategy flow
-
-    setWireframePositions((prev) => {
-      if (prev.length >= pageCount) return prev;
-      const positions = [...prev];
-      for (let i = prev.length; i < pageCount; i++) {
-        positions.push({
-          x: startX + i * (WIREFRAME_CARD_WIDTH + WIREFRAME_GAP),
-          y: startY,
-        });
-      }
-      return positions;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWireframeData?.pages.length, strategyPhase]);
-
-  // Animate viewport on first wireframe appearance (streaming or final)
-  const hasAnimatedToWireframes = useRef(false);
-  useEffect(() => {
-    if (strategyPhase !== "wireframe" || !activeWireframeData || hasAnimatedToWireframes.current) return;
-    hasAnimatedToWireframes.current = true;
-
-    const startX = strategyFlowOffsetX;
-    const startY = strategyFlowOffsetY + 300;
-    const cardTotalHeight = WIREFRAME_CARD_HEIGHT + 36;
-    // Estimate width for the number of pages we expect (at least what we have so far)
-    const estWidth = Math.max(1, activeWireframeData.pages.length) * WIREFRAME_CARD_WIDTH
-      + Math.max(0, activeWireframeData.pages.length - 1) * WIREFRAME_GAP;
-    const rects = [
-      { x: manifestoPos.x, y: manifestoPos.y, width: MANIFESTO_WIDTH, height: 400 },
-      { x: startX, y: startY, width: estWidth, height: cardTotalHeight },
-    ];
-    const target = calculateFitAllViewport(rects, containerDimensions.width, containerDimensions.height);
-    animateViewport(viewportRef.current, target, setViewport, { duration: 400 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWireframeData !== null && strategyPhase === "wireframe"]);
-
-  // Final fit-all animation when all wireframes are complete
-  useEffect(() => {
-    if (strategyPhase !== "wireframe" || !wireframeData) return;
-
-    const pageCount = wireframeData.pages.length;
-    const startX = strategyFlowOffsetX;
-    const startY = strategyFlowOffsetY + 300;
-    const totalWidth = pageCount * WIREFRAME_CARD_WIDTH + (pageCount - 1) * WIREFRAME_GAP;
-    const cardTotalHeight = WIREFRAME_CARD_HEIGHT + 36;
-    const rects = [
-      { x: manifestoPos.x, y: manifestoPos.y, width: MANIFESTO_WIDTH, height: 400 },
-      { x: startX, y: startY, width: totalWidth, height: cardTotalHeight },
-    ];
-    const target = calculateFitAllViewport(rects, containerDimensions.width, containerDimensions.height);
-    animateViewport(viewportRef.current, target, setViewport, { duration: 400 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wireframeData !== null && strategyPhase === "wireframe"]);
-
-  const handlePhaseAction = useCallback((action: "approve-manifesto" | "approve-persona" | "approve-flow" | "approve-wireframe") => {
-    if (action === "approve-manifesto") {
-      useStrategyStore.getState().setPhase("persona");
-    } else if (action === "approve-persona") {
-      useStrategyStore.getState().setPhase("flow");
-    } else if (action === "approve-flow") {
+      // Dock the chat panel to the sidebar for solution-design phase
+      setChatMode("docked");
+    } else if (action === "approve-solution-design") {
+      // Write /flow.json from the approved flow data
       const currentFlowData = useStrategyStore.getState().flowData;
       if (currentFlowData) {
         const pageNodes = currentFlowData.nodes.filter((n) => n.type === "page");
@@ -925,60 +1001,47 @@ export default function Home() {
         writeFile("/flow.json", JSON.stringify(flowJson, null, 2));
       }
 
-      // Transition to wireframe phase (not building)
-      useStrategyStore.getState().setPhase("wireframe");
+      // Compute flow layout offset so FlowFrames appear below strategy content (including wireframes)
+      const strategyBottomForOffset = Math.max(
+        ...Array.from(groupPositions.entries()).map(([id, pos]) => {
+          const rect = groupRects.find((r) => r.id === id);
+          return pos.y + (rect?.height ?? 0);
+        }),
+        STRATEGY_ORIGIN.y + 500,
+      );
+      const overviewPosForOffset = groupPositions.get("product-overview") ?? STRATEGY_ORIGIN;
+      const flowYOffset = strategyBottomForOffset + 120;
+      setFlowLayoutOffset({ x: overviewPosForOffset.x - 50, y: flowYOffset - 50 });
 
-      // Dock the chat panel to the sidebar for wireframe phase
-      setChatMode("docked");
-    } else if (action === "approve-wireframe") {
-      // Wireframe data is already in the store (set by ChatTab's JSON extraction)
-      // ChatTab will serialize it as text context when sending the first build message
+      // Transition to building phase
       useStrategyStore.getState().setPhase("building");
 
-      // Step 1: Compute strategyBottom dynamically from all strategy elements
+      // Snapshot current node positions as architecture reference
+      // (positions already include flowLayoutOffset from approve-ideation)
+      architecturePositionsRef.current = new Map(nodePositionsRef.current);
+
+      // Animate viewport to show strategy content + first FlowFrame area
+      const overviewPos = groupPositions.get("product-overview") ?? STRATEGY_ORIGIN;
       const strategyBottom = Math.max(
-        manifestoPos.y + 500,
-        ...personaPositions.map(p => p.y + 500),
-        strategyFlowOffsetY + 400,
-        ...(wireframePositions.length > 0
-          ? wireframePositions.map(p => p.y + WIREFRAME_CARD_HEIGHT + 36)
-          : [0]),
+        ...Array.from(groupPositions.entries()).map(([id, pos]) => {
+          const rect = groupRects.find((r) => r.id === id);
+          return pos.y + (rect?.height ?? 0);
+        }),
+        STRATEGY_ORIGIN.y + 500,
       );
-
-      const flowYOffset = strategyBottom + 120;
-      const offsetX = manifestoPos.x - 50;
-      const offsetY = flowYOffset - 50;
-      setFlowLayoutOffset({ x: offsetX, y: offsetY });
-
-      // Step 2: Apply offset to ALL existing node positions
-      // The layout effect skips nodes already in nodePositions, so we must
-      // offset them directly here.
-      const offsetPositions = new Map<string, FlowNodePosition>();
-      for (const [id, pos] of nodePositionsRef.current) {
-        offsetPositions.set(id, {
-          ...pos,
-          x: pos.x + offsetX,
-          y: pos.y + offsetY,
-        });
-      }
-      setNodePositions(offsetPositions);
-
-      // Step 3: Eagerly set the architecture snapshot so that subsequent pages
-      // added during building get correctly-offset positions from this snapshot.
-      // The existing effect's `!architecturePositionsRef.current` guard prevents overwrite.
-      architecturePositionsRef.current = offsetPositions;
-
-      // Step 4: Animate viewport to show strategy content + first FlowFrame area
       requestAnimationFrame(() => {
+        const firstNodePos = nodePositionsRef.current.values().next().value;
+        const flowFrameY = firstNodePos?.y ?? (strategyBottom + 120);
+        const flowFrameX = firstNodePos?.x ?? (overviewPos.x - 50);
         const rects = [
-          { x: manifestoPos.x, y: manifestoPos.y, width: MANIFESTO_WIDTH, height: strategyBottom - manifestoPos.y },
-          { x: offsetX, y: flowYOffset, width: DEFAULT_FRAME_WIDTH, height: DEFAULT_FRAME_HEIGHT },
+          { x: overviewPos.x, y: overviewPos.y, width: 600, height: strategyBottom - overviewPos.y },
+          { x: flowFrameX, y: flowFrameY, width: DEFAULT_FRAME_WIDTH, height: DEFAULT_FRAME_HEIGHT },
         ];
         const target = calculateFitAllViewport(rects, containerDimensions.width, containerDimensions.height);
         animateViewport(viewportRef.current, target, setViewport, { duration: 500 });
       });
     }
-  }, [writeFile, setViewport, manifestoPos, containerDimensions, wireframePositions, personaPositions, strategyFlowOffsetY, setNodePositions]);
+  }, [writeFile, setViewport, containerDimensions, groupPositions, groupRects]);
 
   // Handle "Approve & Build Next Page" — animate viewport to the next page's FlowFrame
   const handleApproveAndBuildNext = useCallback((nextPageId: string) => {
@@ -1002,7 +1065,7 @@ export default function Home() {
   }, []);
 
   // Determine if we're in an early strategy phase (no Sandpack needed)
-  const isEarlyStrategyPhase = strategyPhase === "hero" || strategyPhase === "manifesto" || strategyPhase === "persona" || strategyPhase === "flow" || strategyPhase === "wireframe";
+  const isEarlyStrategyPhase = strategyPhase === "hero" || strategyPhase === "problem-overview" || strategyPhase === "ideation" || strategyPhase === "solution-design";
   // Hide RightPanel during hero phase, and during early strategy phases when chat is floating (no Design tab)
   const showRightPanel = strategyPhase !== "hero" && !(isEarlyStrategyPhase && chatMode === "floating");
   const showNav = strategyPhase !== "hero";
@@ -1046,10 +1109,9 @@ export default function Home() {
             {isEarlyStrategyPhase && (
               <div className="flex items-center gap-2">
                 <span className="text-sm text-neutral-500">
-                  {strategyPhase === "manifesto" && "Defining Overview"}
-                  {strategyPhase === "persona" && "Defining Personas"}
-                  {strategyPhase === "flow" && "Designing Architecture"}
-                  {strategyPhase === "wireframe" && "Creating Wireframes"}
+                  {strategyPhase === "problem-overview" && "Defining Problem"}
+                  {strategyPhase === "ideation" && "Exploring Ideas"}
+                  {strategyPhase === "solution-design" && "Designing Solution"}
                 </span>
               </div>
             )}
@@ -1109,51 +1171,152 @@ export default function Home() {
             onCanvasClick={() => canvasStore.deselectAll()}
             hideChrome={isFrameExpanded}
           >
-            {/* Strategy artifacts — always visible once created */}
-            {(manifestoData || streamingOverview) && (
-              <ManifestoCard
-                manifestoData={manifestoData || streamingOverview!}
-                x={manifestoPos.x}
-                y={manifestoPos.y}
-                onMove={(nx, ny) => setManifestoPos({ x: nx, y: ny })}
-              />
-            )}
-            {(personaData || streamingPersonas) && (personaData || streamingPersonas)!.map((persona, index) => (
-              <PersonaCard
-                key={index}
-                persona={persona}
-                x={personaPositions[index]?.x ?? defaultPersonaX + index * (PERSONA_CARD_WIDTH + PERSONA_GAP)}
-                y={personaPositions[index]?.y ?? DEFAULT_MANIFESTO_Y}
-                index={index}
-                onMove={(nx, ny) => setPersonaPositions((prev) => {
-                  const updated = [...prev];
-                  updated[index] = { x: nx, y: ny };
-                  return updated;
-                })}
-              />
-            ))}
-            {flowData && (
-              <StrategyFlowCanvas
-                flowData={flowData}
-                offsetX={isEarlyStrategyPhase ? strategyFlowOffsetX : buildingFlowOffsetX}
-                offsetY={isEarlyStrategyPhase ? strategyFlowOffsetY : buildingFlowOffsetY}
-              />
-            )}
+            {/* Strategy artifacts — placed directly on canvas, left to right */}
+            {(manifestoData || streamingOverview) && (() => {
+              const g = getGroupOrigin("product-overview");
+              if (!g) return null;
+              return (
+                <ManifestoCard
+                  manifestoData={manifestoData || streamingOverview!}
+                  x={g.x}
+                  y={g.y}
+                  onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("product-overview", { x: nx, y: ny }))}
+                  jtbdCoverage={coverageSummary?.jtbdCoverage}
+                />
+              );
+            })()}
 
-            {/* Wireframe Cards — rendered during wireframe phase (streaming or final) */}
-            {activeWireframeData && wireframePositions.length > 0 && activeWireframeData.pages.map((page, index) => (
-              <WireframeCard
-                key={page.id}
-                page={page}
-                x={wireframePositions[index]?.x ?? 0}
-                y={wireframePositions[index]?.y ?? 0}
-                onMove={(nx, ny) => setWireframePositions((prev) => {
-                  const updated = [...prev];
-                  updated[index] = { x: nx, y: ny };
-                  return updated;
-                })}
-              />
-            ))}
+            {(personaData || streamingPersonas) && (personaData || streamingPersonas)!.map((persona, index) => {
+              const g = getGroupOrigin("personas");
+              if (!g) return null;
+              const pos = personaPositions[index];
+              return (
+                <PersonaCard
+                  key={index}
+                  persona={persona}
+                  x={pos?.x ?? g.x + index * (PERSONA_CARD_WIDTH + 20)}
+                  y={pos?.y ?? g.y}
+                  index={index}
+                  onMove={(nx, ny) => setPersonaPositions((prev) => {
+                    const updated = [...prev];
+                    updated[index] = { x: nx, y: ny };
+                    return updated;
+                  })}
+                  coveragePercent={coverageSummary?.personaCoverage.find(
+                    (p) => p.personaName === (persona as { name?: string }).name
+                  )?.coveragePercent}
+                />
+              );
+            })}
+
+            {(journeyMapData || streamingJourneyMaps) && (journeyMapData || streamingJourneyMaps)!.map((map, index) => {
+              const g = getGroupOrigin("journey-maps");
+              if (!g) return null;
+              const pos = journeyMapPositions[index];
+              return (
+                <JourneyMapCard
+                  key={index}
+                  journeyMap={map}
+                  x={pos?.x ?? g.x}
+                  y={pos?.y ?? g.y + index * (JOURNEY_CARD_ESTIMATED_HEIGHT + JOURNEY_CARD_GAP)}
+                  index={index}
+                  onMove={(nx, ny) => setJourneyMapPositions((prev) => {
+                    const updated = [...prev];
+                    updated[index] = { x: nx, y: ny };
+                    return updated;
+                  })}
+                  coveredStageIndices={
+                    coverageSummary
+                      ? new Set(
+                          coverageSummary.journeyStageCoverage
+                            .filter((c) => c.personaName === (map as { personaName?: string }).personaName && c.covered)
+                            .map((c) => c.stageIndex)
+                        )
+                      : undefined
+                  }
+                />
+              );
+            })}
+
+            {(ideaData || streamingIdeas) && (ideaData || streamingIdeas)!.map((idea, index) => {
+              const g = getGroupOrigin("ideas");
+              if (!g) return null;
+              const pos = ideaPositions[index];
+              return (
+                <IdeaCard
+                  key={idea.id ?? index}
+                  idea={idea}
+                  x={pos?.x ?? g.x + (index % 4) * IDEA_CARD_COL_WIDTH}
+                  y={pos?.y ?? g.y + Math.floor(index / 4) * (IDEA_CARD_ESTIMATED_HEIGHT + IDEA_CARD_ROW_GAP)}
+                  index={index}
+                  isSelected={idea.id === selectedIdeaId}
+                  onClick={() => {
+                    if (idea.id) {
+                      useStrategyStore.getState().setSelectedIdeaId(
+                        idea.id === selectedIdeaId ? null : idea.id
+                      );
+                    }
+                  }}
+                  onMove={(nx, ny) => setIdeaPositions((prev) => {
+                    const updated = [...prev];
+                    updated[index] = { x: nx, y: ny };
+                    return updated;
+                  })}
+                />
+              );
+            })}
+
+            {flowData && (() => {
+              const g = getGroupOrigin("architecture");
+              if (!g) return null;
+              return (
+                <StrategyFlowCanvas
+                  flowData={flowData}
+                  offsetX={g.x}
+                  offsetY={g.y}
+                />
+              );
+            })()}
+
+            {/* Wireframe Cards — visible during solution-design phase */}
+            {activeWireframeData && activeWireframeData.pages.map((page, index) => {
+              const g = getGroupOrigin("wireframes");
+              if (!g) return null;
+              const pos = wireframePositions[index];
+              return (
+                <WireframeCard
+                  key={page.id ?? index}
+                  page={page}
+                  x={pos?.x ?? g.x + (index % 3) * (WIREFRAME_CARD_WIDTH + WIREFRAME_COL_GAP)}
+                  y={pos?.y ?? g.y + Math.floor(index / 3) * (WIREFRAME_CARD_HEIGHT + WIREFRAME_HEADER_HEIGHT + WIREFRAME_COL_GAP)}
+                  onMove={(nx, ny) => setWireframePositions((prev) => {
+                    const updated = [...prev];
+                    updated[index] = { x: nx, y: ny };
+                    return updated;
+                  })}
+                />
+              );
+            })}
+
+            {/* Coverage Card — visible after building phase when brain data exists */}
+            {coverageSummary && (strategyPhase === "building" || strategyPhase === "complete") && (() => {
+              // Position to the right of the manifesto card
+              const manifestoPos = getGroupOrigin("product-overview");
+              const defaultX = (manifestoPos?.x ?? STRATEGY_ORIGIN.x) + 640;
+              const defaultY = manifestoPos?.y ?? STRATEGY_ORIGIN.y;
+              const pos = coverageCardPos ?? { x: defaultX, y: defaultY };
+              return (
+                <CoverageCard
+                  summary={coverageSummary}
+                  x={pos.x}
+                  y={pos.y}
+                  onMove={(nx, ny) => setCoverageCardPos({ x: nx, y: ny })}
+                  onAddressGaps={() => {
+                    setRightPanelTab("chat");
+                  }}
+                />
+              );
+            })()}
 
             {/* FlowConnections — visible when not expanded */}
             {!isEarlyStrategyPhase && connectionOpacity > 0 && (
@@ -1204,6 +1367,7 @@ export default function Home() {
                   animateEntrance={strategyPhase === "building"}
                   isExpanded={isThisFrameExpanded || undefined}
                   forceStreamingOverlay={isThisFrameExpanded || undefined}
+                  refreshSignal={materializeRefreshMap.get(page.id)}
                 />
               );
             })}
@@ -1236,7 +1400,7 @@ export default function Home() {
           <SandpackWrapper
             files={shadowFiles}
             previewMode={tokenState.previewMode}
-            key={`design-system-${cssHash}-${tokenState.previewMode}`}
+            key={`design-system-${cssHash}`}
           >
             <SandpackPreview
               showNavigator={false}
@@ -1276,6 +1440,7 @@ export default function Home() {
           floatingAnimate={floatingAnimate}
           onHeroSubmit={handleHeroSubmit}
           onApproveAndBuildNext={handleApproveAndBuildNext}
+          getLatestFile={getLatestFile}
         />
 
         {/* Token Studio - only shown in design-system mode */}

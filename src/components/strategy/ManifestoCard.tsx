@@ -1,18 +1,20 @@
 "use client";
 
 import { useCallback, useState, type PointerEvent } from "react";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, Circle } from "lucide-react";
 import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
 import type { ManifestoData } from "@/hooks/useStrategyStore";
+import type { JtbdCoverage } from "@/lib/product-brain/types";
 
 interface ManifestoCardProps {
   manifestoData: Partial<ManifestoData>;
   x: number;
   y: number;
   onMove?: (x: number, y: number) => void;
+  jtbdCoverage?: JtbdCoverage[];
 }
 
-export function ManifestoCard({ manifestoData, x, y, onMove }: ManifestoCardProps) {
+export function ManifestoCard({ manifestoData, x, y, onMove, jtbdCoverage }: ManifestoCardProps) {
   const canvasScale = useCanvasScale();
   const [isDragging, setIsDragging] = useState(false);
 
@@ -104,17 +106,24 @@ export function ManifestoCard({ manifestoData, x, y, onMove }: ManifestoCardProp
               What {manifestoData.targetUser || "Users"} Need To Get Done
             </h3>
             <ol className="space-y-3">
-              {manifestoData.jtbd!.map((job, index) => (
-                <li
-                  key={index}
-                  className="flex items-start gap-3"
-                >
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500 mt-0.5 shrink-0" />
-                  <span className="text-base text-neutral-700 leading-relaxed">
-                    {job}
-                  </span>
-                </li>
-              ))}
+              {manifestoData.jtbd!.map((job, index) => {
+                const isAddressed = jtbdCoverage?.[index]?.addressed;
+                return (
+                  <li
+                    key={index}
+                    className="flex items-start gap-3"
+                  >
+                    {isAddressed ? (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-500 fill-emerald-500 mt-0.5 shrink-0 transition-colors duration-500" />
+                    ) : (
+                      <Circle className={`w-5 h-5 mt-0.5 shrink-0 ${jtbdCoverage ? "text-neutral-300" : "text-emerald-500"}`} />
+                    )}
+                    <span className={`text-base leading-relaxed transition-colors duration-500 ${isAddressed ? "text-neutral-400 line-through decoration-neutral-300" : "text-neutral-700"}`}>
+                      {job}
+                    </span>
+                  </li>
+                );
+              })}
             </ol>
           </>
         )}

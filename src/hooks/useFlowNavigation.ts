@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, type RefObject } from "react";
 import { toast } from "sonner";
 import type { FlowManifest, FlowNodePosition } from "@/lib/flow/types";
 import type { ViewportState } from "@/components/canvas/InfiniteCanvas";
@@ -17,8 +17,8 @@ interface UseFlowNavigationOptions {
   manifest: FlowManifest;
   /** Map of node positions by page ID */
   nodePositions: Map<string, FlowNodePosition>;
-  /** Current viewport state */
-  viewport: ViewportState;
+  /** Ref to current viewport state (avoids re-render dependency) */
+  viewportRef: RefObject<ViewportState>;
   /** Callback to update viewport state */
   onViewportChange: React.Dispatch<React.SetStateAction<ViewportState>>;
   /** Container dimensions for centering calculations */
@@ -38,7 +38,7 @@ export function useFlowNavigation({
   isExpanded,
   manifest,
   nodePositions,
-  viewport,
+  viewportRef,
   onViewportChange,
   containerDimensions,
 }: UseFlowNavigationOptions) {
@@ -109,9 +109,9 @@ export function useFlowNavigation({
         containerDimensions.height
       );
 
-      // Animate to target viewport
+      // Animate to target viewport (read from ref to avoid re-render dependency)
       cancelAnimationRef.current = animateViewport(
-        viewport,
+        viewportRef.current,
         targetViewport,
         (interpolatedState) => {
           onViewportChange(interpolatedState);
@@ -123,7 +123,6 @@ export function useFlowNavigation({
       isFlowMode,
       manifest.pages,
       nodePositions,
-      viewport,
       onViewportChange,
       containerDimensions,
     ]

@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useCallback, useRef } from "react";
-import { preflightSwapSiblingAtLocation, swapSiblingAtLocation } from "@/lib/ast/writer";
+import {
+  preflightSwapSiblingAtLocation,
+  swapSiblingAtLocation,
+  preflightMoveBySiblingOffset,
+  moveBySiblingOffsetAtLocation,
+} from "@/lib/ast/writer";
 import { toast } from "sonner";
 import {
   ReorderFailureReason,
@@ -11,67 +16,108 @@ import {
 } from "@/lib/inspection/types";
 
 interface UseKeyboardMoveOptions {
-  files: Record<string, string>;
   writeFile: (path: string, content: string) => void;
   selectedElement: SelectedElement | null;
   /** Called before swap to flush any pending draft changes */
   flushDraft: () => void;
   /** Called to perform optimistic DOM swap in iframe */
   onOptimisticSwap: (selector: string, direction: "prev" | "next") => void;
+  /** Called to perform optimistic DOM move by offset in iframe */
+  onOptimisticMoveByOffset?: (offset: number) => void;
   /** Called to update the source location after a successful swap */
   onSourceLocationUpdate?: (source: SourceLocation) => void;
+  /** Read the latest file content synchronously (includes writes not yet in React state) */
+  getLatestFile: (path: string) => string | undefined;
 }
 
+/** Move instruction for keyboard reordering */
+type MoveInstruction =
+  | { type: "swap"; direction: "prev" | "next" }
+  | { type: "offset"; offset: number };
+
 /**
- * Maps arrow keys to swap directions based on parent layout.
+ * Maps arrow keys to move instructions based on parent layout.
  *
- * | Parent Layout       | Arrow Key | Swap Direction |
- * |---------------------|-----------|----------------|
- * | flex-row            | Left      | prev           |
- * | flex-row            | Right     | next           |
- * | flex-row-reverse    | Left      | next           |
- * | flex-row-reverse    | Right     | prev           |
- * | flex-col / block    | Up        | prev           |
- * | flex-col / block    | Down      | next           |
+ * Flex layouts:
+ * | Parent Layout       | Arrow Key | Action          |
+ * |---------------------|-----------|-----------------|
+ * | flex-row            | Left      | swap prev       |
+ * | flex-row            | Right     | swap next       |
+ * | flex-row-reverse    | Left      | swap next       |
+ * | flex-row-reverse    | Right     | swap prev       |
+ * | flex-col / block    | Up        | swap prev       |
+ * | flex-col / block    | Down      | swap next       |
+ *
+ * Grid layouts:
+ * | Arrow Key | Action                          |
+ * |-----------|---------------------------------|
+ * | Left      | swap prev (adjacent)            |
+ * | Right     | swap next (adjacent)            |
+ * | Up        | offset -numCols (jump row up)   |
+ * | Down      | offset +numCols (jump row down) |
  */
-function getSwapDirection(
+function getMoveInstruction(
   key: string,
   parentLayout: ParentLayoutInfo | undefined
-): { direction: "prev" | "next" | null; reason?: ReorderFailureReason } {
-  if (!parentLayout || parentLayout.layout !== "flex") {
-    return { direction: null, reason: ReorderFailureReason.NON_REORDERABLE_CONTEXT };
+): { instruction: MoveInstruction | null; reason?: ReorderFailureReason } {
+  if (!parentLayout || (parentLayout.layout !== "flex" && parentLayout.layout !== "grid")) {
+    return { instruction: null, reason: ReorderFailureReason.NON_REORDERABLE_CONTEXT };
   }
 
-  const layout = parentLayout?.layout ?? "block";
-  const direction = parentLayout?.direction ?? "column";
-  const isReverse = parentLayout?.isReverse ?? false;
+  // Grid layout
+  if (parentLayout.layout === "grid") {
+    // Block explicitly-placed grids
+    if (parentLayout.hasExplicitPlacement) {
+      return { instruction: null, reason: ReorderFailureReason.NON_REORDERABLE_CONTEXT };
+    }
 
-  // For row layouts (flex-row), use Left/Right arrows
-  if (layout === "flex" && direction === "row") {
     if (key === "ArrowLeft") {
-      return { direction: isReverse ? "next" : "prev" };
+      return { instruction: { type: "swap", direction: "prev" } };
     }
     if (key === "ArrowRight") {
-      return { direction: isReverse ? "prev" : "next" };
+      return { instruction: { type: "swap", direction: "next" } };
     }
-    return { direction: null };
+    if (key === "ArrowUp") {
+      const numCols = parentLayout.numCols ?? 1;
+      return { instruction: { type: "offset", offset: -numCols } };
+    }
+    if (key === "ArrowDown") {
+      const numCols = parentLayout.numCols ?? 1;
+      return { instruction: { type: "offset", offset: numCols } };
+    }
+    return { instruction: null };
   }
 
-  // For column layouts (flex-col, block, grid), use Up/Down arrows
+  // Flex layout
+  const direction = parentLayout.direction ?? "column";
+  const isReverse = parentLayout.isReverse ?? false;
+
+  // For row layouts (flex-row), use Left/Right arrows
+  if (direction === "row") {
+    if (key === "ArrowLeft") {
+      return { instruction: { type: "swap", direction: isReverse ? "next" : "prev" } };
+    }
+    if (key === "ArrowRight") {
+      return { instruction: { type: "swap", direction: isReverse ? "prev" : "next" } };
+    }
+    return { instruction: null };
+  }
+
+  // For column layouts (flex-col), use Up/Down arrows
   if (key === "ArrowUp") {
-    return { direction: isReverse ? "next" : "prev" };
+    return { instruction: { type: "swap", direction: isReverse ? "next" : "prev" } };
   }
   if (key === "ArrowDown") {
-    return { direction: isReverse ? "prev" : "next" };
+    return { instruction: { type: "swap", direction: isReverse ? "prev" : "next" } };
   }
 
-  return { direction: null };
+  return { instruction: null };
 }
 
 function reorderFailureMessage(reason: ReorderFailureReason): string {
   switch (reason) {
     case ReorderFailureReason.NON_REORDERABLE_CONTEXT:
-      return "Reorder works only when the selected element's parent uses flex layout";
+      return "Reorder works only when the selected element's parent uses flex or grid layout";
     case ReorderFailureReason.NO_SIBLING_IN_DIRECTION:
       return "No sibling in that direction";
     case ReorderFailureReason.STALE_SOURCE_LOCATION:
@@ -86,24 +132,49 @@ function reorderFailureMessage(reason: ReorderFailureReason): string {
 /**
  * Hook that enables keyboard reordering of selected elements using arrow keys.
  * Arrow key direction maps to swap direction based on parent's layout.
+ * Supports both flex (adjacent swap) and grid (row-jumping by offset).
  */
 export function useKeyboardMove({
-  files,
   writeFile,
   selectedElement,
   flushDraft,
   onOptimisticSwap,
+  onOptimisticMoveByOffset,
   onSourceLocationUpdate,
+  getLatestFile,
 }: UseKeyboardMoveOptions) {
-  // Refs to always read latest values, avoiding stale closures during rapid key presses
-  const filesRef = useRef(files);
+  // Ref to always read latest selected element, avoiding stale closures during rapid key presses.
   const selectedElementRef = useRef(selectedElement);
 
-  useEffect(() => { filesRef.current = files; });
-  useEffect(() => { selectedElementRef.current = selectedElement; });
+  // Monotonic counter: incremented each time performMove manually updates the ref.
+  // Prevents the useEffect sync from overwriting manually-set source locations
+  // with stale React state during rapid swaps (the core race condition fix).
+  const manualUpdateCounterRef = useRef(0);
+  const lastSyncedCounterRef = useRef(0);
 
-  // Core swap logic - shared by both event sources
-  const performSwap = useCallback(
+  useEffect(() => {
+    if (manualUpdateCounterRef.current === lastSyncedCounterRef.current) {
+      // No manual swap since last sync — safe to sync from React state
+      selectedElementRef.current = selectedElement;
+    } else {
+      // A swap happened — React state may lag behind the ref.
+      // Merge non-source fields from React state but preserve the ref's
+      // manually-set source and parentLayout.
+      const currentSource = selectedElementRef.current?.source;
+      const currentParentLayout = selectedElementRef.current?.parentLayout;
+      if (selectedElement) {
+        selectedElementRef.current = {
+          ...selectedElement,
+          source: currentSource ?? selectedElement.source,
+          parentLayout: currentParentLayout ?? selectedElement.parentLayout,
+        };
+      }
+    }
+    lastSyncedCounterRef.current = manualUpdateCounterRef.current;
+  }, [selectedElement]);
+
+  // Core move logic - shared by both event sources
+  const performMove = useCallback(
     (key: string, parentLayoutOverride?: ParentLayoutInfo) => {
       // Read from refs to get latest values (not stale closure)
       const currentElement = selectedElementRef.current;
@@ -113,12 +184,25 @@ export function useKeyboardMove({
         return;
       }
 
-      // Map arrow key to swap direction based on parent layout
-      const { direction: swapDirection, reason } = getSwapDirection(
+      // Determine the best parentLayout to use.
+      // The iframe may report a stale "block" layout if the selected element
+      // became disconnected (e.g., after Sandpack recompiled from a VFS write).
+      // In that case, prefer the ref's known layout over the iframe's stale report.
+      let effectiveParentLayout = parentLayoutOverride ?? currentElement.parentLayout;
+      if (
+        parentLayoutOverride?.layout === "block" &&
+        currentElement.parentLayout &&
+        (currentElement.parentLayout.layout === "flex" || currentElement.parentLayout.layout === "grid")
+      ) {
+        effectiveParentLayout = currentElement.parentLayout;
+      }
+
+      // Map arrow key to move instruction based on parent layout
+      const { instruction, reason } = getMoveInstruction(
         key,
-        parentLayoutOverride ?? currentElement.parentLayout
+        effectiveParentLayout
       );
-      if (!swapDirection) {
+      if (!instruction) {
         if (reason) {
           toast.error(reorderFailureMessage(reason));
         }
@@ -128,60 +212,125 @@ export function useKeyboardMove({
       // Flush any pending draft changes first
       flushDraft();
 
-      // Get the file content from ref
+      // Get the file content via immediate ref (includes writes not yet in React state)
       const fileName = currentElement.source.fileName;
-      const fileContent = filesRef.current[fileName];
+      const fileContent = getLatestFile(fileName);
       if (!fileContent) {
         console.warn(`File not found: ${fileName}`);
         return;
       }
 
-      // Preflight before optimistic swap to avoid visible snap-back.
-      const preflight = preflightSwapSiblingAtLocation(
-        fileContent,
-        currentElement.source,
-        swapDirection
-      );
-      if (!preflight.success) {
-        toast.error(reorderFailureMessage(preflight.reason || ReorderFailureReason.UNKNOWN));
-        return;
-      }
+      if (instruction.type === "swap") {
+        // Adjacent swap (flex or grid left/right)
+        const swapDirection = instruction.direction;
 
-      // Perform optimistic DOM swap in iframe
-      onOptimisticSwap(currentElement.selector, swapDirection);
+        // Preflight before optimistic swap (pass tagName for recovery if location drifted)
+        const preflight = preflightSwapSiblingAtLocation(
+          fileContent,
+          currentElement.source,
+          swapDirection,
+          currentElement.tagName
+        );
+        if (!preflight.success) {
+          toast.error(reorderFailureMessage(preflight.reason || ReorderFailureReason.UNKNOWN));
+          return;
+        }
 
-      // Perform AST-based swap in VFS
-      const result = swapSiblingAtLocation(
-        fileContent,
-        currentElement.source,
-        swapDirection
-      );
+        // Use corrected location if preflight recovered from a stale position
+        const effectiveSource = preflight.correctedLocation ?? currentElement.source;
 
-      if (result.success && result.newCode) {
-        writeFile(fileName, result.newCode);
+        // Perform optimistic DOM swap in iframe
+        onOptimisticSwap(currentElement.selector, swapDirection);
 
-        // Immediately update refs so the next swap in the same render cycle
-        // sees the updated code and source location
-        filesRef.current = { ...filesRef.current, [fileName]: result.newCode };
+        // Perform AST-based swap in VFS
+        const result = swapSiblingAtLocation(
+          fileContent,
+          effectiveSource,
+          swapDirection
+        );
 
-        // Update the source location to track the element's new position
-        if (result.newSourceLocation && onSourceLocationUpdate) {
-          onSourceLocationUpdate(result.newSourceLocation);
-          selectedElementRef.current = { ...currentElement, source: result.newSourceLocation };
+        if (result.success && result.newCode) {
+          writeFile(fileName, result.newCode);
+
+          if (result.newSourceLocation && onSourceLocationUpdate) {
+            onSourceLocationUpdate(result.newSourceLocation);
+            manualUpdateCounterRef.current++;
+            // Keep parentLayout from the effective layout used for this swap,
+            // not the potentially stale value from a selection-revalidated message.
+            selectedElementRef.current = {
+              ...currentElement,
+              source: result.newSourceLocation,
+              parentLayout: effectiveParentLayout,
+            };
+          }
+        } else {
+          console.warn("Swap failed:", result.error);
+          const reverseDirection = swapDirection === "prev" ? "next" : "prev";
+          onOptimisticSwap(currentElement.selector, reverseDirection);
+          toast.error(
+            reorderFailureMessage(
+              result.reorderFailureReason || ReorderFailureReason.UNKNOWN
+            )
+          );
         }
       } else {
-        console.warn("Swap failed:", result.error);
-        // Revert the optimistic DOM swap
-        const reverseDirection = swapDirection === "prev" ? "next" : "prev";
-        onOptimisticSwap(currentElement.selector, reverseDirection);
-        toast.error(
-          reorderFailureMessage(
-            result.reorderFailureReason || ReorderFailureReason.UNKNOWN
-          )
+        // Offset-based move (grid up/down)
+        const offset = instruction.offset;
+
+        // Preflight before optimistic move (pass tagName for recovery)
+        const preflight = preflightMoveBySiblingOffset(
+          fileContent,
+          currentElement.source,
+          offset,
+          currentElement.tagName
         );
+        if (!preflight.success) {
+          toast.error(reorderFailureMessage(preflight.reason || ReorderFailureReason.UNKNOWN));
+          return;
+        }
+
+        // Use corrected location if preflight recovered from a stale position
+        const effectiveSource = preflight.correctedLocation ?? currentElement.source;
+
+        // Perform optimistic DOM move in iframe
+        if (onOptimisticMoveByOffset) {
+          onOptimisticMoveByOffset(offset);
+        }
+
+        // Perform AST-based move in VFS
+        const result = moveBySiblingOffsetAtLocation(
+          fileContent,
+          effectiveSource,
+          offset
+        );
+
+        if (result.success && result.newCode) {
+          writeFile(fileName, result.newCode);
+
+          if (result.newSourceLocation && onSourceLocationUpdate) {
+            onSourceLocationUpdate(result.newSourceLocation);
+            manualUpdateCounterRef.current++;
+            selectedElementRef.current = {
+              ...currentElement,
+              source: result.newSourceLocation,
+              parentLayout: effectiveParentLayout,
+            };
+          }
+        } else {
+          console.warn("Move by offset failed:", result.error);
+          // Revert the optimistic move by reversing offset
+          if (onOptimisticMoveByOffset) {
+            onOptimisticMoveByOffset(-offset);
+          }
+          toast.error(
+            reorderFailureMessage(
+              result.reorderFailureReason || ReorderFailureReason.UNKNOWN
+            )
+          );
+        }
       }
     },
-    [writeFile, flushDraft, onOptimisticSwap, onSourceLocationUpdate]
+    [writeFile, flushDraft, onOptimisticSwap, onOptimisticMoveByOffset, onSourceLocationUpdate, getLatestFile]
   );
 
   // Handle keyboard events directly on the window (when iframe doesn't have focus)
@@ -213,9 +362,9 @@ export function useKeyboardMove({
       // Prevent default scrolling behavior
       e.preventDefault();
 
-      performSwap(e.key);
+      performMove(e.key);
     },
-    [performSwap]
+    [performMove]
   );
 
   // Handle keyboard events forwarded from the iframe via postMessage
@@ -236,13 +385,18 @@ export function useKeyboardMove({
       }
 
       const currentSelectionId = selectedElementRef.current?.selectionId;
-      if (selectionId && currentSelectionId && selectionId !== currentSelectionId) {
-        return;
-      }
 
-      performSwap(key, parentLayout);
+      // If selectionId from iframe doesn't match the ref, the ref may be stale
+      // (e.g., after a swap where the iframe generated a new selectionId but
+      // the ref hasn't been updated by React yet). In this case, still proceed
+      // but don't trust the iframe's parentLayout — it may also be stale from
+      // a disconnected element. Use undefined so performMove falls back to the ref.
+      const iframeLayoutTrustworthy =
+        !selectionId || !currentSelectionId || selectionId === currentSelectionId;
+
+      performMove(key, iframeLayoutTrustworthy ? parentLayout : undefined);
     },
-    [performSwap]
+    [performMove]
   );
 
   useEffect(() => {

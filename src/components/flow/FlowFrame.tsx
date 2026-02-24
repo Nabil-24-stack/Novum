@@ -39,6 +39,8 @@ interface FlowFrameProps {
   isExpanded?: boolean;
   /** Force streaming overlay to show (active frame in Prototype View) */
   forceStreamingOverlay?: boolean;
+  /** Signal to force iframe refresh (increment to trigger) */
+  refreshSignal?: number;
 }
 
 export function FlowFrame({
@@ -61,6 +63,7 @@ export function FlowFrame({
   animateEntrance = false,
   isExpanded,
   forceStreamingOverlay,
+  refreshSignal,
 }: FlowFrameProps) {
   const frameRef = useRef<HTMLDivElement>(null);
 
@@ -72,6 +75,19 @@ export function FlowFrame({
 
   // Refresh key for forcing SandpackWrapper remount
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // External refresh signal (e.g., after materialization)
+  const refreshSignalMountRef = useRef(true);
+  useEffect(() => {
+    if (refreshSignalMountRef.current) {
+      refreshSignalMountRef.current = false;
+      return;
+    }
+    if (refreshSignal !== undefined) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- External signal triggers refresh
+      setRefreshKey((k) => k + 1);
+    }
+  }, [refreshSignal]);
 
   // Auto-refresh after AI finishes building this page
   const pendingApprovalPage = useStrategyStore((s) => s.pendingApprovalPage);
@@ -126,6 +142,13 @@ export function FlowFrame({
     onActivate(page.id);
   }, [page.id, onActivate]);
 
+  // Wrap inspection mode change to also activate frame
+  // (the button's stopPropagation prevents handleFrameClick from firing)
+  const handleInspectionModeChange = useCallback((enabled: boolean) => {
+    onActivate(page.id);
+    onInspectionModeChange?.(enabled);
+  }, [page.id, onActivate, onInspectionModeChange]);
+
   return (
     <div
       ref={frameRef}
@@ -161,7 +184,7 @@ export function FlowFrame({
         previewMode={localPreviewMode}
         inspectionMode={isActive && inspectionMode}
         flowModeActive={flowModeActive}
-        key={`flow-frame-${page.id}-${localPreviewMode}-${refreshKey}`}
+        key={`flow-frame-${page.id}-${refreshKey}`}
       >
         <Frame
           x={0}
@@ -174,7 +197,7 @@ export function FlowFrame({
           previewMode={localPreviewMode}
           onPreviewModeChange={handleLocalPreviewModeChange}
           inspectionMode={isActive && inspectionMode}
-          onInspectionModeChange={onInspectionModeChange}
+          onInspectionModeChange={handleInspectionModeChange}
           layersOpen={isActive && layersOpen}
           onLayersOpenChange={setLayersOpen}
           selectedSelector={selectedPageId === page.id ? selectedSelector : undefined}

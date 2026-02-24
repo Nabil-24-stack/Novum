@@ -17,6 +17,52 @@ export interface PropSchema {
 }
 
 // ============================================================================
+// Known Component Schemas (fallback for built-in design system components)
+// ============================================================================
+
+/**
+ * Hard-coded enum prop options for the 27 built-in design system components.
+ * Used as a fallback when the AST scan fails to find a matching interface
+ * (e.g., AI rewrites the component with a different type name).
+ */
+const KNOWN_COMPONENT_SCHEMAS: Record<string, Record<string, string[]>> = {
+  Button: {
+    variant: ["default", "destructive", "outline", "secondary", "ghost", "link"],
+    size: ["default", "sm", "lg", "icon"],
+  },
+  Badge: {
+    variant: ["default", "secondary", "destructive", "outline"],
+  },
+  Alert: {
+    variant: ["default", "destructive"],
+  },
+  Separator: {
+    orientation: ["horizontal", "vertical"],
+  },
+  Toggle: {
+    variant: ["default", "outline"],
+    size: ["default", "sm", "lg"],
+  },
+  Accordion: {
+    type: ["single", "multiple"],
+  },
+  Tooltip: {
+    side: ["top", "right", "bottom", "left"],
+  },
+  TooltipContent: {
+    side: ["top", "right", "bottom", "left"],
+  },
+  Popover: {
+    side: ["top", "right", "bottom", "left"],
+    align: ["start", "center", "end"],
+  },
+  PopoverContent: {
+    side: ["top", "right", "bottom", "left"],
+    align: ["start", "center", "end"],
+  },
+};
+
+// ============================================================================
 // Component File Path Resolution
 // ============================================================================
 
@@ -63,12 +109,16 @@ export function resolveComponentFilePath(
     }
     // Quick check: does the file export this component?
     if (content.includes(`export { ${componentName}`) ||
+        content.includes(`export { ${componentName},`) ||
         content.includes(`export const ${componentName}`) ||
-        content.includes(`export function ${componentName}`)) {
+        content.includes(`export function ${componentName}`) ||
+        content.includes(`export default ${componentName}`) ||
+        content.includes(`${componentName}.displayName`)) {
       return filePath;
     }
   }
 
+  console.debug(`[prop-schema] Could not resolve file path for component: ${componentName}`);
   return null;
 }
 
@@ -99,65 +149,78 @@ export function scanComponentPropSchema(
     // Look for interface ComponentNameProps or type ComponentNameProps
     const propsTypeName = `${componentName}Props`;
 
+    // Helper to extract enum props from an interface/type body
+    const extractFromMembers = (members: t.TSTypeElement[]) => {
+      for (const prop of members) {
+        if (prop.type === "TSPropertySignature" && prop.key.type === "Identifier") {
+          const options = extractUnionOptions(prop.typeAnnotation?.typeAnnotation);
+          if (options.length > 0) {
+            enumProps[prop.key.name] = options;
+          }
+        }
+      }
+    };
+
+    // Helper to extract from a type annotation (handles object and intersection types)
+    const extractFromTypeAnnotation = (typeAnnotation: t.TSType) => {
+      if (typeAnnotation.type === "TSTypeLiteral") {
+        extractFromMembers(typeAnnotation.members);
+      }
+      if (typeAnnotation.type === "TSIntersectionType") {
+        for (const member of typeAnnotation.types) {
+          if (member.type === "TSTypeLiteral") {
+            extractFromMembers(member.members);
+          }
+        }
+      }
+    };
+
+    // Pass 1: Look for exact match (e.g., ButtonProps)
     traverse(ast, {
-      // Handle: interface ButtonProps { ... }
       TSInterfaceDeclaration(path) {
         if (path.node.id.name !== propsTypeName) return;
-
-        const body = path.node.body.body;
-        for (const prop of body) {
-          if (prop.type === "TSPropertySignature" && prop.key.type === "Identifier") {
-            const options = extractUnionOptions(prop.typeAnnotation?.typeAnnotation);
-            if (options.length > 0) {
-              enumProps[prop.key.name] = options;
-            }
-          }
-        }
+        extractFromMembers(path.node.body.body);
       },
-
-      // Handle: type ButtonProps = { ... }
       TSTypeAliasDeclaration(path) {
         if (path.node.id.name !== propsTypeName) return;
-
-        const typeAnnotation = path.node.typeAnnotation;
-
-        // Handle direct object type: type Props = { variant: "a" | "b" }
-        if (typeAnnotation.type === "TSTypeLiteral") {
-          for (const member of typeAnnotation.members) {
-            if (member.type === "TSPropertySignature" && member.key.type === "Identifier") {
-              const options = extractUnionOptions(member.typeAnnotation?.typeAnnotation);
-              if (options.length > 0) {
-                enumProps[member.key.name] = options;
-              }
-            }
-          }
-        }
-
-        // Handle intersection types: type Props = BaseProps & { variant: "a" | "b" }
-        if (typeAnnotation.type === "TSIntersectionType") {
-          for (const member of typeAnnotation.types) {
-            if (member.type === "TSTypeLiteral") {
-              for (const prop of member.members) {
-                if (prop.type === "TSPropertySignature" && prop.key.type === "Identifier") {
-                  const options = extractUnionOptions(prop.typeAnnotation?.typeAnnotation);
-                  if (options.length > 0) {
-                    enumProps[prop.key.name] = options;
-                  }
-                }
-              }
-            }
-          }
-        }
+        extractFromTypeAnnotation(path.node.typeAnnotation);
       },
     });
 
-    // Return null if no enum props found
+    // Pass 2: If no enum props found, try generic "Props" type name
+    // (handles AI-rewritten components that use `type Props = { ... }`)
     if (Object.keys(enumProps).length === 0) {
+      traverse(ast, {
+        TSInterfaceDeclaration(path) {
+          if (path.node.id.name !== "Props") return;
+          extractFromMembers(path.node.body.body);
+        },
+        TSTypeAliasDeclaration(path) {
+          if (path.node.id.name !== "Props") return;
+          extractFromTypeAnnotation(path.node.typeAnnotation);
+        },
+      });
+    }
+
+    // Pass 3: Fallback to known component schemas
+    if (Object.keys(enumProps).length === 0) {
+      const known = KNOWN_COMPONENT_SCHEMAS[componentName];
+      if (known) {
+        console.debug(`[prop-schema] Using known schema fallback for ${componentName}`);
+        return { enumProps: known };
+      }
+      console.debug(`[prop-schema] No enum props found for ${componentName}`);
       return null;
     }
 
     return { enumProps };
   } catch (error) {
+    // AST parse failed — try known schema fallback
+    const known = KNOWN_COMPONENT_SCHEMAS[componentName];
+    if (known) {
+      console.debug(`[prop-schema] Parse failed for ${componentName}, using known schema fallback`);
+      return { enumProps: known };
+    }
     console.warn(`[prop-schema] Failed to parse ${componentName}:`, error);
     return null;
   }

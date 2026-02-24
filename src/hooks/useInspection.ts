@@ -75,17 +75,62 @@ export function useInspection(options: UseInspectionOptions = {}): UseInspection
         const element = data.payload as SelectedElement;
 
         // Determine which FlowFrame this selection came from (Flow View)
+        let sourcePageId: string | undefined;
         const flowFrames = document.querySelectorAll<HTMLElement>('[data-flow-page-id]');
         for (const frame of flowFrames) {
           const iframe = frame.querySelector<HTMLIFrameElement>('iframe[title="Sandpack Preview"]');
           if (iframe?.contentWindow === event.source) {
-            element.pageId = frame.getAttribute('data-flow-page-id') ?? undefined;
+            sourcePageId = frame.getAttribute('data-flow-page-id') ?? undefined;
+            element.pageId = sourcePageId;
             break;
           }
         }
 
-        setSelectedElement(element);
-        if (data.type === "novum:element-selected") {
+        // Clear stale selection overlays in all OTHER FlowFrame iframes (Flow View only)
+        if (sourcePageId && data.type === "novum:element-selected") {
+          for (const frame of flowFrames) {
+            const pageId = frame.getAttribute('data-flow-page-id');
+            if (pageId && pageId !== sourcePageId) {
+              const iframe = frame.querySelector<HTMLIFrameElement>('iframe[title="Sandpack Preview"]');
+              iframe?.contentWindow?.postMessage({ type: "novum:clear-selection" }, "*");
+            }
+          }
+        }
+
+        if (data.type === "novum:selection-revalidated") {
+          // Merge with existing state, preserving fields that may be more accurate
+          // than the revalidated payload:
+          // - source: keyboard reordering updates this with the correct post-swap
+          //   position. The iframe's data-source-loc is stale until Sandpack recompiles.
+          // - parentLayout: if the element was momentarily disconnected during
+          //   Sandpack recompilation, the revalidated parentLayout may be "block"
+          //   even though the parent is actually flex/grid. Keep the existing layout
+          //   to avoid degrading the ref.
+          setSelectedElement((prev) => {
+            if (!prev) return element;
+
+            const preservedSource = prev.source ?? element.source;
+
+            // Preserve parentLayout if the revalidated one degraded to "block"
+            // but we know the parent is flex/grid from the existing state
+            let preservedLayout = element.parentLayout;
+            if (
+              element.parentLayout?.layout === "block" &&
+              prev.parentLayout &&
+              (prev.parentLayout.layout === "flex" || prev.parentLayout.layout === "grid")
+            ) {
+              preservedLayout = prev.parentLayout;
+            }
+
+            return {
+              ...element,
+              source: preservedSource,
+              parentLayout: preservedLayout,
+              pageId: element.pageId ?? prev.pageId,
+            };
+          });
+        } else {
+          setSelectedElement(element);
           onElementSelected?.(element);
         }
       }

@@ -300,11 +300,11 @@ export function CanvasOverlay({
 
   // Handle node drag end - check if it should be materialized
   const handleNodeDragEnd = useCallback((nodeId: string) => {
-    // Hide drop zone indicator when drag ends
+    // Hide drop preview when drag ends
     if (flowFrameStates && flowFrameStates.length > 0) {
-      sendToAllFlowIframes({ type: "novum:hide-drop-zone" });
+      sendToAllFlowIframes({ type: "novum:hide-drop-preview" });
     } else {
-      sendToIframe({ type: "novum:hide-drop-zone" });
+      sendToIframe({ type: "novum:hide-drop-preview" });
     }
 
     // Only allow drops when inspection mode is ON
@@ -334,34 +334,38 @@ export function CanvasOverlay({
     }
   }, [inspectionMode, frameState, flowFrameStates, onMaterialize, nodes, getWorldPosition]);
 
-  // Throttled function to send drop zone updates to iframe (50ms throttle)
-  const sendDropZoneUpdateRef = useRef(
-    throttle((iframeX: number, iframeY: number) => {
+  // Throttled function to send drop preview updates to iframe (50ms throttle)
+  const sendDropPreviewUpdateRef = useRef(
+    throttle((iframeX: number, iframeY: number, componentType: string, ghostType: string, textContent?: string) => {
       sendToIframe({
-        type: "novum:show-drop-zone",
-        payload: { x: iframeX, y: iframeY },
+        type: "novum:show-drop-preview",
+        payload: { x: iframeX, y: iframeY, componentType, ghostType, textContent },
       });
     }, 50)
   );
 
-  // Throttled function to send drop zone updates to a specific FlowFrame's iframe
-  const sendFlowDropZoneUpdateRef = useRef(
-    throttle((pageId: string, iframeX: number, iframeY: number) => {
+  // Throttled function to send drop preview updates to a specific FlowFrame's iframe
+  const sendFlowDropPreviewUpdateRef = useRef(
+    throttle((pageId: string, iframeX: number, iframeY: number, componentType: string, ghostType: string, textContent?: string) => {
       sendToTargetIframe(pageId, {
-        type: "novum:show-drop-zone",
-        payload: { x: iframeX, y: iframeY },
+        type: "novum:show-drop-preview",
+        payload: { x: iframeX, y: iframeY, componentType, ghostType, textContent },
       });
     }, 50)
   );
 
-  // Handle node drag move - show drop zone indicator in iframe
+  // Handle node drag move - show drop preview in iframe
   const handleNodeDragMove = useCallback((ghost: GhostElement) => {
-    // Only show drop zone when inspection mode is ON (drops are allowed)
+    const componentType = ghost.componentType || "";
+    const ghostType = ghost.type;
+    const textContent = ghost.content;
+
+    // Only show drop preview when inspection mode is ON (drops are allowed)
     if (!inspectionMode) {
       if (flowFrameStates && flowFrameStates.length > 0) {
-        sendToAllFlowIframes({ type: "novum:hide-drop-zone" });
+        sendToAllFlowIframes({ type: "novum:hide-drop-preview" });
       } else {
-        sendToIframe({ type: "novum:hide-drop-zone" });
+        sendToIframe({ type: "novum:hide-drop-preview" });
       }
       return;
     }
@@ -370,28 +374,28 @@ export function CanvasOverlay({
     if (flowFrameStates && flowFrameStates.length > 0) {
       const flowDrop = getDropPointInFlowFrames(ghost, flowFrameStates);
 
-      // Hide drop zone on ALL flow iframes first (clears previous frame's indicator)
-      sendToAllFlowIframes({ type: "novum:hide-drop-zone" });
+      // Hide drop preview on ALL flow iframes first (clears previous frame's indicator)
+      sendToAllFlowIframes({ type: "novum:hide-drop-preview" });
 
       if (flowDrop) {
-        // Show drop zone on the specific hovered frame
-        sendFlowDropZoneUpdateRef.current(flowDrop.pageId, flowDrop.x, flowDrop.y);
+        // Show drop preview on the specific hovered frame
+        sendFlowDropPreviewUpdateRef.current(flowDrop.pageId, flowDrop.x, flowDrop.y, componentType, ghostType, textContent);
       }
       return;
     }
 
     // Prototype View: check against single frame
     if (!frameState) {
-      sendToIframe({ type: "novum:hide-drop-zone" });
+      sendToIframe({ type: "novum:hide-drop-preview" });
       return;
     }
 
     const dropPoint = getDropPointInFrame(ghost, frameState);
 
     if (dropPoint) {
-      sendDropZoneUpdateRef.current(dropPoint.x, dropPoint.y);
+      sendDropPreviewUpdateRef.current(dropPoint.x, dropPoint.y, componentType, ghostType, textContent);
     } else {
-      sendToIframe({ type: "novum:hide-drop-zone" });
+      sendToIframe({ type: "novum:hide-drop-preview" });
     }
   }, [inspectionMode, frameState, flowFrameStates]);
 

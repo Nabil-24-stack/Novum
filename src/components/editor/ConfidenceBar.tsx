@@ -7,9 +7,9 @@ import type { ConfidenceData } from "@/hooks/useStrategyStore";
 const DIMENSION_LABELS: Record<string, string> = {
   targetUser: "Target User",
   coreProblem: "Core Problem",
-  jobsToBeDone: "Jobs to Be Done",
-  constraints: "Constraints",
-  successMetrics: "Success Metrics",
+  currentWorkflow: "Current Workflow",
+  domainContext: "Domain Context",
+  stakesAndImpact: "Stakes & Impact",
 };
 
 function barColor(score: number): string {
@@ -27,6 +27,13 @@ interface ConfidenceBarProps {
 export function ConfidenceBar({ data, onReady }: ConfidenceBarProps) {
   const [expanded, setExpanded] = useState(false);
 
+  // Compute overall from actual dimension scores instead of trusting the AI's self-reported value
+  const dimensionScores = Object.values(data.dimensions).map((d) => d.score);
+  const computedOverall =
+    dimensionScores.length > 0
+      ? Math.round(dimensionScores.reduce((a, b) => a + b, 0) / dimensionScores.length)
+      : data.overall;
+
   return (
     <div className="sticky top-0 z-10 bg-white border-b border-neutral-200">
       {/* Collapsed row */}
@@ -39,13 +46,13 @@ export function ConfidenceBar({ data, onReady }: ConfidenceBarProps) {
           {/* Progress bar */}
           <div className="flex-1 h-2 bg-neutral-100 rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all duration-500 ${barColor(data.overall)}`}
-              style={{ width: `${data.overall}%` }}
+              className={`h-full rounded-full transition-all duration-500 ${barColor(computedOverall)}`}
+              style={{ width: `${computedOverall}%` }}
             />
           </div>
 
           <span className="text-xs font-semibold text-neutral-700 tabular-nums w-8 text-right">
-            {data.overall}%
+            {computedOverall}%
           </span>
 
           <button

@@ -514,6 +514,68 @@ export function mapColorClass(
   };
 }
 
+// ============================================================================
+// Contrast Pair Enforcement
+// ============================================================================
+
+/** Semantic tokens that have a matching -foreground counterpart */
+const CONTRAST_PAIR_BASES = new Set([
+  "primary", "secondary", "destructive", "accent", "muted", "card", "popover",
+]);
+
+/**
+ * Post-process mapped classes to fix contrast conflicts.
+ * When bg-{X} and text-{X} both exist (same semantic base), replaces
+ * text-{X} with text-{X}-foreground so text is readable on the background.
+ */
+function fixContrastPairs(
+  classes: string[],
+): { classes: string[]; violations: ColorViolation[] } {
+  const violations: ColorViolation[] = [];
+
+  // Collect base-state bg tokens: "bg-primary" → "primary", "bg-card" → "card"
+  const bgBases = new Set<string>();
+  for (const cls of classes) {
+    // Skip classes with variant prefixes (hover:, dark:, etc.)
+    if (cls.includes(":")) continue;
+    const bgMatch = cls.match(/^bg-(\w+?)(?:\/\d+)?$/);
+    if (bgMatch && CONTRAST_PAIR_BASES.has(bgMatch[1])) {
+      bgBases.add(bgMatch[1]);
+    }
+  }
+
+  if (bgBases.size === 0) {
+    return { classes, violations };
+  }
+
+  // Fix text classes that conflict with a bg of the same base
+  const fixed = classes.map((cls) => {
+    // Skip classes with variant prefixes
+    if (cls.includes(":")) return cls;
+    // Skip classes already using -foreground
+    if (cls.includes("-foreground")) return cls;
+
+    const textMatch = cls.match(/^text-(\w+?)(\/\d+)?$/);
+    if (!textMatch) return cls;
+
+    const [, base, opacity] = textMatch;
+    if (!CONTRAST_PAIR_BASES.has(base)) return cls;
+    if (!bgBases.has(base)) return cls;
+
+    // Conflict found: text-{X} paired with bg-{X}
+    const replacement = `text-${base}-foreground${opacity || ""}`;
+    violations.push({
+      original: cls,
+      replacement,
+      prefix: "text",
+      reason: `Contrast fix: "text-${base}" conflicts with "bg-${base}" → "${replacement}"`,
+    });
+    return replacement;
+  });
+
+  return { classes: fixed, violations };
+}
+
 /**
  * Process a className string, replacing color violations with semantic tokens.
  * Returns the updated className and list of violations found.
@@ -536,8 +598,12 @@ export function enforceColors(
     return cls;
   });
 
+  // Post-process: fix contrast pairs where bg-X and text-X share the same base
+  const { classes: fixed, violations: contrastViolations } = fixContrastPairs(mapped);
+  violations.push(...contrastViolations);
+
   return {
-    result: mapped.join(" "),
+    result: fixed.join(" "),
     violations,
   };
 }

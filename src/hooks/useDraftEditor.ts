@@ -2,6 +2,7 @@
 
 import { useRef, useCallback, useState, useEffect } from "react";
 import { useWriter } from "./useWriter";
+import { sendToIframe } from "@/lib/inspection/iframe-messaging";
 import type { SourceLocation } from "@/lib/inspection/types";
 
 export interface DraftState {
@@ -10,6 +11,7 @@ export interface DraftState {
   originalClassName: string;
   draftClassName: string;
   revision: number;
+  pageId?: string;
 }
 
 export interface TextDraftState {
@@ -18,6 +20,7 @@ export interface TextDraftState {
   originalText: string;
   draftText: string;
   revision: number;
+  pageId?: string;
 }
 
 export interface UseDraftEditorProps {
@@ -40,7 +43,8 @@ export interface UseDraftEditorReturn {
     originalClassName: string,
     newClassName: string,
     sourceLocation?: SourceLocation,
-    selectionId?: string
+    selectionId?: string,
+    pageId?: string
   ) => void;
   /** Update text with optimistic UI - instant DOM update, debounced VFS write */
   updateText: (
@@ -48,23 +52,13 @@ export interface UseDraftEditorReturn {
     originalText: string,
     newText: string,
     sourceLocation?: SourceLocation,
-    selectionId?: string
+    selectionId?: string,
+    pageId?: string
   ) => void;
   flush: () => Promise<void>;
   cancel: () => void;
 }
 
-/**
- * Broadcasts a message to all Sandpack preview iframes.
- */
-function broadcastToIframes(message: { type: string; payload?: unknown }) {
-  const iframes = document.querySelectorAll<HTMLIFrameElement>(
-    'iframe[title="Sandpack Preview"]'
-  );
-  iframes.forEach((iframe) => {
-    iframe.contentWindow?.postMessage(message, "*");
-  });
-}
 
 /**
  * Hook for optimistic UI updates with Smart Debounce strategy.
@@ -189,10 +183,10 @@ export function useDraftEditor({
         // No rollback needed - let Sandpack handle it on recompile
       } else {
         // Unexpected error - rollback and notify user
-        broadcastToIframes({
+        sendToIframe({
           type: "novum:rollback-classes",
           payload: { selector, originalClassName },
-        });
+        }, draft.pageId);
         onError?.(result.error || "Failed to save changes");
         console.error("[useDraftEditor] VFS write failed:", result.error);
       }
@@ -273,10 +267,10 @@ export function useDraftEditor({
         );
       } else {
         // Unexpected error - rollback and notify user
-        broadcastToIframes({
+        sendToIframe({
           type: "novum:rollback-text",
           payload: { selector, originalText },
-        });
+        }, textDraft.pageId);
         onError?.(result.error || "Failed to save text changes");
         console.error("[useDraftEditor] VFS text write failed:", result.error);
       }
@@ -301,20 +295,20 @@ export function useDraftEditor({
     classPreviewRafRef.current = null;
     const pending = classPreviewRef.current;
     if (!pending) return;
-    broadcastToIframes({
+    sendToIframe({
       type: "novum:update-classes",
       payload: pending,
-    });
+    }, draftRef.current?.pageId);
   }, []);
 
   const flushTextPreview = useCallback(() => {
     textPreviewRafRef.current = null;
     const pending = textPreviewRef.current;
     if (!pending) return;
-    broadcastToIframes({
+    sendToIframe({
       type: "novum:update-text",
       payload: pending,
-    });
+    }, textDraftRef.current?.pageId);
   }, []);
 
   /**
@@ -329,7 +323,8 @@ export function useDraftEditor({
       originalClassName: string,
       newClassName: string,
       sourceLocation?: SourceLocation,
-      selectionId?: string
+      selectionId?: string,
+      pageId?: string
     ) => {
       // Clear any existing timer (debounce reset)
       if (timerRef.current) {
@@ -357,6 +352,7 @@ export function useDraftEditor({
         originalClassName: trueOriginal,
         draftClassName: newClassName,
         revision,
+        pageId,
       };
       draftRef.current = newDraft;
       setDraftSnapshot(newDraft);
@@ -391,7 +387,8 @@ export function useDraftEditor({
       originalText: string,
       newText: string,
       sourceLocation?: SourceLocation,
-      selectionId?: string
+      selectionId?: string,
+      pageId?: string
     ) => {
       // Clear any existing text timer (debounce reset)
       if (textTimerRef.current) {
@@ -418,6 +415,7 @@ export function useDraftEditor({
         originalText: trueOriginal,
         draftText: newText,
         revision,
+        pageId,
       };
       textDraftRef.current = newDraft;
       setTextDraftSnapshot(newDraft);
@@ -478,25 +476,25 @@ export function useDraftEditor({
     const draft = draftRef.current;
     if (draft) {
       // Rollback DOM to original class
-      broadcastToIframes({
+      sendToIframe({
         type: "novum:rollback-classes",
         payload: {
           selector: draft.selector,
           originalClassName: draft.originalClassName,
         },
-      });
+      }, draft.pageId);
     }
 
     const textDraft = textDraftRef.current;
     if (textDraft) {
       // Rollback DOM to original text
-      broadcastToIframes({
+      sendToIframe({
         type: "novum:rollback-text",
         payload: {
           selector: textDraft.selector,
           originalText: textDraft.originalText,
         },
-      });
+      }, textDraft.pageId);
     }
 
     draftRef.current = null;

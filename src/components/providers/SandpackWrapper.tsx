@@ -1,7 +1,7 @@
 "use client";
 
 import { SandpackProvider, useSandpack } from "@codesandbox/sandpack-react";
-import { ReactNode, useMemo, useEffect, useRef, useCallback } from "react";
+import { ReactNode, useMemo, useEffect, useRef, useCallback, useState } from "react";
 import { defaultPackageJson } from "@/lib/vfs/templates/package-json";
 import { SandpackFileSync } from "./SandpackFileSync";
 import { getTailwindConfigDataUrl } from "@/lib/tailwind-config";
@@ -102,6 +102,41 @@ function InspectionSync({ inspectionMode }: { inspectionMode: boolean }) {
 }
 
 /**
+ * Sync dark mode with Sandpack iframes via postMessage (avoids iframe remount).
+ * Skips initial mount since the external resource script handles the initial state.
+ */
+function DarkModeSync({ previewMode }: { previewMode: PreviewMode }) {
+  const isFirstMount = useRef(true);
+
+  useEffect(() => {
+    if (isFirstMount.current) {
+      isFirstMount.current = false;
+      return;
+    }
+
+    const isDark = previewMode === "dark";
+    const iframes = document.querySelectorAll<HTMLIFrameElement>(
+      'iframe[title="Sandpack Preview"]'
+    );
+    iframes.forEach((iframe) => {
+      try {
+        iframe.contentWindow?.postMessage(
+          {
+            type: "novum:toggle-dark-mode",
+            payload: { isDark },
+          },
+          "*"
+        );
+      } catch {
+        // Ignore cross-origin errors
+      }
+    });
+  }, [previewMode]);
+
+  return null;
+}
+
+/**
  * Sync flow mode state with Sandpack iframes for navigation interception.
  *
  * Uses a handshake protocol to handle race conditions:
@@ -189,13 +224,17 @@ export function SandpackWrapper({ files, children, previewMode = "light", inspec
     return filtered;
   }, [files]);
 
-  // Build external resources array with dark mode script and inspector
+  // Capture initial preview mode so externalResources don't change on toggle
+  // (dark mode is now toggled via postMessage through DarkModeSync)
+  const [initialPreviewMode] = useState(previewMode);
+
+  // Build external resources array - uses initial preview mode (not reactive)
   const externalResources = useMemo(() => [
     "https://cdn.tailwindcss.com",
     getTailwindConfigDataUrl(),
-    getDarkModeScriptDataUrl(previewMode === "dark"),
+    getDarkModeScriptDataUrl(initialPreviewMode === "dark"),
     getInspectorScriptDataUrl(inspectionMode),
-  ], [previewMode, inspectionMode]);
+  ], [initialPreviewMode, inspectionMode]);
 
   return (
     <SandpackProvider
@@ -216,6 +255,7 @@ export function SandpackWrapper({ files, children, previewMode = "light", inspec
     >
       <SandpackFileSync files={sandpackFiles} />
       <InspectionSync inspectionMode={inspectionMode} />
+      <DarkModeSync previewMode={previewMode} />
       <FlowModeSync flowModeActive={flowModeActive} />
       {children}
     </SandpackProvider>
