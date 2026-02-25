@@ -2,12 +2,14 @@
 
 import { useChat } from "@ai-sdk/react";
 import { useEffect, useRef, useState, useCallback, useMemo, DragEvent, ClipboardEvent, FormEvent } from "react";
-import { Send, Loader2, X, ImagePlus, ChevronDown, ArrowRight, Check, AlertTriangle, Square } from "lucide-react";
+import { Send, Loader2, X, ImagePlus, ChevronDown, ArrowRight, Check, AlertTriangle, Square, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { useChatContextStore } from "@/hooks/useChatContextStore";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
 import { useProductBrainStore } from "@/hooks/useProductBrainStore";
 import { useStrategyStore, type StrategyPhase, type ConfidenceData, type PersonaData, type IdeaData, type JourneyMapData, type JourneyStage, type WireframeData, type WireframeSection, type WireframeElement } from "@/hooks/useStrategyStore";
+import { useDocumentStore, type InsightData, type InsightsCardData } from "@/hooks/useDocumentStore";
+import { buildInsightsContext } from "@/lib/ai/insights-prompt";
 import { useParallelBuild } from "@/hooks/useParallelBuild";
 import { toPascalCase } from "@/lib/vfs/app-generator";
 import { ConfidenceBar } from "./ConfidenceBar";
@@ -24,9 +26,9 @@ function hasFileCodeBlocks(content: string): boolean {
 /** Strip strategy JSON blocks from text (manifesto, flow, options, page-built, confidence, personas, etc.) */
 function stripStrategyBlocks(text: string): string {
   // Strip closed strategy blocks
-  let cleaned = text.replace(/```json\s+type="(?:options|manifesto|personas|flow|page-built|confidence|journey-maps|ideas|wireframes|decision-connections)"[\s\S]*?```/g, "");
+  let cleaned = text.replace(/```json\s+type="(?:options|manifesto|personas|flow|page-built|confidence|journey-maps|ideas|wireframes|decision-connections|insights)"[\s\S]*?```/g, "");
   // Strip open (still-streaming) strategy blocks
-  cleaned = cleaned.replace(/```json\s+type="(?:options|manifesto|personas|flow|page-built|confidence|journey-maps|ideas|wireframes|decision-connections)"[\s\S]*$/, "");
+  cleaned = cleaned.replace(/```json\s+type="(?:options|manifesto|personas|flow|page-built|confidence|journey-maps|ideas|wireframes|decision-connections|insights)"[\s\S]*$/, "");
   return cleaned.trim();
 }
 
@@ -68,6 +70,7 @@ const JOURNEY_MAPS_REGEX = /```json\s+type="journey-maps"\n([\s\S]*?)```/g;
 const IDEAS_REGEX = /```json\s+type="ideas"\n([\s\S]*?)```/g;
 const DECISION_CONNECTIONS_REGEX = /```json\s+type="decision-connections"\n([\s\S]*?)```/g;
 const WIREFRAMES_REGEX = /```json\s+type="wireframes"\n([\s\S]*?)```/g;
+const INSIGHTS_REGEX = /```json\s+type="insights"\n([\s\S]*?)```/g;
 
 
 interface OptionBlock {
@@ -628,6 +631,128 @@ function serializeElement(el: WireframeElement): string {
   return text;
 }
 
+// --- Partial insights extraction for real-time streaming ---
+function extractPartialInsights(text: string): Partial<InsightsCardData> | null {
+  const marker = '```json type="insights"';
+  const blockStart = text.indexOf(marker);
+  if (blockStart === -1) return null;
+
+  const content = text.slice(blockStart + marker.length);
+  const result: Partial<InsightsCardData> = {};
+
+  // Extract insights array
+  const insightsArrayStart = content.indexOf('"insights"');
+  if (insightsArrayStart !== -1) {
+    // Find the opening bracket of the insights array
+    let i = insightsArrayStart + '"insights"'.length;
+    while (i < content.length && content[i] !== '[') i++;
+    if (i < content.length) {
+      i++; // skip [
+      const insights: Partial<InsightData>[] = [];
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      let objectStart = -1;
+
+      for (let j = i; j < content.length; j++) {
+        const ch = content[j];
+        if (escape) { escape = false; continue; }
+        if (ch === '\\') { escape = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+
+        if (ch === '{') {
+          if (depth === 0) objectStart = j;
+          depth++;
+        } else if (ch === '}') {
+          depth--;
+          if (depth === 0 && objectStart !== -1) {
+            const objectStr = content.slice(objectStart, j + 1);
+            try {
+              const parsed = JSON.parse(objectStr);
+              insights.push(parsed);
+            } catch {
+              // Partial object — try extracting fields manually
+              const partial: Partial<InsightData> = {};
+              const insight = extractJsonStringValue(objectStr, 'insight');
+              if (insight) partial.insight = insight;
+              const quote = extractJsonStringValue(objectStr, 'quote');
+              if (quote) partial.quote = quote;
+              const sourceDocument = extractJsonStringValue(objectStr, 'sourceDocument');
+              if (sourceDocument) partial.sourceDocument = sourceDocument;
+              if (Object.keys(partial).length > 0) insights.push(partial);
+            }
+            objectStart = -1;
+          }
+        } else if (ch === ']' && depth === 0) {
+          break;
+        }
+      }
+
+      // Handle partial last object (still being streamed)
+      if (objectStart !== -1 && depth > 0) {
+        const partialStr = content.slice(objectStart);
+        const partial: Partial<InsightData> = {};
+        const insight = extractJsonStringValue(partialStr, 'insight');
+        if (insight) partial.insight = insight;
+        const quote = extractJsonStringValue(partialStr, 'quote');
+        if (quote) partial.quote = quote;
+        const sourceDocument = extractJsonStringValue(partialStr, 'sourceDocument');
+        if (sourceDocument) partial.sourceDocument = sourceDocument;
+        if (Object.keys(partial).length > 0) insights.push(partial);
+      }
+
+      if (insights.length > 0) result.insights = insights as InsightData[];
+    }
+  }
+
+  // Extract documents array
+  const docsArrayStart = content.indexOf('"documents"');
+  if (docsArrayStart !== -1) {
+    let i = docsArrayStart + '"documents"'.length;
+    while (i < content.length && content[i] !== '[') i++;
+    if (i < content.length) {
+      i++;
+      const docs: { name: string; uploadedAt: string }[] = [];
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      let objectStart = -1;
+
+      for (let j = i; j < content.length; j++) {
+        const ch = content[j];
+        if (escape) { escape = false; continue; }
+        if (ch === '\\') { escape = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+
+        if (ch === '{') {
+          if (depth === 0) objectStart = j;
+          depth++;
+        } else if (ch === '}') {
+          depth--;
+          if (depth === 0 && objectStart !== -1) {
+            const objectStr = content.slice(objectStart, j + 1);
+            try {
+              const parsed = JSON.parse(objectStr);
+              if (parsed.name) docs.push(parsed);
+            } catch {
+              // ignore partial doc objects
+            }
+            objectStart = -1;
+          }
+        } else if (ch === ']' && depth === 0) {
+          break;
+        }
+      }
+
+      if (docs.length > 0) result.documents = docs;
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
+}
+
 function extractOptionBlocks(text: string): OptionBlock[] {
   const blocks: OptionBlock[] = [];
   let match;
@@ -677,6 +802,11 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
   const selectedIdeaId = useStrategyStore((s) => s.selectedIdeaId);
   const flowData = useStrategyStore((s) => s.flowData);
   const confidenceData = useStrategyStore((s) => s.confidenceData);
+  const isDeepDive = useStrategyStore((s) => s.isDeepDive);
+  const uploadedDocuments = useDocumentStore((s) => s.documents);
+  const isDocUploading = useDocumentStore((s) => s.isUploading);
+  const pendingReanalysis = useDocumentStore((s) => s.pendingReanalysis);
+  const docFileInputRef = useRef<HTMLInputElement>(null);
   const completedPages = useStrategyStore((s) => s.completedPages);
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
   const pendingApprovalPage = useStrategyStore((s) => s.pendingApprovalPage);
@@ -702,6 +832,15 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
   // Is ideation currently streaming?
   const isIdeationStreaming = isLoading && strategyPhase === "ideation";
 
+  // Computed confidence overall (average of dimension scores)
+  const computedConfidenceOverall = useMemo(() => {
+    if (!confidenceData) return 0;
+    const scores = Object.values(confidenceData.dimensions).map((d) => d.score);
+    return scores.length > 0
+      ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+      : 0;
+  }, [confidenceData]);
+
   // Stop ideation and commit whatever partial ideas have been generated so far
   const handleStopIdeation = useCallback(() => {
     stop();
@@ -718,6 +857,74 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
       storeState.setStreamingIdeas(null);
     }
   }, [stop]);
+
+  // --- Document Upload Handler ---
+  const handleDocumentUpload = useCallback(async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+
+    const validFiles = Array.from(fileList).filter((f) => {
+      const ext = f.name.split(".").pop()?.toLowerCase();
+      return ext === "pdf" || ext === "docx";
+    });
+
+    if (validFiles.length === 0) {
+      toast.error("Please upload PDF or DOCX files only");
+      return;
+    }
+
+    useDocumentStore.getState().setUploading(true);
+
+    try {
+      const formData = new FormData();
+      validFiles.forEach((f) => formData.append("files", f));
+
+      const res = await fetch("/api/extract-document", { method: "POST", body: formData });
+      if (!res.ok) throw new Error("Upload failed");
+
+      const data = await res.json();
+      const docs = (data.documents as { name: string; text: string }[]).map((d) => ({
+        id: crypto.randomUUID(),
+        name: d.name,
+        text: d.text,
+        uploadedAt: new Date().toISOString(),
+      }));
+
+      useDocumentStore.getState().addDocuments(docs);
+      toast.success(`${docs.length} document${docs.length > 1 ? "s" : ""} uploaded`);
+    } catch (err) {
+      console.error("[DocumentUpload]", err);
+      toast.error("Failed to extract document text");
+    } finally {
+      useDocumentStore.getState().setUploading(false);
+      // Reset file input
+      if (docFileInputRef.current) docFileInputRef.current.value = "";
+    }
+  }, []);
+
+  // --- Pending re-analysis: auto-send message when new docs uploaded after initial insights ---
+  useEffect(() => {
+    if (!pendingReanalysis || isLoading) return;
+
+    useDocumentStore.getState().setPendingReanalysis(false);
+
+    // Auto-send re-analysis request
+    const docs = useDocumentStore.getState().documents;
+    const docContext = buildInsightsContext(docs);
+    const existingInsights = useDocumentStore.getState().insightsData;
+
+    sendMessage(
+      { text: "I've uploaded additional documents. Skip questions — immediately re-analyze ALL documents together and regenerate every artifact: output the updated insights block, then updated manifesto, personas, and journey maps. Incorporate new findings from the additional documents." },
+      {
+        body: {
+          vfsContext: "",
+          modelId: selectedModel,
+          strategyPhase: "problem-overview",
+          documentContext: docContext,
+          hasUploadedDocuments: true,
+        },
+      }
+    );
+  }, [pendingReanalysis, isLoading, sendMessage, selectedModel]);
 
   // --- Question Tabs State ---
   const [questionAnswers, setQuestionAnswers] = useState<Record<number, string>>({});
@@ -742,8 +949,8 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
     return extractOptionBlocks(text);
   }, [messages, isLoading]);
 
-  // Only show question tabs before manifesto is generated (clarifying phase)
-  const hasActiveQuestions = currentOptionBlocks.length > 0 && !manifestoData;
+  // Show question tabs before manifesto is generated OR during deep-dive re-questioning
+  const hasActiveQuestions = currentOptionBlocks.length > 0 && (!manifestoData || isDeepDive);
 
   // Reset question state when a new set of options arrives
   const lastAssistantId = useMemo(() => {
@@ -789,6 +996,35 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
     const partial = extractPartialOverview(textContent);
     if (partial) {
       useStrategyStore.getState().setStreamingOverview(partial);
+    }
+  }, [messages, isLoading]);
+
+  // --- Stream partial insights data to the canvas in real-time ---
+  useEffect(() => {
+    if (!isLoading) {
+      if (useDocumentStore.getState().streamingInsights) {
+        useDocumentStore.getState().setStreamingInsights(null);
+      }
+      return;
+    }
+
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return;
+
+    let textContent = "";
+    if (lastAssistant.parts && Array.isArray(lastAssistant.parts)) {
+      textContent = lastAssistant.parts
+        .filter((p): p is { type: "text"; text: string } => p.type === "text")
+        .map((p) => p.text)
+        .join("");
+    }
+    if (!textContent && "content" in lastAssistant && typeof lastAssistant.content === "string") {
+      textContent = lastAssistant.content;
+    }
+
+    const partialInsights = extractPartialInsights(textContent);
+    if (partialInsights) {
+      useDocumentStore.getState().setStreamingInsights(partialInsights);
     }
   }, [messages, isLoading]);
 
@@ -976,8 +1212,25 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
       }
       if (!textContent) return;
 
-      // Extract manifesto blocks
+      // Extract insights blocks
       let match;
+      while ((match = INSIGHTS_REGEX.exec(textContent)) !== null) {
+        const blockKey = `insights-${message.id}-${match.index}`;
+        if (!processedStrategyBlocksSet.has(blockKey)) {
+          processedStrategyBlocksSet.add(blockKey);
+          try {
+            const parsed = JSON.parse(match[1]);
+            if (parsed.insights && Array.isArray(parsed.insights)) {
+              useDocumentStore.getState().setInsightsData(parsed);
+            }
+          } catch (e) {
+            console.warn("[Strategy] Failed to parse insights JSON:", e);
+          }
+        }
+      }
+      INSIGHTS_REGEX.lastIndex = 0;
+
+      // Extract manifesto blocks
       while ((match = MANIFESTO_REGEX.exec(textContent)) !== null) {
         const blockKey = `manifesto-${message.id}-${match.index}`;
         if (!processedStrategyBlocksSet.has(blockKey)) {
@@ -1249,6 +1502,34 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
   // eslint-disable-next-line react-hooks/exhaustive-deps -- files/writeFile read at call-time
   }, [status, selectedModel]);
 
+  // --- Deep-dive round completion detection ---
+  // When AI finishes streaming during deep-dive, check if it output updated blocks.
+  // If so, exit deep-dive mode to re-show the approve/discuss buttons.
+  // IMPORTANT: Only check on loading→not-loading transition to avoid a race condition
+  // where isDeepDive is set to true (via Zustand) before isLoading catches up,
+  // which would cause the old assistant message (with artifacts) to falsely match.
+  const deepDivePrevLoadingRef = useRef(isLoading);
+  useEffect(() => {
+    const wasLoading = deepDivePrevLoadingRef.current;
+    deepDivePrevLoadingRef.current = isLoading;
+
+    // Only run on transition from loading to not-loading
+    if (isLoading || !wasLoading) return;
+    if (!useStrategyStore.getState().isDeepDive) return;
+
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return;
+
+    const text = getMessageText(lastAssistant);
+    const hasManifesto = /```json\s+type="manifesto"[\s\S]*?```/.test(text);
+    const hasPersonas = /```json\s+type="personas"[\s\S]*?```/.test(text);
+    const hasJourneyMaps = /```json\s+type="journey-maps"[\s\S]*?```/.test(text);
+
+    if (hasManifesto || hasPersonas || hasJourneyMaps) {
+      useStrategyStore.getState().setDeepDive(false);
+    }
+  }, [messages, isLoading]);
+
   // --- Image upload helpers ---
 
   const validateAndStageFiles = useCallback((fileList: FileList | File[]) => {
@@ -1383,20 +1664,81 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
 
       sendMessage(
         { text },
-        { body: { vfsContext, modelId: selectedModel, strategyPhase } }
+        { body: { vfsContext, modelId: selectedModel, strategyPhase, isDeepDive: useStrategyStore.getState().isDeepDive } }
       );
     },
     [isLoading, sendMessage, selectedModel, strategyPhase]
   );
 
-  // --- "I'm ready" override for confidence gating ---
+  // --- "Discuss the problem more" handler ---
+
+  const handleDiscussMore = useCallback(() => {
+    if (isLoading) return;
+    useStrategyStore.getState().setDeepDive(true);
+
+    const storeState = useStrategyStore.getState();
+    const parts: string[] = [];
+    if (storeState.manifestoData) {
+      parts.push(`## Current Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
+    }
+    if (storeState.personaData) {
+      parts.push(`## Current Personas\n\n${JSON.stringify(storeState.personaData, null, 2)}`);
+    }
+    if (storeState.journeyMapData) {
+      parts.push(`## Current Journey Maps\n\n${JSON.stringify(storeState.journeyMapData, null, 2)}`);
+    }
+    if (storeState.confidenceData) {
+      parts.push(`## Current Confidence\n\n${JSON.stringify(storeState.confidenceData, null, 2)}`);
+    }
+    const vfsContext = parts.join("\n\n");
+
+    sendMessage(
+      { text: "I'd like to discuss the problem more before moving on. What areas should we go deeper on?" },
+      { body: { vfsContext, modelId: selectedModel, strategyPhase: "problem-overview", isDeepDive: true } }
+    );
+  }, [isLoading, sendMessage, selectedModel]);
+
+  // --- "Finish discussion" handler ---
+
+  const handleFinishDiscussion = useCallback(() => {
+    if (isLoading) {
+      stop();
+    }
+
+    const storeState = useStrategyStore.getState();
+    const parts: string[] = [];
+    if (storeState.manifestoData) {
+      parts.push(`## Current Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
+    }
+    if (storeState.personaData) {
+      parts.push(`## Current Personas\n\n${JSON.stringify(storeState.personaData, null, 2)}`);
+    }
+    if (storeState.journeyMapData) {
+      parts.push(`## Current Journey Maps\n\n${JSON.stringify(storeState.journeyMapData, null, 2)}`);
+    }
+    if (storeState.confidenceData) {
+      parts.push(`## Current Confidence\n\n${JSON.stringify(storeState.confidenceData, null, 2)}`);
+    }
+    const vfsContext = parts.join("\n\n");
+
+    sendMessage(
+      { text: "Let's wrap up this discussion. Based on everything we've discussed, update the overview, personas, and journey maps where needed." },
+      { body: { vfsContext, modelId: selectedModel, strategyPhase: "problem-overview", isDeepDive: true } }
+    );
+  }, [isLoading, stop, sendMessage, selectedModel]);
+
+  // --- "I'm ready" / "Finish discussion" override for confidence gating ---
 
   const handleConfidenceReady = useCallback(() => {
     if (isLoading) return;
+    if (isDeepDive) {
+      handleFinishDiscussion();
+      return;
+    }
     sendQuickReply("I'm ready — generate the product overview now with what you know.");
-  }, [isLoading, sendQuickReply]);
+  }, [isLoading, sendQuickReply, isDeepDive, handleFinishDiscussion]);
 
-  // Show confidence bar during manifesto phase, before manifesto is generated
+  // Show confidence bar during manifesto phase (both initial and deep-dive)
   const showConfidenceBar = strategyPhase === "problem-overview" && confidenceData !== null;
 
   // --- Question Tab Handlers ---
@@ -1575,11 +1917,23 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
       ? buildingStore.flowData?.nodes.find((n) => n.id === buildingPageId)?.label
       : undefined;
 
+    // Build document context if documents are uploaded
+    const docStore = useDocumentStore.getState();
+    const hasUploadedDocuments = docStore.documents.length > 0;
+    const documentContext = hasUploadedDocuments ? buildInsightsContext(docStore.documents) : undefined;
+
+    // Include existing insights in strategy phase context
+    if (hasUploadedDocuments && docStore.insightsData && typeof vfsContext === "string") {
+      vfsContext += `\n\n## Existing Research Insights\n\n${JSON.stringify(docStore.insightsData, null, 2)}`;
+    } else if (hasUploadedDocuments && docStore.insightsData && typeof vfsContext === "object") {
+      (vfsContext as Record<string, string>).insightsContext = `## Research Insights\n\n${JSON.stringify(docStore.insightsData, null, 2)}`;
+    }
+
     // Send user's clean message for display
     // Pass context via request-level body option (hidden from UI, sent to API)
     await sendMessage(
       messagePayload as { text: string; files?: FileUIPart[] },
-      { body: { vfsContext, modelId: selectedModel, strategyPhase: effectivePhase, currentPageId: buildingPageId, currentPageName: buildingPageName } }
+      { body: { vfsContext, modelId: selectedModel, strategyPhase: effectivePhase, currentPageId: buildingPageId, currentPageName: buildingPageName, documentContext, hasUploadedDocuments } }
     );
 
     // Clear pinned elements after sending
@@ -1605,7 +1959,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
 
       {/* Confidence Bar */}
       {showConfidenceBar && (
-        <ConfidenceBar data={confidenceData} onReady={handleConfidenceReady} />
+        <ConfidenceBar data={confidenceData} onReady={handleConfidenceReady} isDeepDive={isDeepDive} />
       )}
 
       {/* Messages */}
@@ -1620,6 +1974,57 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 <p className="mt-3 text-sm text-neutral-500 text-center max-w-sm">
                   Describe the problem, and I&apos;ll help you design and build a web app to solve it.
                 </p>
+
+                {/* Document Upload Area */}
+                <div className="mt-6 w-full max-w-sm">
+                  {uploadedDocuments.length > 0 ? (
+                    <div className="space-y-2">
+                      {uploadedDocuments.map((doc) => (
+                        <div key={doc.id} className="flex items-center gap-2 text-sm text-neutral-600 bg-neutral-50 rounded-lg px-3 py-2">
+                          <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                          <span className="truncate">{doc.name}</span>
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => docFileInputRef.current?.click()}
+                        disabled={isDocUploading}
+                        className="w-full mt-1 py-2 text-xs text-neutral-400 hover:text-blue-500 transition-colors flex items-center justify-center gap-1"
+                      >
+                        {isDocUploading ? (
+                          <><Loader2 className="w-3 h-3 animate-spin" /> Uploading...</>
+                        ) : (
+                          <>+ Add more documents</>
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => docFileInputRef.current?.click()}
+                      disabled={isDocUploading}
+                      className="w-full py-3 border-2 border-dashed border-neutral-200 rounded-xl text-sm text-neutral-400 hover:border-blue-300 hover:text-blue-500 hover:bg-blue-50/30 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isDocUploading ? (
+                        <><Loader2 className="w-4 h-4 animate-spin" /> Extracting text...</>
+                      ) : (
+                        <>
+                          <FileText className="w-4 h-4" />
+                          Upload Interview Transcripts or Notes
+                        </>
+                      )}
+                    </button>
+                  )}
+                  <input
+                    ref={docFileInputRef}
+                    type="file"
+                    accept=".pdf,.docx"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => handleDocumentUpload(e.target.files)}
+                  />
+                  {uploadedDocuments.length === 0 && (
+                    <p className="text-xs text-neutral-400 mt-1.5 text-center">PDF or DOCX files</p>
+                  )}
+                </div>
               </>
             ) : strategyPhase === "problem-overview" ? (
               <>
@@ -1701,9 +2106,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           );
         })}
 
-        {/* Strategy phase approve buttons */}
-        {strategyPhase === "problem-overview" && manifestoData && personaData && journeyMapData && !isLoading && (
-          <div className="flex justify-center pt-2">
+        {/* Strategy phase approve + discuss more buttons */}
+        {strategyPhase === "problem-overview" && manifestoData && personaData && journeyMapData && !isLoading && !isDeepDive && (
+          <div className="flex flex-col items-center gap-2 pt-2">
             <button
               onClick={() => {
                 onPhaseAction?.("approve-problem-overview");
@@ -1729,6 +2134,25 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
             >
               Approve & Ideate
               <ArrowRight className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleDiscussMore}
+              className="inline-flex items-center gap-2 px-4 py-2 text-neutral-600 text-sm font-medium rounded-lg border border-neutral-200 hover:bg-neutral-100 transition-colors"
+            >
+              Discuss the problem more
+            </button>
+          </div>
+        )}
+
+        {/* "Finish discussion" button at 100% confidence during deep-dive */}
+        {strategyPhase === "problem-overview" && isDeepDive && computedConfidenceOverall >= 100 && (
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={handleFinishDiscussion}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
+            >
+              <Check className="w-4 h-4" />
+              Finish discussion
             </button>
           </div>
         )}
@@ -2340,7 +2764,7 @@ function MessageContent({ content }: { content: string }) {
 
 // Detect which strategy block type is currently streaming (open, not yet closed)
 function getStreamingBlockType(text: string): string | null {
-  const match = text.match(/```json\s+type="(options|manifesto|personas|flow|page-built|confidence|journey-maps|ideas)"[\s\S]*$/);
+  const match = text.match(/```json\s+type="(options|manifesto|personas|flow|page-built|confidence|journey-maps|ideas|wireframes|insights|decision-connections)"[\s\S]*$/);
   if (!match) return null;
   // Verify it's not a closed block
   const type = match[1];
@@ -2349,16 +2773,54 @@ function getStreamingBlockType(text: string): string | null {
   return type;
 }
 
-const STREAMING_BLOCK_LABELS: Record<string, string> = {
-  options: "Generating questions...",
-  confidence: "Updating confidence...",
-  manifesto: "Generating product overview...",
-  personas: "Generating personas...",
-  "journey-maps": "Generating journey maps...",
-  ideas: "Generating ideas...",
-  flow: "Generating architecture...",
-  "page-built": "Building page...",
-};
+function getStreamingBlockLabel(
+  blockType: string,
+  opts: {
+    isDeepDive: boolean;
+    manifestoData: unknown;
+    personaData: unknown;
+    journeyMapData: unknown;
+    wireframeData: unknown;
+    insightsData: unknown;
+    pendingReanalysis: boolean;
+    currentBuildingPage: string | null;
+  }
+): string | null {
+  switch (blockType) {
+    case "options":
+      return opts.isDeepDive ? "Refining questions..." : "Generating questions...";
+    case "confidence":
+      return "Updating confidence...";
+    case "manifesto":
+      return opts.manifestoData && opts.isDeepDive ? "Refining product overview..."
+        : opts.manifestoData ? "Regenerating product overview..."
+        : "Generating product overview...";
+    case "personas":
+      return opts.personaData && opts.isDeepDive ? "Refining personas..."
+        : opts.personaData ? "Regenerating personas..."
+        : "Generating personas...";
+    case "journey-maps":
+      return opts.journeyMapData && opts.isDeepDive ? "Refining journey maps..."
+        : opts.journeyMapData ? "Regenerating journey maps..."
+        : "Generating journey maps...";
+    case "ideas":
+      return "Generating ideas...";
+    case "flow":
+      return "Generating architecture...";
+    case "wireframes":
+      return opts.wireframeData ? "Refining wireframes..." : "Generating wireframes...";
+    case "insights":
+      return opts.pendingReanalysis ? "Re-analyzing documents..."
+        : opts.insightsData ? "Refining document insights..."
+        : "Analyzing documents...";
+    case "decision-connections":
+      return opts.currentBuildingPage ? `Mapping strategy for ${opts.currentBuildingPage}...` : "Mapping strategy connections...";
+    case "page-built":
+      return opts.currentBuildingPage ? `Building ${opts.currentBuildingPage}...` : "Building page...";
+    default:
+      return null;
+  }
+}
 
 // Streaming message content — hides code, shows preText + compact file indicators
 function StreamingMessageContent({ content }: { content: string }) {
@@ -2367,6 +2829,14 @@ function StreamingMessageContent({ content }: { content: string }) {
   const phase = useStrategyStore((s) => s.phase);
   const confidenceData = useStrategyStore((s) => s.confidenceData);
   const manifestoData = useStrategyStore((s) => s.manifestoData);
+  const isDeepDive = useStrategyStore((s) => s.isDeepDive);
+  const personaData = useStrategyStore((s) => s.personaData);
+  const journeyMapData = useStrategyStore((s) => s.journeyMapData);
+  const wireframeData = useStrategyStore((s) => s.wireframeData);
+  const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
+  const insightsData = useDocumentStore((s) => s.insightsData);
+  const hasDocuments = useDocumentStore((s) => s.documents.length > 0);
+  const pendingReanalysis = useDocumentStore((s) => s.pendingReanalysis);
 
   const parsed = useMemo(() => parseStreamingContent(content), [content]);
 
@@ -2377,18 +2847,33 @@ function StreamingMessageContent({ content }: { content: string }) {
 
   // Detect which strategy block type is actively streaming
   const streamingBlockType = useMemo(() => getStreamingBlockType(content), [content]);
-  const streamingLabel = streamingBlockType ? STREAMING_BLOCK_LABELS[streamingBlockType] ?? null : null;
+  const streamingLabel = useMemo(() =>
+    streamingBlockType
+      ? getStreamingBlockLabel(streamingBlockType, {
+          isDeepDive, manifestoData, personaData, journeyMapData,
+          wireframeData, insightsData, pendingReanalysis, currentBuildingPage,
+        })
+      : null,
+    [streamingBlockType, isDeepDive, manifestoData, personaData, journeyMapData, wireframeData, insightsData, pendingReanalysis, currentBuildingPage]
+  );
 
   // No text and no code yet → phase-aware typing indicator
   if (!cleanPreText && !hasCode && !streamingBlockType) {
     const phaseHint =
       phase === "hero" || phase === "problem-overview"
-        ? manifestoData ? "Refining product overview..."
+        ? isDeepDive ? "Going deeper..."
+        : hasDocuments && !insightsData ? "Analyzing uploaded documents..."
+        : pendingReanalysis ? "Re-analyzing documents..."
+        : manifestoData ? "Refining product overview..."
         : confidenceData && confidenceData.overall >= 80 ? "Generating product overview..."
         : "Thinking about what to ask you..."
       : phase === "ideation" ? "Generating creative ideas..."
-      : phase === "solution-design" ? "Designing architecture & pages..."
-      : phase === "building" ? "Writing code..."
+      : phase === "solution-design"
+        ? wireframeData ? "Refining architecture & wireframes..."
+        : "Designing architecture & pages..."
+      : phase === "building"
+        ? currentBuildingPage ? `Preparing to build ${currentBuildingPage}...`
+        : "Writing code..."
       : null;
 
     if (phaseHint) {
@@ -2501,12 +2986,22 @@ function CollapsedMessageContent({ content }: { content: string }) {
 // Phase-aware spinner shown before the first assistant token arrives
 function StreamingStatus() {
   const phase = useStrategyStore((s) => s.phase);
+  const isDeepDive = useStrategyStore((s) => s.isDeepDive);
+  const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
+  const hasDocuments = useDocumentStore((s) => s.documents.length > 0);
+  const pendingReanalysis = useDocumentStore((s) => s.pendingReanalysis);
 
   const message =
-    phase === "hero" || phase === "problem-overview" ? "Analyzing your problem..."
+    phase === "hero" || phase === "problem-overview"
+      ? isDeepDive ? "Going deeper into the problem..."
+      : pendingReanalysis ? "Re-analyzing all documents..."
+      : hasDocuments ? "Analyzing your problem and documents..."
+      : "Analyzing your problem..."
     : phase === "ideation" ? "Generating ideas..."
     : phase === "solution-design" ? "Designing solution..."
-    : phase === "building" ? "Preparing to build..."
+    : phase === "building"
+      ? currentBuildingPage ? `Preparing to build ${currentBuildingPage}...`
+      : "Preparing to build..."
     : null;
 
   return (

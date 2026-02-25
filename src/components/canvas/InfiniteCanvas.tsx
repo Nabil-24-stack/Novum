@@ -216,19 +216,6 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
         onClick={handleCanvasClick}
         onScroll={handleScroll}
       >
-        {/* Grid pattern background */}
-        {!hideChrome && (
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              backgroundImage: `
-                radial-gradient(circle, #d4d4d4 1px, transparent 1px)
-              `,
-              backgroundSize: `${20 * viewport.scale}px ${20 * viewport.scale}px`,
-              backgroundPosition: `${viewport.x}px ${viewport.y}px`,
-            }}
-          />
-        )}
 
         {/* Canvas content with pan/zoom transform */}
         <div

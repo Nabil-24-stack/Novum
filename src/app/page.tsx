@@ -28,6 +28,8 @@ import { InspectorContextMenu } from "@/components/canvas/InspectorContextMenu";
 import { FlowFrame } from "@/components/flow/FlowFrame";
 import { FlowConnections } from "@/components/flow/FlowConnections";
 import { ManifestoCard } from "@/components/strategy/ManifestoCard";
+import { InsightsCard } from "@/components/strategy/InsightsCard";
+import { useDocumentStore } from "@/hooks/useDocumentStore";
 import { PersonaCard } from "@/components/strategy/PersonaCard";
 import { JourneyMapCard } from "@/components/strategy/JourneyMapCard";
 import { CoverageCard } from "@/components/strategy/CoverageCard";
@@ -38,7 +40,7 @@ import { calculateHorizontalLayout, type GroupId, type GroupConfig, type GroupOr
 import { calculateStrategyLayout } from "@/lib/strategy/strategy-layout";
 import { initializeTestAPI, updateTestAPI } from "@/lib/ast/test-utils";
 import { PublishDialog } from "@/components/editor/PublishDialog";
-import { Smartphone, GitBranch, Share } from "lucide-react";
+import { Smartphone, GitBranch, Share, RefreshCw } from "lucide-react";
 import { animateViewport, calculateCenteredViewport, calculateFitAllViewport } from "@/lib/canvas/viewport-animation";
 import { calculateFlowLayout } from "@/lib/flow/auto-layout";
 import type { CanvasTool, CanvasNode } from "@/lib/canvas/types";
@@ -89,6 +91,12 @@ export default function Home() {
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
   const currentBuildingPages = useStrategyStore((s) => s.currentBuildingPages);
 
+  // Document/Insights state
+  const insightsData = useDocumentStore((s) => s.insightsData);
+  const streamingInsights = useDocumentStore((s) => s.streamingInsights);
+  const isDocUploading = useDocumentStore((s) => s.isUploading);
+  const documentInputRef = useRef<HTMLInputElement>(null);
+
   // Product Brain state
   const brainData = useProductBrainStore((s) => s.brainData);
   const coverageSummary = useMemo(() => {
@@ -123,6 +131,14 @@ export default function Home() {
   // --- Build group configs from current strategy data ---
   const buildGroupConfigs = useCallback((): GroupConfig[] => {
     const configs: GroupConfig[] = [];
+
+    // Insights group (first, left of product-overview)
+    configs.push({
+      id: "insights",
+      width: 600,
+      height: 500,
+      visible: !!(insightsData || streamingInsights),
+    });
 
     configs.push({
       id: "product-overview",
@@ -174,7 +190,7 @@ export default function Home() {
     });
 
     return configs;
-  }, [manifestoData, streamingOverview, personaData, streamingPersonas, journeyMapData, streamingJourneyMaps, ideaData, streamingIdeas, flowData, activeWireframeData]);
+  }, [insightsData, streamingInsights, manifestoData, streamingOverview, personaData, streamingPersonas, journeyMapData, streamingJourneyMaps, ideaData, streamingIdeas, flowData, activeWireframeData]);
 
   // --- Layout effect: compute horizontal group origins when groups appear ---
   useEffect(() => {
@@ -715,6 +731,7 @@ export default function Home() {
 
   // --- Materialization refresh signals (per-page counter to force iframe refresh after drop) ---
   const [materializeRefreshMap, setMaterializeRefreshMap] = useState<Map<string, number>>(() => new Map());
+  const [globalRefreshCounter, setGlobalRefreshCounter] = useState(0);
 
   // --- Active frame state for CanvasOverlay (prototype mode drop detection) ---
   const activeFrameState: FrameState | undefined = useMemo(() => {
@@ -893,6 +910,52 @@ export default function Home() {
 
   const handleHeroSubmit = useCallback(() => {
     // Phase transition already handled by ChatTab + strategy store
+  }, []);
+
+  // Document upload handler (for InsightsCard "Upload More" and hidden input)
+  const handleCanvasDocumentUpload = useCallback(async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+
+    const validFiles = Array.from(fileList).filter((f) => {
+      const ext = f.name.split(".").pop()?.toLowerCase();
+      return ext === "pdf" || ext === "docx";
+    });
+
+    if (validFiles.length === 0) return;
+
+    const { toast } = await import("sonner");
+    useDocumentStore.getState().setUploading(true);
+
+    try {
+      const formData = new FormData();
+      validFiles.forEach((f) => formData.append("files", f));
+
+      const res = await fetch("/api/extract-document", { method: "POST", body: formData });
+      if (!res.ok) throw new Error("Upload failed");
+
+      const data = await res.json();
+      const docs = (data.documents as { name: string; text: string }[]).map((d) => ({
+        id: crypto.randomUUID(),
+        name: d.name,
+        text: d.text,
+        uploadedAt: new Date().toISOString(),
+      }));
+
+      useDocumentStore.getState().addDocuments(docs);
+      toast.success(`${docs.length} document${docs.length > 1 ? "s" : ""} uploaded`);
+
+      // Trigger re-analysis if insights already exist
+      if (useDocumentStore.getState().insightsData) {
+        useDocumentStore.getState().setPendingReanalysis(true);
+      }
+    } catch (err) {
+      console.error("[DocumentUpload]", err);
+      const { toast: t } = await import("sonner");
+      t.error("Failed to extract document text");
+    } finally {
+      useDocumentStore.getState().setUploading(false);
+      if (documentInputRef.current) documentInputRef.current.value = "";
+    }
   }, []);
 
   // Center the floating chat on mount for hero phase
@@ -1089,6 +1152,16 @@ export default function Home() {
 
   return (
     <main className="w-screen h-screen overflow-hidden flex flex-col">
+      {/* Hidden document upload input for InsightsCard "Upload More" */}
+      <input
+        ref={documentInputRef}
+        type="file"
+        accept=".pdf,.docx"
+        multiple
+        className="hidden"
+        onChange={(e) => handleCanvasDocumentUpload(e.target.files)}
+      />
+
       {/* Top Navigation Bar - hidden during hero phase */}
       {showNav && (
         <nav className="h-12 bg-white border-b border-neutral-200 flex items-center justify-between px-4 shrink-0">
@@ -1120,6 +1193,13 @@ export default function Home() {
           {/* Action buttons on far right */}
           {!isEarlyStrategyPhase && viewMode === "app" && (
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => setGlobalRefreshCounter((c) => c + 1)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
+                title="Refresh all frames"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
               <button
                 onClick={handlePrototypeToggle}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
@@ -1172,6 +1252,23 @@ export default function Home() {
             hideChrome={isFrameExpanded}
           >
             {/* Strategy artifacts — placed directly on canvas, left to right */}
+
+            {/* Insights Card — first group, left of manifesto */}
+            {(insightsData || streamingInsights) && (() => {
+              const g = getGroupOrigin("insights");
+              if (!g) return null;
+              return (
+                <InsightsCard
+                  data={insightsData || streamingInsights!}
+                  x={g.x}
+                  y={g.y}
+                  onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("insights", { x: nx, y: ny }))}
+                  onUploadMore={() => documentInputRef.current?.click()}
+                  isUploading={isDocUploading}
+                />
+              );
+            })()}
+
             {(manifestoData || streamingOverview) && (() => {
               const g = getGroupOrigin("product-overview");
               if (!g) return null;
@@ -1367,7 +1464,7 @@ export default function Home() {
                   animateEntrance={strategyPhase === "building"}
                   isExpanded={isThisFrameExpanded || undefined}
                   forceStreamingOverlay={isThisFrameExpanded || undefined}
-                  refreshSignal={materializeRefreshMap.get(page.id)}
+                  refreshSignal={(materializeRefreshMap.get(page.id) ?? 0) + globalRefreshCounter}
                 />
               );
             })}

@@ -22,9 +22,10 @@ function barColor(score: number): string {
 interface ConfidenceBarProps {
   data: ConfidenceData;
   onReady: () => void;
+  isDeepDive?: boolean;
 }
 
-export function ConfidenceBar({ data, onReady }: ConfidenceBarProps) {
+export function ConfidenceBar({ data, onReady, isDeepDive }: ConfidenceBarProps) {
   const [expanded, setExpanded] = useState(false);
 
   // Compute overall from actual dimension scores instead of trusting the AI's self-reported value
@@ -67,14 +68,14 @@ export function ConfidenceBar({ data, onReady }: ConfidenceBarProps) {
           </button>
         </div>
 
-        {/* "I'm ready" button — always visible, right-aligned */}
+        {/* "I'm ready" / "Finish discussion" button — always visible, right-aligned */}
         {!expanded && (
           <div className="flex justify-end mt-1.5">
             <button
               onClick={onReady}
               className="inline-flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-800 transition-colors"
             >
-              I&apos;m ready
+              {isDeepDive ? "Finish discussion" : "I\u0027m ready"}
               <ArrowRight className="w-3 h-3" />
             </button>
           </div>
@@ -111,7 +112,7 @@ export function ConfidenceBar({ data, onReady }: ConfidenceBarProps) {
               onClick={onReady}
               className="inline-flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-800 transition-colors"
             >
-              I&apos;m ready
+              {isDeepDive ? "Finish discussion" : "I\u0027m ready"}
               <ArrowRight className="w-3 h-3" />
             </button>
           </div>

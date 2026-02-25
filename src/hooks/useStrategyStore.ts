@@ -124,6 +124,9 @@ interface StrategyState {
   currentBuildingPages: string[];
   pendingApprovalPage: string | null;
 
+  // Deep-dive mode (re-enter questioning phase after initial overview generation)
+  isDeepDive: boolean;
+
   // Wireframe data (JSON wireframes from solution-design phase)
   wireframeData: WireframeData | null;
   streamingWireframes: WireframeData | null;
@@ -146,6 +149,7 @@ interface StrategyState {
   setBuildingPage: (pageId: string | null) => void;
   setBuildingPages: (pageIds: string[]) => void;
   setPendingApprovalPage: (pageId: string | null) => void;
+  setDeepDive: (v: boolean) => void;
   setWireframeData: (data: WireframeData) => void;
   setStreamingWireframes: (data: WireframeData | null) => void;
   reset: () => void;
@@ -169,6 +173,7 @@ const initialState = {
   currentBuildingPage: null as string | null,
   currentBuildingPages: [] as string[],
   pendingApprovalPage: null as string | null,
+  isDeepDive: false,
   wireframeData: null as WireframeData | null,
   streamingWireframes: null as WireframeData | null,
 };
@@ -190,7 +195,42 @@ export const useStrategyStore = create<StrategyState>((set) => ({
 
   setFlowData: (data) => set({ flowData: data }),
 
-  setConfidenceData: (data) => set({ confidenceData: data }),
+  setConfidenceData: (data) =>
+    set((state) => {
+      // Confidence ratchet: during deep-dive, scores can only go up
+      if (state.isDeepDive && state.confidenceData) {
+        const prev = state.confidenceData.dimensions;
+        const ratcheted: ConfidenceData = {
+          overall: 0,
+          dimensions: {
+            targetUser: {
+              score: Math.max(prev.targetUser.score, data.dimensions.targetUser.score),
+              summary: data.dimensions.targetUser.summary,
+            },
+            coreProblem: {
+              score: Math.max(prev.coreProblem.score, data.dimensions.coreProblem.score),
+              summary: data.dimensions.coreProblem.summary,
+            },
+            currentWorkflow: {
+              score: Math.max(prev.currentWorkflow.score, data.dimensions.currentWorkflow.score),
+              summary: data.dimensions.currentWorkflow.summary,
+            },
+            domainContext: {
+              score: Math.max(prev.domainContext.score, data.dimensions.domainContext.score),
+              summary: data.dimensions.domainContext.summary,
+            },
+            stakesAndImpact: {
+              score: Math.max(prev.stakesAndImpact.score, data.dimensions.stakesAndImpact.score),
+              summary: data.dimensions.stakesAndImpact.summary,
+            },
+          },
+        };
+        const scores = Object.values(ratcheted.dimensions).map((d) => d.score);
+        ratcheted.overall = Math.min(100, Math.round(scores.reduce((a, b) => a + b, 0) / scores.length));
+        return { confidenceData: ratcheted };
+      }
+      return { confidenceData: data };
+    }),
 
   setJourneyMapData: (data) => set({ journeyMapData: data, streamingJourneyMaps: null }),
 
@@ -214,6 +254,8 @@ export const useStrategyStore = create<StrategyState>((set) => ({
   setBuildingPages: (pageIds) => set({ currentBuildingPages: pageIds, currentBuildingPage: null }),
 
   setPendingApprovalPage: (pageId) => set({ pendingApprovalPage: pageId }),
+
+  setDeepDive: (v) => set({ isDeepDive: v }),
 
   setWireframeData: (data) => set({ wireframeData: data, streamingWireframes: null }),
 

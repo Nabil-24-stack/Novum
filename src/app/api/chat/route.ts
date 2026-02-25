@@ -1,7 +1,8 @@
 import { streamText, convertToModelMessages } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
-import { PROBLEM_OVERVIEW_SYSTEM_PROMPT, IDEATION_SYSTEM_PROMPT, buildSolutionDesignSystemPrompt, buildBuildSystemPrompt } from "@/lib/ai/strategy-prompts";
+import { PROBLEM_OVERVIEW_SYSTEM_PROMPT, IDEATION_SYSTEM_PROMPT, buildSolutionDesignSystemPrompt, buildBuildSystemPrompt, buildDeepDiveSystemPrompt } from "@/lib/ai/strategy-prompts";
+import { INSIGHTS_PROMPT_FRAGMENT } from "@/lib/ai/insights-prompt";
 
 type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-5";
 
@@ -441,7 +442,7 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     **IMPORTANT:** Always update /flow.json when adding new pages so they appear in the Flow View!`;
 
 export async function POST(req: Request) {
-  const { messages, vfsContext, modelId, strategyPhase, currentPageId, currentPageName } = await req.json();
+  const { messages, vfsContext, modelId, strategyPhase, currentPageId, currentPageName, isDeepDive, documentContext, hasUploadedDocuments } = await req.json();
 
   // Convert UIMessage[] to ModelMessage[] format
   const modelMessages = await convertToModelMessages(messages);
@@ -449,9 +450,16 @@ export async function POST(req: Request) {
   // Select system prompt based on strategy phase
   let basePrompt: string;
   switch (strategyPhase) {
-    case "problem-overview":
-      basePrompt = PROBLEM_OVERVIEW_SYSTEM_PROMPT;
+    case "problem-overview": {
+      let overviewPrompt = isDeepDive
+        ? buildDeepDiveSystemPrompt(PROBLEM_OVERVIEW_SYSTEM_PROMPT)
+        : PROBLEM_OVERVIEW_SYSTEM_PROMPT;
+      if (hasUploadedDocuments) {
+        overviewPrompt += INSIGHTS_PROMPT_FRAGMENT;
+      }
+      basePrompt = overviewPrompt;
       break;
+    }
     case "ideation":
       basePrompt = IDEATION_SYSTEM_PROMPT;
       break;
@@ -474,9 +482,14 @@ export async function POST(req: Request) {
 
   // Dynamic system prompt with VFS context (hidden from chat UI)
   const contextString = typeof vfsContext === "string" ? vfsContext : vfsContext?.vfs || "";
-  const dynamicSystemPrompt = contextString
+  let dynamicSystemPrompt = contextString
     ? `${basePrompt}\n\n---\n\n## Current VFS Context\n\n${contextString}`
     : basePrompt;
+
+  // Inject document context when available
+  if (documentContext) {
+    dynamicSystemPrompt += `\n\n---\n\n${documentContext}`;
+  }
 
   const result = streamText({
     model: getModel(modelId || "gemini-2.5-pro"),

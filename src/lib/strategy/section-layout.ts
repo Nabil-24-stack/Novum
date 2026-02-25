@@ -9,6 +9,7 @@
  */
 
 export type GroupId =
+  | "insights"
   | "product-overview"
   | "personas"
   | "journey-maps"
