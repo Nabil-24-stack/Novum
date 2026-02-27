@@ -4,7 +4,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { PROBLEM_OVERVIEW_SYSTEM_PROMPT, IDEATION_SYSTEM_PROMPT, buildSolutionDesignSystemPrompt, buildBuildSystemPrompt, buildDeepDiveSystemPrompt } from "@/lib/ai/strategy-prompts";
 import { INSIGHTS_PROMPT_FRAGMENT } from "@/lib/ai/insights-prompt";
 
-type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-5";
+type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6";
 
 function getModel(modelId: ModelId) {
   switch (modelId) {
@@ -12,8 +12,8 @@ function getModel(modelId: ModelId) {
       return google("gemini-2.5-pro");
     case "gemini-3-pro-preview":
       return google("gemini-3-pro-preview");
-    case "claude-sonnet-4-5":
-      return anthropic("claude-sonnet-4-5-20250929");
+    case "claude-sonnet-4-6":
+      return anthropic("claude-sonnet-4-6");
     default:
       return google("gemini-2.5-pro");
   }
@@ -99,7 +99,7 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
 | Slider | /components/ui/slider.tsx | Slider | \`value\` (number), \`onValueChange\` (NOT defaultValue/array) |
 | Input | /components/ui/input.tsx | Input | Standard input props |
 | Label | /components/ui/label.tsx | Label | |
-| Select | /components/ui/select.tsx | Select, SelectOption | Native HTML select wrapper (NOT Radix) |
+| Select | /components/ui/select.tsx | Select, SelectOption | **NATIVE HTML <select> — NOT Radix.** Use \`<Select><SelectOption value="x">Label</SelectOption></Select>\`. Do NOT use SelectTrigger/SelectValue/SelectContent/SelectItem. |
 | Separator | /components/ui/separator.tsx | Separator | orientation prop |
 | Checkbox | /components/ui/checkbox.tsx | Checkbox | \`checked\`, \`onCheckedChange\` (NOT defaultChecked) |
 | Tabs | /components/ui/tabs.tsx | Tabs, TabsList, TabsTrigger, TabsContent | defaultValue, onValueChange |
@@ -123,6 +123,14 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
 - Do NOT recreate or overwrite these components. Import and use them directly from their paths.
 - NEVER modify files in /components/ui/ for these 27 components - they have specific APIs that the canvas tools depend on.
 - If you need different functionality, create a NEW component with a DIFFERENT name (e.g., "fancy-select" not "select").
+
+## COMMON IMPORT MISTAKES (AVOID THESE):
+
+1. **Toast:** Import \`useToast\` from \`"./components/ui/toast"\` — NOT from \`"./components/ui/use-toast"\` or \`"./hooks/use-toast"\`
+2. **Select:** Use ONLY \`Select\` and \`SelectOption\`. Do NOT use SelectTrigger, SelectValue, SelectContent, or SelectItem (those are Radix patterns that don't exist here)
+3. **Dialog:** There is NO \`DialogFooter\` or \`DialogClose\` export. Use a regular \`<div>\` for footer content inside DialogContent.
+4. **Import paths:** Use RELATIVE paths (\`./components/ui/...\`), NEVER \`@/\` aliases
+5. **Only import components from the table above** — do not invent new component names
 
 ## Rules
 
@@ -324,6 +332,34 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
 
     NEVER use text-primary on bg-primary (same color = invisible text).
 
+    **MISSING TEXT COLOR RULE:** When you apply bg-primary, bg-secondary, bg-destructive, bg-accent, or bg-muted to ANY element,
+    you MUST ALSO add the matching text-X-foreground class. Without it, text inherits dark text-foreground which is unreadable on dark backgrounds.
+    Exception: Low-opacity tints like bg-primary/10 are fine without a text color — the inherited text-foreground is readable.
+
+    ## COMPONENT REUSE RULE (CRITICAL - DO NOT RECREATE EXISTING COMPONENTS):
+
+    ALWAYS use the pre-installed Shadcn components instead of recreating them from raw HTML.
+    The gatekeeper will automatically promote raw HTML to components, but writing them correctly saves a processing step.
+
+    | WRONG (raw HTML) | CORRECT (component) |
+    |------------------|---------------------|
+    | \`<span className="inline-flex px-2.5 py-0.5 text-xs font-semibold rounded-full bg-primary text-primary-foreground">Tag</span>\` | \`<Badge>Tag</Badge>\` |
+    | \`<div className="rounded-lg border bg-card shadow p-6">...</div>\` | \`<Card><CardContent className="p-6">...</CardContent></Card>\` |
+    | \`<hr className="border-border" />\` or \`<div className="h-px w-full bg-border" />\` | \`<Separator />\` |
+    | \`<div className="rounded-full h-10 w-10 overflow-hidden"><img ... /></div>\` | \`<Avatar><AvatarImage src="..." /><AvatarFallback>AB</AvatarFallback></Avatar>\` |
+    | \`<div role="alert" className="border p-4 rounded-lg">...</div>\` | \`<Alert><AlertTitle>...</AlertTitle><AlertDescription>...</AlertDescription></Alert>\` |
+    | \`<table className="w-full">...<tr>...<td>...</td></tr></table>\` | \`<Table><TableHeader><TableRow><TableHead>...</TableHead></TableRow></TableHeader><TableBody><TableRow><TableCell>...</TableCell></TableRow></TableBody></Table>\` |
+
+    **ALWAYS use:**
+    - \`<Badge>\` for status indicators, tags, labels, counts
+    - \`<Card>\` (with CardHeader/CardContent) for bordered containers with content
+    - \`<Separator />\` for horizontal/vertical dividers
+    - \`<Avatar>\` for profile images, user icons
+    - \`<Alert>\` for notification banners, callouts
+    - \`<Table>\` for tabular data (with TableHeader, TableBody, TableRow, TableHead, TableCell)
+    - \`<Select>\` for dropdown selects (NOT raw \`<select>\`)
+    - \`<Progress>\` for progress bars (NOT raw divs with width percentages)
+
     **Radius:** Use rounded-sm, rounded-md, rounded-lg, rounded-xl (mapped to --radius CSS variable)
 
     **Dark Mode:** Handled automatically by the token system. Do NOT add dark: prefixes.
@@ -442,7 +478,7 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     **IMPORTANT:** Always update /flow.json when adding new pages so they appear in the Flow View!`;
 
 export async function POST(req: Request) {
-  const { messages, vfsContext, modelId, strategyPhase, currentPageId, currentPageName, isDeepDive, documentContext, hasUploadedDocuments } = await req.json();
+  const { messages, vfsContext, modelId, strategyPhase, currentPageId, currentPageName, isDeepDive, documentContext } = await req.json();
 
   // Convert UIMessage[] to ModelMessage[] format
   const modelMessages = await convertToModelMessages(messages);
@@ -454,9 +490,7 @@ export async function POST(req: Request) {
       let overviewPrompt = isDeepDive
         ? buildDeepDiveSystemPrompt(PROBLEM_OVERVIEW_SYSTEM_PROMPT)
         : PROBLEM_OVERVIEW_SYSTEM_PROMPT;
-      if (hasUploadedDocuments) {
-        overviewPrompt += INSIGHTS_PROMPT_FRAGMENT;
-      }
+      overviewPrompt += INSIGHTS_PROMPT_FRAGMENT;
       basePrompt = overviewPrompt;
       break;
     }

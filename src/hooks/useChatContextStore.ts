@@ -12,6 +12,10 @@ export interface PinnedElement {
   textContent?: string;
 }
 
+export interface AddressGapsPayload {
+  unaddressedJtbds: { index: number; text: string }[];
+}
+
 interface ChatContextState {
   pinnedElements: PinnedElement[];
   contextMenu: {
@@ -20,16 +24,19 @@ interface ChatContextState {
     y: number;
     element: PinnedElement | null;
   };
+  pendingAddressGaps: AddressGapsPayload | null;
   showContextMenu: (x: number, y: number, element: PinnedElement) => void;
   hideContextMenu: () => void;
   pinElement: (element: PinnedElement) => void;
   unpinElement: (id: string) => void;
   clearPinnedElements: () => void;
+  setPendingAddressGaps: (payload: AddressGapsPayload | null) => void;
 }
 
 export const useChatContextStore = create<ChatContextState>((set, get) => ({
   pinnedElements: [],
   contextMenu: { visible: false, x: 0, y: 0, element: null },
+  pendingAddressGaps: null,
 
   showContextMenu: (x, y, element) => {
     set({ contextMenu: { visible: true, x, y, element } });
@@ -52,5 +59,9 @@ export const useChatContextStore = create<ChatContextState>((set, get) => ({
 
   clearPinnedElements: () => {
     set({ pinnedElements: [] });
+  },
+
+  setPendingAddressGaps: (payload) => {
+    set({ pendingAddressGaps: payload });
   },
 }));

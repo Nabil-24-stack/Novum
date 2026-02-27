@@ -2,7 +2,7 @@
  * Horizontal layout calculator for strategy artifact groups.
  *
  * Places each visible group left-to-right in a single row:
- *   [Overview] → [Personas] → [Journey Maps] → [Ideas] → [Architecture] → [Wireframes]
+ *   [Overview] → [Personas] → [Journey Maps] → [Ideas] → [Key Features] → [Architecture] → [User Flows]
  *
  * Each group has its own internal card layout (personas side-by-side, etc.).
  * This module only computes the group origin positions — no visual containers.
@@ -14,8 +14,9 @@ export type GroupId =
   | "personas"
   | "journey-maps"
   | "ideas"
+  | "key-features"
   | "architecture"
-  | "wireframes";
+  | "user-flows";
 
 export interface GroupConfig {
   id: GroupId;

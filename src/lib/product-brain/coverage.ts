@@ -21,7 +21,11 @@ export function computeCoverage(
   personas: PersonaData[],
   journeyMaps: JourneyMapData[]
 ): CoverageSummary {
-  const allConnections = brain.pages.flatMap((p) => p.connections);
+  // Flatten connections, carrying the parent page's pageId onto each connection
+  // (the AI JSON has pageId at the PageDecisions level, not per-connection)
+  const allConnections = brain.pages.flatMap((p) =>
+    p.connections.map((c) => ({ ...c, pageId: c.pageId || p.pageId }))
+  );
 
   // --- JTBD Coverage ---
   const jtbdCoverage: JtbdCoverage[] = manifesto.jtbd.map((text, index) => {
@@ -35,6 +39,10 @@ export function computeCoverage(
       addressedBy: matching.map((c) => ({
         pageId: c.pageId,
         componentDescription: c.componentDescription,
+        connectionId: c.id,
+        personaNames: c.personaNames,
+        rationale: c.rationale,
+        insightIndices: c.insightIndices,
       })),
     };
   });

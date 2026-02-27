@@ -41,6 +41,12 @@ interface FlowFrameProps {
   forceStreamingOverlay?: boolean;
   /** Signal to force iframe refresh (increment to trigger) */
   refreshSignal?: number;
+  /** Whether strategy annotations are available for this frame */
+  annotationsAvailable?: boolean;
+  /** Whether annotations are currently shown */
+  annotationsOpen?: boolean;
+  /** Callback when annotation visibility changes */
+  onAnnotationsOpenChange?: (open: boolean) => void;
 }
 
 export function FlowFrame({
@@ -64,6 +70,9 @@ export function FlowFrame({
   isExpanded,
   forceStreamingOverlay,
   refreshSignal,
+  annotationsAvailable,
+  annotationsOpen,
+  onAnnotationsOpenChange,
 }: FlowFrameProps) {
   const frameRef = useRef<HTMLDivElement>(null);
 
@@ -76,18 +85,18 @@ export function FlowFrame({
   // Refresh key for forcing SandpackWrapper remount
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // External refresh signal (e.g., after materialization)
+  // External refresh signal (materialization only — verification no longer triggers remounts)
+  const combinedSignal = refreshSignal ?? 0;
+
   const refreshSignalMountRef = useRef(true);
   useEffect(() => {
     if (refreshSignalMountRef.current) {
       refreshSignalMountRef.current = false;
       return;
     }
-    if (refreshSignal !== undefined) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- External signal triggers refresh
-      setRefreshKey((k) => k + 1);
-    }
-  }, [refreshSignal]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- External signal triggers refresh
+    setRefreshKey((k) => k + 1);
+  }, [combinedSignal]);
 
   // Auto-refresh after AI finishes building this page
   const pendingApprovalPage = useStrategyStore((s) => s.pendingApprovalPage);
@@ -184,6 +193,7 @@ export function FlowFrame({
         previewMode={localPreviewMode}
         inspectionMode={isActive && inspectionMode}
         flowModeActive={flowModeActive}
+        pageId={page.id}
         key={`flow-frame-${page.id}-${refreshKey}`}
       >
         <Frame
@@ -207,6 +217,9 @@ export function FlowFrame({
           onExternalDragStart={handleHeaderDragStart}
           isExpanded={isExpanded}
           forceStreamingOverlay={forceStreamingOverlay}
+          annotationsAvailable={annotationsAvailable}
+          annotationsOpen={annotationsOpen}
+          onAnnotationsOpenChange={onAnnotationsOpenChange}
         />
       </SandpackWrapper>
     </div>

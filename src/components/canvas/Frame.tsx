@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect, MouseEvent, PointerEvent } from "react";
 import { SandpackPreview, SandpackCodeViewer } from "@codesandbox/sandpack-react";
-import { GripHorizontal, Sun, Moon, Pencil, Layers, Eye, Code, RefreshCw } from "lucide-react";
+import { GripHorizontal, Sun, Moon, Pencil, Layers, Eye, Code, RefreshCw, MessageSquareText } from "lucide-react";
 import { useCanvasScale } from "./InfiniteCanvas";
 import { LayersPanel } from "./LayersPanel";
 import { StreamingOverlay } from "./StreamingOverlay";
@@ -49,6 +49,10 @@ interface FrameProps {
   isExpanded?: boolean;
   // Force streaming overlay to show (active frame in Prototype View)
   forceStreamingOverlay?: boolean;
+  // Annotation toggle (strategy annotations per-frame)
+  annotationsAvailable?: boolean;
+  annotationsOpen?: boolean;
+  onAnnotationsOpenChange?: (open: boolean) => void;
 }
 
 type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
@@ -94,6 +98,9 @@ export function Frame({
   onExternalDragEnd,
   isExpanded,
   forceStreamingOverlay,
+  annotationsAvailable,
+  annotationsOpen,
+  onAnnotationsOpenChange,
 }: FrameProps) {
 
   type FrameViewMode = "preview" | "code";
@@ -534,6 +541,25 @@ export function Frame({
             title={layersOpen ? "Hide layers" : "Show layers"}
           >
             <Layers className="w-3.5 h-3.5" />
+          </button>
+        )}
+
+        {/* Annotation toggle - only visible when strategy annotations available and in preview mode */}
+        {annotationsAvailable && onAnnotationsOpenChange && viewMode === "preview" && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onAnnotationsOpenChange(!annotationsOpen);
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className={`p-1.5 rounded transition-colors pointer-events-auto ${
+              annotationsOpen
+                ? "bg-amber-100 text-amber-600"
+                : "bg-neutral-100 text-neutral-400 hover:text-neutral-600"
+            }`}
+            title={annotationsOpen ? "Hide annotations" : "Show annotations"}
+          >
+            <MessageSquareText className="w-3.5 h-3.5" />
           </button>
         )}
 

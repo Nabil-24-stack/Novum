@@ -1,16 +1,19 @@
 /**
- * Captures a screenshot from a Sandpack iframe via postMessage.
- * Sends `novum:capture-screenshot` and waits for `novum:screenshot-captured`.
+ * Iframe error detection via postMessage.
+ * Sends `novum:query-errors` and waits for `novum:error-report`.
  */
 
 const DEFAULT_TIMEOUT = 5000;
 
-export function captureIframeScreenshot(
+/**
+ * Query a Sandpack iframe for runtime errors by checking document.body text.
+ * Returns the error text if found, or null if the page looks clean.
+ */
+export function queryIframeErrors(
   pageId?: string,
   timeout = DEFAULT_TIMEOUT
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    // Find the target iframe
+): Promise<string | null> {
+  return new Promise((resolve) => {
     let iframe: HTMLIFrameElement | null;
     if (pageId) {
       iframe = document.querySelector(
@@ -23,30 +26,23 @@ export function captureIframeScreenshot(
     }
 
     if (!iframe?.contentWindow) {
-      reject(new Error("No Sandpack iframe found"));
+      resolve(null);
       return;
     }
 
     const timer = setTimeout(() => {
       window.removeEventListener("message", handler);
-      reject(new Error("Screenshot capture timed out"));
+      resolve(null); // Timeout = assume no errors
     }, timeout);
 
     function handler(e: MessageEvent) {
-      if (e.data?.type !== "novum:screenshot-captured") return;
-
+      if (e.data?.type !== "novum:error-report") return;
       clearTimeout(timer);
       window.removeEventListener("message", handler);
-
-      const { dataUrl, error } = e.data.payload || {};
-      if (dataUrl) {
-        resolve(dataUrl);
-      } else {
-        reject(new Error(error || "Screenshot capture returned null"));
-      }
+      resolve(e.data.payload?.errorText || null);
     }
 
     window.addEventListener("message", handler);
-    iframe.contentWindow.postMessage({ type: "novum:capture-screenshot" }, "*");
+    iframe.contentWindow.postMessage({ type: "novum:query-errors" }, "*");
   });
 }

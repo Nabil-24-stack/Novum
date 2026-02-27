@@ -26,7 +26,7 @@ function parseDependencies(files: Record<string, string>): Record<string, string
   return defaultPackageJson.dependencies;
 }
 
-export function PublishedAppViewer({ name, files }: PublishedAppViewerProps) {
+export function PublishedAppViewer({ files }: PublishedAppViewerProps) {
   const dependencies = useMemo(() => parseDependencies(files), [files]);
 
   const sandpackFiles = useMemo(() => {

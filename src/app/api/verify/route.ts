@@ -19,42 +19,36 @@ function getModel(modelId: ModelId) {
 
 export const maxDuration = 30;
 
-const VERIFY_SYSTEM_PROMPT = `You are a visual QA reviewer for a web application preview.
-Analyze the screenshot for critical issues ONLY:
-
-1. **Runtime error screens** — Red error overlays, stack traces, "Something went wrong"
-2. **Blank/white pages** — No visible content rendered at all
-3. **Obvious broken layouts** — Content overflowing off-screen, elements stacked on top of each other unreadably
-4. **Missing content** — A page that should have content but shows empty containers
-
-Do NOT flag:
-- Minor styling differences or preferences
-- Color choices or font sizes
-- Spacing that looks slightly off
-- Missing images (placeholder images are fine)
-- Scrollbars or overflow on purpose
+const ERROR_FIX_SYSTEM_PROMPT = `You are a code-level QA reviewer for a web application.
+The page has a runtime error. Analyze the error text and the source code, then provide a fix.
 
 Respond with ONLY valid JSON (no markdown fencing):
-- If the page looks reasonable: {"status":"pass"}
-- If there are critical issues: {"status":"fail","issues":["issue 1","issue 2"],"fixCode":"<code blocks>"}
+- {"status":"fail","issues":["description of the issue"],"fixCode":"<code blocks>"}
 
 For fixCode, use markdown code blocks with file="path" attributes, e.g.:
 \`\`\`tsx file="/App.tsx"
 // fixed code here
 \`\`\`
 
-Keep fixes minimal — only fix the specific issues you identified.`;
+Common issues:
+- "Element type is invalid" — usually a missing or wrong import/export (e.g., using default import for a named export)
+- "is not defined" — missing import statement
+- "Cannot read prop" — accessing property on undefined/null, often from a bad import
+- "Module not found" — importing from a path that doesn't exist
+- "does not provide an export" — named export doesn't exist in the target module
+
+Keep fixes minimal — only fix the specific error.`;
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { screenshot, files, modelId = "gemini-2.5-pro" } = body as {
-      screenshot: string;
+    const { files, modelId = "gemini-2.5-pro", errorText } = body as {
       files: Record<string, string>;
       modelId?: ModelId;
+      errorText?: string;
     };
 
-    if (!screenshot) {
+    if (!errorText) {
       return Response.json({ status: "pass" });
     }
 
@@ -67,20 +61,11 @@ export async function POST(req: Request) {
 
     const result = await generateText({
       model,
-      system: VERIFY_SYSTEM_PROMPT,
+      system: ERROR_FIX_SYSTEM_PROMPT,
       messages: [
         {
           role: "user",
-          content: [
-            {
-              type: "image",
-              image: screenshot,
-            },
-            {
-              type: "text",
-              text: `Review this screenshot of the rendered page.\n\nFiles that were just written:\n${fileContext}\n\nRespond with JSON only.`,
-            },
-          ],
+          content: `The page shows this runtime error:\n\n"${errorText}"\n\nFiles that were just written:\n${fileContext}\n\nDiagnose the error and provide a fix. Respond with JSON only.`,
         },
       ],
     });

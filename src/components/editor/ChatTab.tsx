@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { useChatContextStore } from "@/hooks/useChatContextStore";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
 import { useProductBrainStore } from "@/hooks/useProductBrainStore";
-import { useStrategyStore, type StrategyPhase, type ConfidenceData, type PersonaData, type IdeaData, type JourneyMapData, type JourneyStage, type WireframeData, type WireframeSection, type WireframeElement } from "@/hooks/useStrategyStore";
+import { useStrategyStore, type StrategyPhase, type ConfidenceData, type PersonaData, type IdeaData, type KeyFeaturesData, type JourneyMapData, type JourneyStage, type UserFlow, type FlowData } from "@/hooks/useStrategyStore";
 import { useDocumentStore, type InsightData, type InsightsCardData } from "@/hooks/useDocumentStore";
 import { buildInsightsContext } from "@/lib/ai/insights-prompt";
 import { useParallelBuild } from "@/hooks/useParallelBuild";
@@ -26,9 +26,9 @@ function hasFileCodeBlocks(content: string): boolean {
 /** Strip strategy JSON blocks from text (manifesto, flow, options, page-built, confidence, personas, etc.) */
 function stripStrategyBlocks(text: string): string {
   // Strip closed strategy blocks
-  let cleaned = text.replace(/```json\s+type="(?:options|manifesto|personas|flow|page-built|confidence|journey-maps|ideas|wireframes|decision-connections|insights)"[\s\S]*?```/g, "");
+  let cleaned = text.replace(/```json\s+type="(?:options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-flows|features|decision-connections|insights)"[\s\S]*?```/g, "");
   // Strip open (still-streaming) strategy blocks
-  cleaned = cleaned.replace(/```json\s+type="(?:options|manifesto|personas|flow|page-built|confidence|journey-maps|ideas|wireframes|decision-connections|insights)"[\s\S]*$/, "");
+  cleaned = cleaned.replace(/```json\s+type="(?:options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-flows|features|decision-connections|insights)"[\s\S]*$/, "");
   return cleaned.trim();
 }
 
@@ -36,17 +36,18 @@ const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/web
 const MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024; // 4MB
 const MAX_IMAGES_PER_MESSAGE = 5;
 
-type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-5";
+type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6";
 
 const MODEL_OPTIONS: { id: ModelId; label: string; provider: string }[] = [
   { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", provider: "Google" },
   { id: "gemini-3-pro-preview", label: "Gemini 3 Pro", provider: "Google" },
-  { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", provider: "Anthropic" },
+  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", provider: "Anthropic" },
 ];
 
 interface ChatTabProps {
   writeFile: (path: string, content: string) => void;
   files: Record<string, string>;
+  getLatestFile: (path: string) => string | undefined;
   strategyPhase?: StrategyPhase;
   onPhaseAction?: (action: "approve-problem-overview" | "approve-ideation" | "approve-solution-design") => void;
   /** Called when user sends their first message in hero phase (phase transition to manifesto) */
@@ -62,14 +63,15 @@ const CODE_BLOCK_REGEX = /```(\w+)?\s+file="([^"]+)"\n([\s\S]*?)```/g;
 // Regex to match strategy JSON blocks
 const MANIFESTO_REGEX = /```json\s+type="manifesto"\n([\s\S]*?)```/g;
 const PERSONA_REGEX = /```json\s+type="personas"\n([\s\S]*?)```/g;
-const FLOW_REGEX = /```json\s+type="flow"\n([\s\S]*?)```/g;
+const FLOW_REGEX = /```json\s+type="(?:flow|ia)"\n([\s\S]*?)```/g;
 const OPTIONS_REGEX = /```json\s+type="options"\n([\s\S]*?)```/g;
 const PAGE_BUILT_REGEX = /```json\s+type="page-built"\n([\s\S]*?)```/g;
 const CONFIDENCE_REGEX = /```json\s+type="confidence"\n([\s\S]*?)```/g;
 const JOURNEY_MAPS_REGEX = /```json\s+type="journey-maps"\n([\s\S]*?)```/g;
 const IDEAS_REGEX = /```json\s+type="ideas"\n([\s\S]*?)```/g;
 const DECISION_CONNECTIONS_REGEX = /```json\s+type="decision-connections"\n([\s\S]*?)```/g;
-const WIREFRAMES_REGEX = /```json\s+type="wireframes"\n([\s\S]*?)```/g;
+const USER_FLOWS_REGEX = /```json\s+type="user-flows"\n([\s\S]*?)```/g;
+const FEATURES_REGEX = /```json\s+type="features"\n([\s\S]*?)```/g;
 const INSIGHTS_REGEX = /```json\s+type="insights"\n([\s\S]*?)```/g;
 
 
@@ -473,14 +475,8 @@ function extractPartialIdeas(text: string): Partial<IdeaData>[] | null {
           if (title !== undefined) partial.title = title;
           const description = extractJsonStringValue(objStr, 'description');
           if (description !== undefined) partial.description = description;
-          const keyFeatures = extractJsonArrayItems(objStr, 'keyFeatures');
-          if (keyFeatures !== undefined) partial.keyFeatures = keyFeatures;
-          const pros = extractJsonArrayItems(objStr, 'pros');
-          if (pros !== undefined) partial.pros = pros;
-          const cons = extractJsonArrayItems(objStr, 'cons');
-          if (cons !== undefined) partial.cons = cons;
-          const illustrations = extractJsonArrayItems(objStr, 'illustrations');
-          if (illustrations !== undefined) partial.illustrations = illustrations;
+          const illustration = extractJsonStringValue(objStr, 'illustration');
+          if (illustration !== undefined) partial.illustration = illustration;
           if (Object.keys(partial).length > 0) {
             ideas.push(partial);
           }
@@ -500,14 +496,8 @@ function extractPartialIdeas(text: string): Partial<IdeaData>[] | null {
     if (title !== undefined) partial.title = title;
     const description = extractJsonStringValue(partialStr, 'description');
     if (description !== undefined) partial.description = description;
-    const keyFeatures = extractJsonArrayItems(partialStr, 'keyFeatures');
-    if (keyFeatures !== undefined) partial.keyFeatures = keyFeatures;
-    const pros = extractJsonArrayItems(partialStr, 'pros');
-    if (pros !== undefined) partial.pros = pros;
-    const cons = extractJsonArrayItems(partialStr, 'cons');
-    if (cons !== undefined) partial.cons = cons;
-    const illustrations = extractJsonArrayItems(partialStr, 'illustrations');
-    if (illustrations !== undefined) partial.illustrations = illustrations;
+    const illustration = extractJsonStringValue(partialStr, 'illustration');
+    if (illustration !== undefined) partial.illustration = illustration;
     if (Object.keys(partial).length > 0) {
       ideas.push(partial);
     }
@@ -516,10 +506,10 @@ function extractPartialIdeas(text: string): Partial<IdeaData>[] | null {
   return ideas.length > 0 ? ideas : null;
 }
 
-// --- Partial wireframe extraction for real-time streaming ---
+// --- Partial user flow extraction for real-time streaming ---
 
-function extractPartialWireframes(text: string): WireframeData | null {
-  const marker = '```json type="wireframes"';
+function extractPartialUserFlows(text: string): Partial<UserFlow>[] | null {
+  const marker = '```json type="user-flows"';
   const blockStart = text.indexOf(marker);
   if (blockStart === -1) return null;
 
@@ -530,38 +520,22 @@ function extractPartialWireframes(text: string): WireframeData | null {
   if (closingIdx !== -1) {
     try {
       const parsed = JSON.parse(content.slice(0, closingIdx));
-      if (parsed.pages && Array.isArray(parsed.pages)) {
-        return parsed;
-      }
+      if (Array.isArray(parsed)) return parsed;
     } catch { /* fall through to partial */ }
   }
 
-  // Partial: extract complete page objects from the "pages" array
-  const pagesIdx = content.indexOf('"pages"');
-  if (pagesIdx === -1) return null;
+  // Partial: extract complete flow objects from the array
+  const arrStart = content.indexOf('[');
+  if (arrStart === -1) return null;
 
-  const pages: WireframeData["pages"] = [];
-  const sections = extractCompleteWireframePages(content.slice(pagesIdx));
-  if (sections.length > 0) {
-    return { pages: sections };
-  }
-
-  return pages.length > 0 ? { pages } : null;
-}
-
-function extractCompleteWireframePages(pagesStr: string): WireframeData["pages"] {
-  let arrayStart = pagesStr.indexOf('[');
-  if (arrayStart === -1) return [];
-  arrayStart++;
-
-  const pages: WireframeData["pages"] = [];
+  const flows: Partial<UserFlow>[] = [];
   let depth = 0;
   let inString = false;
   let escape = false;
   let objectStart = -1;
 
-  for (let i = arrayStart; i < pagesStr.length; i++) {
-    const ch = pagesStr[i];
+  for (let i = arrStart + 1; i < content.length; i++) {
+    const ch = content[i];
 
     if (escape) { escape = false; continue; }
     if (ch === '\\' && inString) { escape = true; continue; }
@@ -574,11 +548,11 @@ function extractCompleteWireframePages(pagesStr: string): WireframeData["pages"]
     } else if (ch === '}') {
       depth--;
       if (depth === 0 && objectStart !== -1) {
-        const objStr = pagesStr.slice(objectStart, i + 1);
+        const objStr = content.slice(objectStart, i + 1);
         try {
           const parsed = JSON.parse(objStr);
-          if (parsed.id && parsed.sections) {
-            pages.push(parsed);
+          if (parsed.id && parsed.steps) {
+            flows.push(parsed);
           }
         } catch { /* skip incomplete */ }
         objectStart = -1;
@@ -588,47 +562,106 @@ function extractCompleteWireframePages(pagesStr: string): WireframeData["pages"]
     }
   }
 
-  return pages;
+  return flows.length > 0 ? flows : null;
 }
 
-// --- Wireframe serialization for build context ---
+// --- Partial key features extraction for real-time streaming ---
 
-function serializeWireframeSections(wireframeData: WireframeData): string {
-  return wireframeData.pages.map((page) => {
-    const sectionsText = page.sections.map((section) => serializeSection(section, 0)).join("\n");
-    return `### ${page.name} (${page.id})\n${sectionsText}`;
+function extractPartialKeyFeatures(text: string): Partial<KeyFeaturesData> | null {
+  const marker = '```json type="features"';
+  const blockStart = text.indexOf(marker);
+  if (blockStart === -1) return null;
+
+  const content = text.slice(blockStart + marker.length);
+
+  // Try full parse first
+  const closingIdx = content.indexOf('```');
+  if (closingIdx !== -1) {
+    try {
+      const parsed = JSON.parse(content.slice(0, closingIdx));
+      if (parsed.features && Array.isArray(parsed.features)) {
+        return parsed;
+      }
+    } catch { /* fall through to partial */ }
+  }
+
+  // Partial extraction
+  const result: Partial<KeyFeaturesData> = {};
+  const ideaTitle = extractJsonStringValue(content, 'ideaTitle');
+  if (ideaTitle !== undefined) result.ideaTitle = ideaTitle;
+
+  // Extract complete + currently-streaming feature objects from the "features" array
+  const featuresIdx = content.indexOf('"features"');
+  if (featuresIdx !== -1) {
+    const features: { name: string; description: string; priority: "high" | "medium" | "low" }[] = [];
+    let arrStart = content.indexOf('[', featuresIdx);
+    if (arrStart !== -1) {
+      arrStart++;
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      let objectStart = -1;
+      let lastIncompleteStart = -1;
+
+      for (let i = arrStart; i < content.length; i++) {
+        const ch = content[i];
+        if (escape) { escape = false; continue; }
+        if (ch === '\\' && inString) { escape = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+
+        if (ch === '{') {
+          if (depth === 0) objectStart = i;
+          depth++;
+        } else if (ch === '}') {
+          depth--;
+          if (depth === 0 && objectStart !== -1) {
+            const objStr = content.slice(objectStart, i + 1);
+            try {
+              const parsed = JSON.parse(objStr);
+              if (parsed.name) features.push(parsed);
+            } catch { /* skip incomplete */ }
+            objectStart = -1;
+          }
+        } else if (ch === ']' && depth === 0) {
+          break;
+        }
+      }
+
+      // If there's an unclosed object being streamed, extract partial fields from it
+      if (depth > 0 && objectStart !== -1) {
+        lastIncompleteStart = objectStart;
+      }
+
+      if (lastIncompleteStart !== -1) {
+        const partialObj = content.slice(lastIncompleteStart);
+        const name = extractJsonStringValue(partialObj, 'name');
+        if (name) {
+          const description = extractJsonStringValue(partialObj, 'description') ?? '';
+          const priorityRaw = extractJsonStringValue(partialObj, 'priority');
+          const priority = (priorityRaw === 'high' || priorityRaw === 'medium' || priorityRaw === 'low') ? priorityRaw : undefined;
+          features.push({ name, description, priority: priority ?? 'medium' });
+        }
+      }
+    }
+    if (features.length > 0) result.features = features;
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+// --- User flow serialization for build context ---
+
+function serializeUserFlows(flows: UserFlow[], flowData: FlowData | null): string {
+  return flows.map((flow) => {
+    const personas = flow.personaNames.join(", ");
+    const steps = flow.steps.map((step, i) => {
+      const node = flowData?.nodes.find((n) => n.id === step.nodeId);
+      const label = node?.label ?? step.nodeId;
+      return `${i + 1}. ${label} → ${step.action}`;
+    }).join("\n");
+    return `### JTBD: "${flow.jtbdText}"\nPersonas: ${personas}\nSteps:\n${steps}`;
   }).join("\n\n");
-}
-
-function serializeSection(section: WireframeSection, indent: number): string {
-  const prefix = "  ".repeat(indent);
-  let text = `${prefix}- [${section.type || "block"}] ${section.label}`;
-
-  if (section.items && section.items.length > 0) {
-    text += ` (${section.items.join(", ")})`;
-  }
-
-  if (section.columns) {
-    text += ` [${section.columns} columns]`;
-  }
-
-  if (section.elements && section.elements.length > 0) {
-    const elText = section.elements.map((el) => serializeElement(el)).join(", ");
-    text += `\n${prefix}  Elements: ${elText}`;
-  }
-
-  if (section.children && section.children.length > 0) {
-    const childrenText = section.children.map((child) => serializeSection(child, indent + 1)).join("\n");
-    text += `\n${childrenText}`;
-  }
-
-  return text;
-}
-
-function serializeElement(el: WireframeElement): string {
-  let text = `${el.type}("${el.label}")`;
-  if (el.variant) text += `[${el.variant}]`;
-  return text;
 }
 
 // --- Partial insights extraction for real-time streaming ---
@@ -787,14 +820,15 @@ function getMessageText(message: any): string {
   return "";
 }
 
-export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHeroSubmit, onApproveAndBuildNext }: ChatTabProps) {
+export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhaseAction, onHeroSubmit, onApproveAndBuildNext }: ChatTabProps) {
   const [input, setInput] = useState("");
-  const [selectedModel, setSelectedModel] = useState<ModelId>("gemini-2.5-pro");
+  const [selectedModel, setSelectedModel] = useState<ModelId>("claude-sonnet-4-6");
   const [stagedImages, setStagedImages] = useState<FileUIPart[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { pinnedElements, unpinElement, clearPinnedElements } = useChatContextStore();
+  const pendingAddressGaps = useChatContextStore((s) => s.pendingAddressGaps);
   const manifestoData = useStrategyStore((s) => s.manifestoData);
   const personaData = useStrategyStore((s) => s.personaData);
   const journeyMapData = useStrategyStore((s) => s.journeyMapData);
@@ -812,9 +846,10 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
   const pendingApprovalPage = useStrategyStore((s) => s.pendingApprovalPage);
   const parallelMode = useStreamingStore((s) => s.parallelMode);
   const pageBuilds = useStreamingStore((s) => s.pageBuilds);
+  const annotationEvaluation = useStreamingStore((s) => s.annotationEvaluation);
 
   // Parallel build orchestrator
-  const parallelBuild = useParallelBuild({ writeFile, files });
+  const parallelBuild = useParallelBuild({ writeFile, files, getLatestFile });
   const parallelBuildConfigRef = useRef<{
     pages: { pageId: string; pageName: string; componentName: string; pageRoute: string }[];
     sharedContext: { manifestoContext: string; personaContext: string; flowContext: string };
@@ -910,8 +945,6 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
     // Auto-send re-analysis request
     const docs = useDocumentStore.getState().documents;
     const docContext = buildInsightsContext(docs);
-    const existingInsights = useDocumentStore.getState().insightsData;
-
     sendMessage(
       { text: "I've uploaded additional documents. Skip questions — immediately re-analyze ALL documents together and regenerate every artifact: output the updated insights block, then updated manifesto, personas, and journey maps. Incorporate new findings from the additional documents." },
       {
@@ -925,6 +958,72 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
       }
     );
   }, [pendingReanalysis, isLoading, sendMessage, selectedModel]);
+
+  // --- Pending address gaps: auto-send message when "Address Gaps with AI" clicked ---
+  useEffect(() => {
+    if (!pendingAddressGaps || isLoading) return;
+
+    // Clear the flag immediately to prevent re-fires
+    useChatContextStore.getState().setPendingAddressGaps(null);
+
+    const { unaddressedJtbds } = pendingAddressGaps;
+    if (unaddressedJtbds.length === 0) return;
+
+    // Build user-visible message
+    const jtbdList = unaddressedJtbds
+      .map((j) => `${j.index + 1}. "${j.text}"`)
+      .join("\n");
+
+    const text = `Address the following unaddressed jobs-to-be-done by enhancing existing pages or adding minimal new ones. Do NOT rewrite or significantly change existing pages — only add what's needed to cover these gaps.\n\n${jtbdList}\n\nFor each change, output a decision-connections block mapping the new/modified components to the JTBD indices they address.`;
+
+    // Build VFS context (building phase format: Record<string, string>)
+    const storeState = useStrategyStore.getState();
+
+    // Include all page files so AI can see what's already built
+    const pageFiles = Object.entries(files)
+      .filter(([path]) => path.startsWith("/pages/") && path.endsWith(".tsx"))
+      .map(([path, content]) => `Current ${path}:\n\`\`\`tsx\n${content}\n\`\`\``);
+
+    const coreFiles = ["/App.tsx", "/design-system.tsx", "/components/ui/index.ts"];
+    const coreFileParts = coreFiles
+      .filter((path) => files[path])
+      .map((path) => `Current ${path}:\n\`\`\`tsx\n${files[path]}\n\`\`\``);
+
+    const tokenReminder = `## IMPORTANT: Color Usage Reminder
+Use ONLY semantic token classes (bg-primary, bg-card, text-foreground, text-muted-foreground, border-border, etc.).
+NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as they break the user's theme customization.`;
+
+    const allFileParts = [...coreFileParts, ...pageFiles];
+    const vfs = allFileParts.length > 0
+      ? `## Current VFS State (use this as your source of truth)\n\n${allFileParts.join("\n\n")}\n\n${tokenReminder}`
+      : tokenReminder;
+
+    // Include existing product brain connections so AI knows what's already addressed
+    const brainData = useProductBrainStore.getState().brainData;
+    const existingConnections = brainData
+      ? `## Existing Product Brain Connections\n\n${JSON.stringify(brainData.pages.map((p) => ({ pageId: p.pageId, connections: p.connections })), null, 2)}`
+      : "";
+
+    const vfsContext: Record<string, string> = {
+      vfs,
+      manifestoContext: storeState.manifestoData
+        ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\nWhat ${storeState.manifestoData.targetUser} Need To Get Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}\nHow Might We:\n${storeState.manifestoData.hmw.map((q, i) => `${i + 1}. ${q}`).join("\n")}`
+        : "",
+      personaContext: storeState.personaData
+        ? `## User Personas\n\n${storeState.personaData.map((p, i) => `### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${p.painPoints.map((pp) => `- ${pp}`).join("\n")}\nQuote: "${p.quote}"`).join("\n\n")}`
+        : "",
+      flowContext: storeState.flowData
+        ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`
+        : "",
+      existingConnections,
+      gapContext: `## Unaddressed Jobs-To-Be-Done (GAPS)\n\nThese JTBDs are not yet covered by any page component. Address them by enhancing existing pages or adding new features.\n\n${jtbdList}`,
+    };
+
+    sendMessage(
+      { text },
+      { body: { vfsContext, modelId: selectedModel, strategyPhase: "building" } }
+    );
+  }, [pendingAddressGaps, isLoading, sendMessage, selectedModel, files]);
 
   // --- Question Tabs State ---
   const [questionAnswers, setQuestionAnswers] = useState<Record<number, string>>({});
@@ -1115,11 +1214,11 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
     }
   }, [messages, isLoading]);
 
-  // --- Stream partial wireframe data to the canvas in real-time ---
+  // --- Stream partial user flow data to the canvas in real-time ---
   useEffect(() => {
     if (strategyPhase !== "solution-design" || !isLoading) {
-      if (useStrategyStore.getState().streamingWireframes) {
-        useStrategyStore.getState().setStreamingWireframes(null);
+      if (useStrategyStore.getState().streamingUserFlows) {
+        useStrategyStore.getState().setStreamingUserFlows(null);
       }
       return;
     }
@@ -1138,9 +1237,38 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
       textContent = lastAssistant.content;
     }
 
-    const partialWireframes = extractPartialWireframes(textContent);
-    if (partialWireframes) {
-      useStrategyStore.getState().setStreamingWireframes(partialWireframes);
+    const partialUserFlows = extractPartialUserFlows(textContent);
+    if (partialUserFlows) {
+      useStrategyStore.getState().setStreamingUserFlows(partialUserFlows);
+    }
+  }, [messages, isLoading, strategyPhase]);
+
+  // --- Stream partial key features data to the canvas in real-time ---
+  useEffect(() => {
+    if (strategyPhase !== "solution-design" || !isLoading) {
+      if (useStrategyStore.getState().streamingKeyFeatures) {
+        useStrategyStore.getState().setStreamingKeyFeatures(null);
+      }
+      return;
+    }
+
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return;
+
+    let textContent = "";
+    if (lastAssistant.parts && Array.isArray(lastAssistant.parts)) {
+      textContent = lastAssistant.parts
+        .filter((p): p is { type: "text"; text: string } => p.type === "text")
+        .map((p) => p.text)
+        .join("");
+    }
+    if (!textContent && "content" in lastAssistant && typeof lastAssistant.content === "string") {
+      textContent = lastAssistant.content;
+    }
+
+    const partialFeatures = extractPartialKeyFeatures(textContent);
+    if (partialFeatures) {
+      useStrategyStore.getState().setStreamingKeyFeatures(partialFeatures);
     }
   }, [messages, isLoading, strategyPhase]);
 
@@ -1179,9 +1307,11 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
             processedBlocksSet.add(blockKey);
             const gated = runGatekeeper(block.content, files, block.path);
             if (gated.report.hadChanges) {
-              const total = gated.report.colorViolations.length
+              const total = (gated.report.importFixes?.length || 0)
+                + gated.report.colorViolations.length
                 + gated.report.spacingViolations.length
                 + gated.report.layoutViolations.length
+                + gated.report.typographyViolations.length
                 + gated.report.componentPromotions.length
                 + gated.report.layoutDeclarationAdditions.length;
               toast.info(`Gatekeeper: ${total} design system fix${total > 1 ? "es" : ""} applied`);
@@ -1315,22 +1445,39 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
       }
       FLOW_REGEX.lastIndex = 0;
 
-      // Extract wireframes blocks
-      while ((match = WIREFRAMES_REGEX.exec(textContent)) !== null) {
-        const blockKey = `wireframes-${message.id}-${match.index}`;
+      // Extract features blocks (key features from solution-design phase)
+      while ((match = FEATURES_REGEX.exec(textContent)) !== null) {
+        const blockKey = `features-${message.id}-${match.index}`;
         if (!processedStrategyBlocksSet.has(blockKey)) {
           processedStrategyBlocksSet.add(blockKey);
           try {
             const parsed = JSON.parse(match[1]);
-            if (parsed.pages && Array.isArray(parsed.pages)) {
-              useStrategyStore.getState().setWireframeData(parsed);
+            if (parsed.features && Array.isArray(parsed.features)) {
+              useStrategyStore.getState().setKeyFeaturesData(parsed);
             }
           } catch (e) {
-            console.warn("[Strategy] Failed to parse wireframes JSON:", e);
+            console.warn("[Strategy] Failed to parse features JSON:", e);
           }
         }
       }
-      WIREFRAMES_REGEX.lastIndex = 0;
+      FEATURES_REGEX.lastIndex = 0;
+
+      // Extract user-flows blocks
+      while ((match = USER_FLOWS_REGEX.exec(textContent)) !== null) {
+        const blockKey = `user-flows-${message.id}-${match.index}`;
+        if (!processedStrategyBlocksSet.has(blockKey)) {
+          processedStrategyBlocksSet.add(blockKey);
+          try {
+            const parsed = JSON.parse(match[1]);
+            if (Array.isArray(parsed)) {
+              useStrategyStore.getState().setUserFlowsData(parsed);
+            }
+          } catch (e) {
+            console.warn("[Strategy] Failed to parse user-flows JSON:", e);
+          }
+        }
+      }
+      USER_FLOWS_REGEX.lastIndex = 0;
 
       // Extract page-built blocks
       while ((match = PAGE_BUILT_REGEX.exec(textContent)) !== null) {
@@ -1396,7 +1543,7 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
       }
       CONFIDENCE_REGEX.lastIndex = 0;
     });
-  }, [messages]);
+  }, [messages, writeFile]);
 
   // --- Stream code overlay state ---
   useEffect(() => {
@@ -1448,7 +1595,7 @@ export function ChatTab({ writeFile, files, strategyPhase, onPhaseAction, onHero
   useEffect(() => {
     const behavior = status === "streaming" ? "instant" : "smooth";
     messagesEndRef.current?.scrollIntoView({ behavior });
-  }, [messages, status, currentOptionBlocks.length, strategyPhase, pendingApprovalPage]);
+  }, [messages, status, currentOptionBlocks.length, strategyPhase, pendingApprovalPage, annotationEvaluation.status]);
 
   // --- Self-healing verification loop ---
   const prevStatusRef = useRef(status);
@@ -2044,7 +2191,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
               <>
                 <p>Let&apos;s design the solution...</p>
                 <p className="mt-2 text-sm text-neutral-400">
-                  I&apos;ll design the architecture and create wireframe layouts for your app.
+                  I&apos;ll design the Information Architecture and map user flows for your app.
                 </p>
               </>
             ) : (
@@ -2190,10 +2337,10 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 }
                 const context = parts.join("\n\n");
                 const selectedIdeaContext = selectedIdea
-                  ? `## Selected Idea: ${selectedIdea.title}\n\n${selectedIdea.description}\n\nKey Features:\n${selectedIdea.keyFeatures.map((f) => `- ${f}`).join("\n")}`
+                  ? `## Selected Idea: ${selectedIdea.title}\n\n${selectedIdea.description}`
                   : "";
                 sendMessage(
-                  { text: `I've selected the idea "${selectedIdea?.title}". Now design the app architecture as a logical flow AND create wireframe layouts for all pages based on this idea.` },
+                  { text: `I've selected the idea "${selectedIdea?.title}". Now design the Information Architecture AND map user flows for each job-to-be-done based on this idea.` },
                   { body: { vfsContext: { vfs: context, selectedIdeaContext }, modelId: selectedModel, strategyPhase: "solution-design" } }
                 );
               }}
@@ -2216,9 +2363,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 const pageNodes = storeState.flowData?.nodes.filter((n) => n.type === "page") || [];
                 if (pageNodes.length === 0) return;
 
-                // Serialize wireframe data for build context
-                const wireframeContext = storeState.wireframeData
-                  ? serializeWireframeSections(storeState.wireframeData)
+                // Serialize user flow data for build context
+                const userFlowContext = storeState.userFlowsData
+                  ? serializeUserFlows(storeState.userFlowsData, storeState.flowData)
                   : "";
 
                 // Build shared context
@@ -2232,7 +2379,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                   flowContext: storeState.flowData
                     ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`
                     : "",
-                  wireframeContext,
+                  userFlowContext,
                 };
 
                 // Build per-page configs
@@ -2281,6 +2428,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                   );
                 }
               }}
+              onRetryVerification={(pageId) => {
+                parallelBuild.retryVerification(pageId);
+              }}
               onRetryAllFailed={() => {
                 if (!parallelBuildConfigRef.current) return;
                 const failedIds = Object.entries(pageBuilds)
@@ -2300,6 +2450,55 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 useStrategyStore.getState().setBuildingPages([]);
               }}
             />
+          </div>
+        )}
+
+        {/* Annotation evaluation status — shown as assistant-style message after builds */}
+        {strategyPhase === "building" && parallelMode && annotationEvaluation.status !== "idle" && (
+          <div className="flex items-start gap-3 px-4 py-3">
+            <div className="w-7 h-7 rounded-full bg-neutral-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-neutral-500">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </div>
+            <div className="flex-1 min-w-0">
+              {annotationEvaluation.status === "evaluating" && (
+                <div className="space-y-2">
+                  <p className="text-sm text-neutral-800">
+                    Now I&apos;m evaluating strategy annotations across all pages. I&apos;m reviewing each UI section to identify which ones represent deliberate product decisions tied to your personas and jobs-to-be-done...
+                  </p>
+                  <div className="flex items-center gap-2 text-xs text-neutral-500">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Analyzing sections and mapping to strategy artifacts</span>
+                  </div>
+                </div>
+              )}
+              {annotationEvaluation.status === "done" && (
+                <div className="space-y-1">
+                  <p className="text-sm text-neutral-800">
+                    {annotationEvaluation.connectionCount > 0
+                      ? <>Strategy evaluation complete — I mapped <strong>{annotationEvaluation.connectionCount}</strong> annotation{annotationEvaluation.connectionCount > 1 ? "s" : ""} across your pages. Each one connects a UI section to a specific persona need or job-to-be-done. Toggle the annotation button on any frame header to see them.</>
+
+                      : "Strategy evaluation complete — no sections warranted annotations. The pages are utility-focused without strong strategic connections to flag."}
+                  </p>
+                  <div className="flex items-center gap-2 text-xs text-emerald-600">
+                    <Check className="w-3 h-3" />
+                    <span>Evaluation complete</span>
+                  </div>
+                </div>
+              )}
+              {annotationEvaluation.status === "error" && (
+                <div className="space-y-1">
+                  <p className="text-sm text-neutral-800">
+                    I couldn&apos;t complete the strategy annotation evaluation, but your pages are fully built and working. You can still use the app — annotations just won&apos;t be available.
+                  </p>
+                  <div className="flex items-center gap-2 text-xs text-amber-600">
+                    <AlertTriangle className="w-3 h-3" />
+                    <span>{annotationEvaluation.errorMessage || "Evaluation failed"}</span>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -2329,7 +2528,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                   if (flowJsonRaw) {
                     try {
                       const flow = JSON.parse(flowJsonRaw);
-                      if (Array.isArray(flow.pages) && !flow.pages.some((p: any) => p.id === nextPage!.id)) {
+                      if (Array.isArray(flow.pages) && !flow.pages.some((p: { id: string }) => p.id === nextPage!.id)) {
                         flow.pages.push({
                           id: nextPage!.id,
                           name: nextPage!.label,
@@ -2478,7 +2677,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 : strategyPhase === "ideation"
                 ? "Discuss or refine the selected idea..."
                 : strategyPhase === "solution-design"
-                ? "Adjust the architecture or wireframe layouts..."
+                ? "Adjust the IA or user flows..."
                 : "Ask me to modify your UI..."
             }
             className="flex-1 px-3 py-2 text-base border border-neutral-200 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:border-transparent disabled:bg-neutral-50 disabled:text-neutral-400"
@@ -2707,6 +2906,40 @@ function MessageImages({ parts, isUser }: { parts: Array<{ type: string; [key: s
   );
 }
 
+// Render inline markdown: **bold**, *italic*, `code`
+function renderInlineMarkdown(text: string): React.ReactNode[] {
+  const tokens: React.ReactNode[] = [];
+  // Match **bold**, *italic*, `code` — bold must be checked before italic
+  const regex = /(\*\*(.+?)\*\*|\*(.+?)\*|`([^`]+)`)/g;
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      tokens.push(text.slice(lastIndex, match.index));
+    }
+    if (match[2]) {
+      // **bold**
+      tokens.push(<strong key={key++}>{match[2]}</strong>);
+    } else if (match[3]) {
+      // *italic*
+      tokens.push(<em key={key++}>{match[3]}</em>);
+    } else if (match[4]) {
+      // `code`
+      tokens.push(
+        <code key={key++} className="bg-neutral-200 text-neutral-800 px-1 py-0.5 rounded text-xs">
+          {match[4]}
+        </code>
+      );
+    }
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    tokens.push(text.slice(lastIndex));
+  }
+  return tokens;
+}
+
 // Component to render message content with code block highlighting
 // Hides strategy JSON blocks (options, manifesto, flow) — those are rendered as UI elements
 function MessageContent({ content }: { content: string }) {
@@ -2718,43 +2951,15 @@ function MessageContent({ content }: { content: string }) {
   return (
     <div className="space-y-2">
       {parts.map((part, index) => {
+        // Hide all code blocks entirely — no code shown in chat
         if (part.startsWith("```")) {
-          const firstLine = part.split("\n")[0];
-
-          // Hide strategy JSON blocks, page-built markers, confidence blocks, and file code blocks entirely
-          if (
-            firstLine.includes('type="options"') ||
-            firstLine.includes('type="manifesto"') ||
-            firstLine.includes('type="personas"') ||
-            firstLine.includes('type="flow"') ||
-            firstLine.includes('type="page-built"') ||
-            firstLine.includes('type="confidence"') ||
-            firstLine.includes('type="journey-maps"') ||
-            firstLine.includes('type="ideas"') ||
-            firstLine.includes('file="')
-          ) {
-            return null;
-          }
-
-          // Non-file code blocks (e.g., plain code snippets) still shown
-          return (
-            <div key={index} className="mt-2">
-              <pre className="bg-neutral-800 text-neutral-100 p-2 rounded text-xs overflow-x-auto">
-                <code>
-                  {part
-                    .replace(/```\w*\s*\n?/, "")
-                    .replace(/```$/, "")
-                    .trim()}
-                </code>
-              </pre>
-            </div>
-          );
+          return null;
         }
 
-        // Regular text
+        // Regular text — render inline markdown (bold, italic, code)
         return part.trim() ? (
           <p key={index} className="whitespace-pre-wrap">
-            {part}
+            {renderInlineMarkdown(part)}
           </p>
         ) : null;
       })}
@@ -2764,13 +2969,17 @@ function MessageContent({ content }: { content: string }) {
 
 // Detect which strategy block type is currently streaming (open, not yet closed)
 function getStreamingBlockType(text: string): string | null {
-  const match = text.match(/```json\s+type="(options|manifesto|personas|flow|page-built|confidence|journey-maps|ideas|wireframes|insights|decision-connections)"[\s\S]*$/);
-  if (!match) return null;
-  // Verify it's not a closed block
-  const type = match[1];
-  const closedRegex = new RegExp(`\`\`\`json\\s+type="${type}"[\\s\\S]*?\`\`\`\\s*$`);
-  if (closedRegex.test(text)) return null;
-  return type;
+  const blockPattern = /```json\s+type="(options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-flows|features|insights|decision-connections)"/g;
+  let lastMatch: RegExpExecArray | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = blockPattern.exec(text)) !== null) {
+    lastMatch = match;
+  }
+  if (!lastMatch) return null;
+  // Check if this last block has been closed
+  const afterOpening = text.slice(lastMatch.index + lastMatch[0].length);
+  if (/```/.test(afterOpening)) return null;
+  return lastMatch[1];
 }
 
 function getStreamingBlockLabel(
@@ -2780,7 +2989,7 @@ function getStreamingBlockLabel(
     manifestoData: unknown;
     personaData: unknown;
     journeyMapData: unknown;
-    wireframeData: unknown;
+    userFlowsData: unknown;
     insightsData: unknown;
     pendingReanalysis: boolean;
     currentBuildingPage: string | null;
@@ -2805,10 +3014,13 @@ function getStreamingBlockLabel(
         : "Generating journey maps...";
     case "ideas":
       return "Generating ideas...";
+    case "features":
+      return "Generating key features...";
     case "flow":
-      return "Generating architecture...";
-    case "wireframes":
-      return opts.wireframeData ? "Refining wireframes..." : "Generating wireframes...";
+    case "ia":
+      return "Generating Information Architecture...";
+    case "user-flows":
+      return opts.userFlowsData ? "Refining user flows..." : "Generating user flows...";
     case "insights":
       return opts.pendingReanalysis ? "Re-analyzing documents..."
         : opts.insightsData ? "Refining document insights..."
@@ -2832,7 +3044,7 @@ function StreamingMessageContent({ content }: { content: string }) {
   const isDeepDive = useStrategyStore((s) => s.isDeepDive);
   const personaData = useStrategyStore((s) => s.personaData);
   const journeyMapData = useStrategyStore((s) => s.journeyMapData);
-  const wireframeData = useStrategyStore((s) => s.wireframeData);
+  const userFlowsData = useStrategyStore((s) => s.userFlowsData);
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
   const insightsData = useDocumentStore((s) => s.insightsData);
   const hasDocuments = useDocumentStore((s) => s.documents.length > 0);
@@ -2851,10 +3063,10 @@ function StreamingMessageContent({ content }: { content: string }) {
     streamingBlockType
       ? getStreamingBlockLabel(streamingBlockType, {
           isDeepDive, manifestoData, personaData, journeyMapData,
-          wireframeData, insightsData, pendingReanalysis, currentBuildingPage,
+          userFlowsData, insightsData, pendingReanalysis, currentBuildingPage,
         })
       : null,
-    [streamingBlockType, isDeepDive, manifestoData, personaData, journeyMapData, wireframeData, insightsData, pendingReanalysis, currentBuildingPage]
+    [streamingBlockType, isDeepDive, manifestoData, personaData, journeyMapData, userFlowsData, insightsData, pendingReanalysis, currentBuildingPage]
   );
 
   // No text and no code yet → phase-aware typing indicator
@@ -2869,8 +3081,8 @@ function StreamingMessageContent({ content }: { content: string }) {
         : "Thinking about what to ask you..."
       : phase === "ideation" ? "Generating creative ideas..."
       : phase === "solution-design"
-        ? wireframeData ? "Refining architecture & wireframes..."
-        : "Designing architecture & pages..."
+        ? userFlowsData ? "Refining solution design..."
+        : "Designing solution..."
       : phase === "building"
         ? currentBuildingPage ? `Preparing to build ${currentBuildingPage}...`
         : "Writing code..."
@@ -2896,7 +3108,7 @@ function StreamingMessageContent({ content }: { content: string }) {
 
   return (
     <div className="space-y-2">
-      {cleanPreText && <p className="whitespace-pre-wrap">{cleanPreText}</p>}
+      {cleanPreText && <p className="whitespace-pre-wrap">{renderInlineMarkdown(cleanPreText)}</p>}
 
       {/* Strategy block streaming indicator */}
       {streamingLabel && (

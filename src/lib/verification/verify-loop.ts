@@ -1,19 +1,26 @@
 /**
  * Self-healing verification loop.
- * After AI writes code to VFS, captures a screenshot of the rendered preview,
- * sends it to an AI vision model for review, and auto-fixes detected issues.
- * Max 3 attempts.
+ * After AI writes code to VFS, waits for Sandpack HMR to settle,
+ * then programmatically checks the iframe for runtime errors.
+ * If an error is found, sends it to an AI for a fix. Max 3 attempts.
+ *
+ * No screenshots or vision models — purely text-based detection + fix.
  *
  * Supports both global state (single-build mode) and page-scoped state
  * (parallel mode) via optional `stateCallbacks`.
  */
 
-import { captureIframeScreenshot } from "./screenshot-capture";
+import { queryIframeErrors } from "./screenshot-capture";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
 
 const MAX_ATTEMPTS = 3;
-const RENDER_SETTLE_MS = 1500;
+/** Settle time for Sandpack HMR after file writes */
+const SETTLE_DELAY_MS = 3000;
+/** Delay between re-checks after applying a fix */
+const RECHECK_DELAY_MS = 2000;
+/** Timeout for error query postMessage round-trip */
+const ERROR_QUERY_TIMEOUT_MS = 3000;
 
 // Regex to match code blocks with file attribute (same as ChatTab)
 const CODE_BLOCK_REGEX = /```(\w+)?\s+file="([^"]+)"\n([\s\S]*?)```/g;
@@ -59,6 +66,7 @@ export interface VerificationStateCallbacks {
   setPassed: () => void;
   setFailed: (issues: string[]) => void;
   reset: () => void;
+  addLog: (message: string) => void;
 }
 
 export interface VerificationParams {
@@ -97,6 +105,7 @@ function globalCallbacks(): VerificationStateCallbacks {
     setPassed: () => store.setVerificationPassed(),
     setFailed: (issues) => store.setVerificationFailed(issues),
     reset: () => store.resetVerification(),
+    addLog: (message) => console.log(`[verify] ${message}`),
   };
 }
 
@@ -126,49 +135,26 @@ export async function runVerificationLoop(
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-      // 1. Wait for Sandpack to finish rendering
+      // 1. Wait for Sandpack HMR to settle
       cb.setCapturing();
-      await sleep(RENDER_SETTLE_MS, signal);
+      cb.addLog("Waiting for page to render...");
 
-      // 2. Capture screenshot
-      let screenshot: string;
-      try {
-        screenshot = await captureIframeScreenshot(pageId);
-      } catch (err) {
-        // Screenshot failed — fail-safe: treat as pass
-        console.warn("[verify] Screenshot capture failed, treating as pass:", err);
-        cb.setPassed();
-        return { status: "passed", attempts: attempt, fixCount: totalFixes };
-      }
+      const delayMs = attempt === 1 ? SETTLE_DELAY_MS : RECHECK_DELAY_MS;
+      await sleep(delayMs, signal);
 
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-      // 3. Send to verification API
-      cb.setReviewing();
-
-      let verifyResult: { status: string; issues?: string[]; fixCode?: string };
+      // 2. Check for runtime errors programmatically
+      let detectedError: string | null = null;
       try {
-        const response = await fetch("/api/verify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            screenshot,
-            files: writtenFiles,
-            modelId,
-          }),
-          signal,
-        });
-        verifyResult = await response.json();
-      } catch (err) {
-        if ((err as Error).name === "AbortError") throw err;
-        // API call failed — fail-safe: treat as pass
-        console.warn("[verify] API call failed, treating as pass:", err);
-        cb.setPassed();
-        return { status: "passed", attempts: attempt, fixCount: totalFixes };
+        detectedError = await queryIframeErrors(pageId, ERROR_QUERY_TIMEOUT_MS);
+      } catch {
+        // Query failed — assume no errors
       }
 
-      // 4. Check result
-      if (verifyResult.status === "pass") {
+      // 3. No error detected — page is good
+      if (!detectedError) {
+        cb.addLog(totalFixes > 0 ? `Verified after ${totalFixes} fix(es)` : "No errors detected");
         cb.setPassed();
         return {
           status: totalFixes > 0 ? "fixed" : "passed",
@@ -177,27 +163,50 @@ export async function runVerificationLoop(
         };
       }
 
-      // 5. Failed — try to apply fix
-      const issues = verifyResult.issues || ["Unknown issue"];
+      // 4. Error detected — send to AI for fix
+      cb.addLog(`Error detected: ${detectedError.slice(0, 100)}`);
+      cb.setReviewing();
+      cb.addLog("Sending error to AI for fix...");
+
+      let verifyResult: { status: string; issues?: string[]; fixCode?: string };
+      try {
+        const response = await fetch("/api/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            files: writtenFiles,
+            modelId,
+            errorText: detectedError,
+          }),
+          signal,
+        });
+        verifyResult = await response.json();
+      } catch (err) {
+        if ((err as Error).name === "AbortError") throw err;
+        console.warn("[verify] API call failed, treating as pass:", err);
+        cb.setPassed();
+        return { status: "passed", attempts: attempt, fixCount: totalFixes };
+      }
+
+      // 5. Extract and apply fix
+      const issues = verifyResult.issues || [detectedError.slice(0, 120)];
       console.log(`[verify] Attempt ${attempt}/${MAX_ATTEMPTS} — issues:`, issues);
+      cb.addLog(`AI found: ${issues[0]}`);
 
       if (!verifyResult.fixCode) {
-        // No fix code provided — can't auto-fix
         if (attempt === MAX_ATTEMPTS) {
+          cb.addLog("Could not fix all issues");
           cb.setFailed(issues);
           return { status: "failed", attempts: attempt, fixCount: totalFixes };
         }
-        // Try again (screenshot might look different next time)
         cb.setFixing(issues);
         continue;
       }
 
-      // 6. Extract and apply fix code blocks
       cb.setFixing(issues);
       const fixBlocks = extractCodeBlocks(verifyResult.fixCode);
 
       if (fixBlocks.length === 0) {
-        // No parseable fix blocks
         if (attempt === MAX_ATTEMPTS) {
           cb.setFailed(issues);
           return { status: "failed", attempts: attempt, fixCount: totalFixes };
@@ -223,11 +232,14 @@ export async function runVerificationLoop(
         totalFixes++;
       }
 
-      // Loop continues — next iteration will re-screenshot and verify the fix
+      cb.addLog(`Fix applied (attempt ${attempt}/${MAX_ATTEMPTS}), re-checking...`);
+
+      // Loop continues — next iteration will re-check for errors after fix
     }
 
     // Exhausted all attempts
-    cb.setFailed(useStreamingStore.getState().verificationIssues);
+    cb.addLog("Could not fix all issues");
+    cb.setFailed(["Exhausted all verification attempts"]);
     return { status: "failed", attempts: MAX_ATTEMPTS, fixCount: totalFixes };
   } catch (err) {
     if ((err as Error).name === "AbortError") {

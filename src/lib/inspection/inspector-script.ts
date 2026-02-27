@@ -22,6 +22,15 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
   let pendingHoverTarget = null;
   let selectedOverlayRafId = null;
 
+  // Strategy annotation tracking state
+  let strategyTrackedIds = [];
+  let strategyLastSentBounds = {};
+  let strategyDirty = false;
+  let strategyRafId = null;
+  let strategyScrollListener = null;
+  let strategyMutationObserver = null;
+  let strategyResizeObserver = null;
+
   // Drag-and-drop state
   let isDragging = false;
   let dragSourceElement = null;
@@ -1964,6 +1973,34 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       })();
     }
 
+    // Query for runtime errors in the iframe
+    if (e.data.type === 'novum:query-errors') {
+      var errorPatterns = [
+        'Something went wrong',
+        'Element type is invalid',
+        'is not defined',
+        'Cannot read prop',
+        'is not a function',
+        'Unexpected token',
+        'Module not found',
+        'Cannot find module',
+        'does not provide an export',
+      ];
+      var bodyText = (document.body.innerText || '').trim();
+      var foundError = null;
+      for (var i = 0; i < errorPatterns.length; i++) {
+        if (bodyText.indexOf(errorPatterns[i]) !== -1) {
+          // Return up to 500 chars of the body text containing the error
+          foundError = bodyText.slice(0, 500);
+          break;
+        }
+      }
+      window.parent.postMessage({
+        type: 'novum:error-report',
+        payload: { errorText: foundError },
+      }, '*');
+    }
+
     // Optimistic move for drag-and-drop (DOM update with FLIP animation)
     if (e.data.type === 'novum:optimistic-move') {
       const { sourceSelector, targetSelector, position } = e.data.payload || {};
@@ -2026,6 +2063,85 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       } catch (err) {
         console.warn('Failed to move element:', err);
       }
+    }
+
+    // Query strategy element bounds (for JTBD arrow connections)
+    if (e.data.type === 'novum:query-strategy-element-bounds') {
+      const { strategyId } = e.data.payload || {};
+      if (typeof strategyId === 'string') {
+        const el = document.querySelector('[data-strategy-id="' + strategyId + '"]');
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          const iframeWidth = window.innerWidth;
+          const iframeHeight = window.innerHeight;
+          const isBelowFold = rect.top > iframeHeight;
+          window.parent.postMessage({
+            type: 'novum:strategy-element-bounds-response',
+            payload: {
+              strategyId: strategyId,
+              rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+              isBelowFold: isBelowFold,
+              iframeWidth: iframeWidth,
+              iframeHeight: iframeHeight,
+            },
+          }, '*');
+        } else {
+          window.parent.postMessage({
+            type: 'novum:strategy-element-bounds-response',
+            payload: {
+              strategyId: strategyId,
+              rect: null,
+              isBelowFold: false,
+              iframeWidth: window.innerWidth,
+              iframeHeight: window.innerHeight,
+            },
+          }, '*');
+        }
+      }
+    }
+
+    // Start continuous strategy annotation tracking
+    if (e.data.type === 'novum:strategy-track-start') {
+      const { strategyIds } = e.data.payload || {};
+      if (Array.isArray(strategyIds)) {
+        // Tear down any previous tracking
+        strategyTeardown();
+
+        strategyTrackedIds = strategyIds.slice();
+        strategyLastSentBounds = {};
+        strategyDirty = true;
+
+        // Set up listeners that flag dirty
+        strategyScrollListener = function() { strategyDirty = true; };
+        window.addEventListener('scroll', strategyScrollListener, true);
+
+        strategyResizeObserver = new ResizeObserver(function() { strategyDirty = true; });
+        strategyResizeObserver.observe(document.documentElement);
+
+        strategyMutationObserver = new MutationObserver(function() { strategyDirty = true; });
+        strategyMutationObserver.observe(document.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['class', 'style'],
+        });
+
+        // Start RAF loop
+        function strategyTrackLoop() {
+          if (strategyTrackedIds.length === 0) return;
+          if (strategyDirty) {
+            strategyDirty = false;
+            strategyFlushBounds();
+          }
+          strategyRafId = requestAnimationFrame(strategyTrackLoop);
+        }
+        strategyRafId = requestAnimationFrame(strategyTrackLoop);
+      }
+    }
+
+    // Stop continuous strategy annotation tracking
+    if (e.data.type === 'novum:strategy-track-stop') {
+      strategyTeardown();
     }
 
     // Find drop target at coordinates (for ghost materialization)
@@ -2174,6 +2290,86 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
     }
   });
 
+  // Strategy tracking: flush bounds for all tracked IDs
+  function strategyFlushBounds() {
+    var iframeWidth = window.innerWidth;
+    var iframeHeight = window.innerHeight;
+    var bounds = [];
+    var anyChanged = false;
+
+    for (var i = 0; i < strategyTrackedIds.length; i++) {
+      var sid = strategyTrackedIds[i];
+      var el = document.querySelector('[data-strategy-id="' + sid + '"]');
+      if (el) {
+        var rect = el.getBoundingClientRect();
+        var entry = {
+          strategyId: sid,
+          rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
+          isBelowFold: rect.top > iframeHeight,
+          iframeWidth: iframeWidth,
+          iframeHeight: iframeHeight,
+        };
+        // Diff check: compare against last-sent bounds
+        var prev = strategyLastSentBounds[sid];
+        if (!prev || !prev.rect ||
+            Math.abs(prev.rect.x - entry.rect.x) > 1 ||
+            Math.abs(prev.rect.y - entry.rect.y) > 1 ||
+            Math.abs(prev.rect.w - entry.rect.w) > 1 ||
+            Math.abs(prev.rect.h - entry.rect.h) > 1 ||
+            prev.isBelowFold !== entry.isBelowFold) {
+          anyChanged = true;
+        }
+        strategyLastSentBounds[sid] = entry;
+        bounds.push(entry);
+      } else {
+        // Element not found in DOM
+        var prevNull = strategyLastSentBounds[sid];
+        if (!prevNull || prevNull.rect !== null) {
+          anyChanged = true;
+        }
+        var nullEntry = {
+          strategyId: sid,
+          rect: null,
+          isBelowFold: false,
+          iframeWidth: iframeWidth,
+          iframeHeight: iframeHeight,
+        };
+        strategyLastSentBounds[sid] = nullEntry;
+        bounds.push(nullEntry);
+      }
+    }
+
+    if (anyChanged) {
+      window.parent.postMessage({
+        type: 'novum:strategy-bounds-batch',
+        payload: { bounds: bounds },
+      }, '*');
+    }
+  }
+
+  // Strategy tracking: tear down all listeners
+  function strategyTeardown() {
+    strategyTrackedIds = [];
+    strategyLastSentBounds = {};
+    strategyDirty = false;
+    if (strategyRafId !== null) {
+      cancelAnimationFrame(strategyRafId);
+      strategyRafId = null;
+    }
+    if (strategyScrollListener) {
+      window.removeEventListener('scroll', strategyScrollListener, true);
+      strategyScrollListener = null;
+    }
+    if (strategyMutationObserver) {
+      strategyMutationObserver.disconnect();
+      strategyMutationObserver = null;
+    }
+    if (strategyResizeObserver) {
+      strategyResizeObserver.disconnect();
+      strategyResizeObserver = null;
+    }
+  }
+
   // Initialize
   function init() {
     // Set up flow mode navigation interception
@@ -2216,6 +2412,7 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       document.removeEventListener('mousedown', handleDragStart, true);
       document.removeEventListener('contextmenu', handleContextMenu, true);
       cancelDrag(); // Clean up any in-progress drag
+      strategyTeardown(); // Clean up strategy tracking
       if (hoverRafId !== null) {
         cancelAnimationFrame(hoverRafId);
         hoverRafId = null;

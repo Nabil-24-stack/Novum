@@ -8,6 +8,7 @@ export interface DecisionConnection {
   jtbdIndices: number[]; // 0-based into ManifestoData.jtbd[]
   journeyStages?: { personaName: string; stageIndex: number }[];
   rationale: string;
+  insightIndices?: number[]; // 0-based into InsightsCardData.insights[]
 }
 
 /** All connections for a single page */
@@ -29,7 +30,7 @@ export interface JtbdCoverage {
   index: number;
   text: string;
   addressed: boolean;
-  addressedBy: { pageId: string; componentDescription: string }[];
+  addressedBy: { pageId: string; componentDescription: string; connectionId: string; personaNames: string[]; rationale: string; insightIndices?: number[] }[];
 }
 
 export interface PersonaCoverage {

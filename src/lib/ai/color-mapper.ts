@@ -576,6 +576,112 @@ function fixContrastPairs(
   return { classes: fixed, violations };
 }
 
+// ============================================================================
+// Missing Foreground Injection
+// ============================================================================
+
+/**
+ * Suffixes for text-* classes that are NOT color classes.
+ * These are alignment, typography, wrapping, and overflow utilities.
+ */
+const TEXT_NON_COLOR_SUFFIXES = new Set([
+  // Typography size (raw Tailwind)
+  "xs", "sm", "base", "lg", "xl", "2xl", "3xl", "4xl", "5xl", "6xl", "7xl", "8xl", "9xl",
+  // Semantic typography
+  "h1", "h2", "h3", "h4", "body", "body-sm", "caption",
+  // Alignment
+  "left", "center", "right", "justify", "start", "end",
+  // Wrapping & overflow
+  "wrap", "nowrap", "balance", "pretty", "ellipsis", "clip", "truncate",
+]);
+
+/**
+ * Check if a text-* class is actually a color class (not alignment/typography/wrapping).
+ */
+function isTextColorClass(cls: string): boolean {
+  // Must start with text- (strip variant prefixes first)
+  const parts = cls.split(":");
+  const base = parts[parts.length - 1];
+
+  const textMatch = base.match(/^text-(.+?)(?:\/\d+)?$/);
+  if (!textMatch) return false;
+
+  const suffix = textMatch[1];
+
+  // If suffix is a known non-color utility, it's not a color class
+  if (TEXT_NON_COLOR_SUFFIXES.has(suffix)) return false;
+
+  // Check if it's a semantic token
+  if (SEMANTIC_TEXT_TOKENS.has(suffix)) return true;
+
+  // Check if it matches a Tailwind color family pattern (e.g., text-red-500)
+  if (suffix.match(/^\w+-\d+$/)) return true;
+
+  // Check known semantic color tokens
+  if (suffix === "foreground") return true;
+  if (suffix.endsWith("-foreground")) return true;
+
+  // Check against Tailwind color families (text-red, text-blue, etc.)
+  const familyOnly = suffix.replace(/-\d+$/, "");
+  if (TAILWIND_COLOR_FAMILIES.has(familyOnly)) return true;
+
+  // Known named colors
+  if (suffix === "white" || suffix === "black" || suffix === "transparent" || suffix === "current" || suffix === "inherit") return true;
+
+  return false;
+}
+
+/**
+ * Inject missing text-{X}-foreground when bg-{X} exists but no text color is present.
+ * Skips injection for low-opacity backgrounds (≤30%) where inherited text-foreground is fine.
+ */
+function injectMissingForeground(
+  classes: string[],
+): { classes: string[]; violations: ColorViolation[] } {
+  const violations: ColorViolation[] = [];
+
+  // Collect base-state bg semantic tokens with their opacity
+  const bgBases = new Map<string, number>(); // base → opacity (100 if no modifier)
+  for (const cls of classes) {
+    if (cls.includes(":")) continue; // skip variants
+    const bgMatch = cls.match(/^bg-(\w+?)(?:\/(\d+))?$/);
+    if (bgMatch && CONTRAST_PAIR_BASES.has(bgMatch[1])) {
+      const opacity = bgMatch[2] ? parseInt(bgMatch[2], 10) : 100;
+      bgBases.set(bgMatch[1], opacity);
+    }
+  }
+
+  if (bgBases.size === 0) {
+    return { classes, violations };
+  }
+
+  // Check if ANY base-state text color class already exists
+  const hasTextColor = classes.some(cls => {
+    if (cls.includes(":")) return false; // skip variants
+    return isTextColorClass(cls);
+  });
+
+  if (hasTextColor) {
+    return { classes, violations };
+  }
+
+  // No text color found — inject foreground for the first bg base with opacity > 30
+  for (const [base, opacity] of bgBases) {
+    if (opacity <= 30) continue; // skip tints
+
+    const injection = `text-${base}-foreground`;
+    violations.push({
+      original: `bg-${base}`,
+      replacement: injection,
+      prefix: "text",
+      reason: `Missing text color: "bg-${base}" has no text color class → injected "${injection}"`,
+    });
+    return { classes: [...classes, injection], violations };
+  }
+
+  return { classes, violations };
+}
+
 /**
  * Process a className string, replacing color violations with semantic tokens.
  * Returns the updated className and list of violations found.
@@ -602,8 +708,12 @@ export function enforceColors(
   const { classes: fixed, violations: contrastViolations } = fixContrastPairs(mapped);
   violations.push(...contrastViolations);
 
+  // Post-process: inject missing foreground when bg-X has no text color
+  const { classes: withForeground, violations: fgViolations } = injectMissingForeground(fixed);
+  violations.push(...fgViolations);
+
   return {
-    result: fixed.join(" "),
+    result: withForeground.join(" "),
     violations,
   };
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
 import { Check } from "lucide-react";
 import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
 import type { IdeaData } from "@/hooks/useStrategyStore";
@@ -25,16 +25,38 @@ interface IdeaCardProps {
   x: number;
   y: number;
   onMove?: (x: number, y: number) => void;
+  onHeightMeasured?: (height: number) => void;
   index: number;
   isSelected?: boolean;
   onClick?: () => void;
 }
 
-export function IdeaCard({ idea, x, y, onMove, index, isSelected, onClick }: IdeaCardProps) {
+export function IdeaCard({ idea, x, y, onMove, onHeightMeasured, index, isSelected, onClick }: IdeaCardProps) {
   const canvasScale = useCanvasScale();
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const hasDraggedRef = useRef(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const lastHeightRef = useRef(0);
+  const onHeightMeasuredRef = useRef(onHeightMeasured);
+  useEffect(() => {
+    onHeightMeasuredRef.current = onHeightMeasured;
+  });
+
+  // Measure card height via ResizeObserver and report changes
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      const height = el.offsetHeight;
+      if (height > 0 && Math.abs(height - lastHeightRef.current) > 1) {
+        lastHeightRef.current = height;
+        onHeightMeasuredRef.current?.(height);
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const color = STICKY_COLORS[index % STICKY_COLORS.length];
 
@@ -85,6 +107,7 @@ export function IdeaCard({ idea, x, y, onMove, index, isSelected, onClick }: Ide
 
   return (
     <div
+      ref={cardRef}
       className={`absolute select-none ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
       style={{
         left: x,
@@ -102,20 +125,13 @@ export function IdeaCard({ idea, x, y, onMove, index, isSelected, onClick }: Ide
         }`}
         style={{ position: "relative" }}
       >
-        {/* Illustrations */}
-        {idea.illustrations && idea.illustrations.length > 0 ? (
-          <div className={`flex ${idea.illustrations.length > 1 ? "gap-1" : ""} bg-black/5 p-3`}>
-            {idea.illustrations.map((svg, i) => (
-              <div
-                key={i}
-                className="flex-1 [&>svg]:w-full [&>svg]:h-auto"
-                dangerouslySetInnerHTML={{ __html: svg }}
-              />
-            ))}
-          </div>
-        ) : idea.title ? (
-          <div className="bg-black/5 p-3 h-[72px] animate-pulse" />
-        ) : null}
+        {/* SVG Illustration hero */}
+        {idea.illustration && (
+          <div
+            className="bg-black/5 p-3 flex items-center justify-center [&>svg]:max-h-[120px] [&>svg]:w-auto"
+            dangerouslySetInnerHTML={{ __html: idea.illustration }}
+          />
+        )}
 
         <div className="p-5">
           {/* Selected checkmark */}
@@ -130,70 +146,19 @@ export function IdeaCard({ idea, x, y, onMove, index, isSelected, onClick }: Ide
             {index + 1}
           </div>
 
-        {/* Title */}
-        {idea.title && (
-          <h3 className="text-base font-bold text-neutral-900 mb-2 leading-tight pr-6">
-            {idea.title}
-          </h3>
-        )}
+          {/* Title */}
+          {idea.title && (
+            <h3 className="text-base font-bold text-neutral-900 mb-2 leading-tight pr-6">
+              {idea.title}
+            </h3>
+          )}
 
-        {/* Description */}
-        {idea.description && (
-          <p className="text-sm text-neutral-700 leading-relaxed mb-3">
-            {idea.description}
-          </p>
-        )}
-
-        {/* Key Features */}
-        {idea.keyFeatures && idea.keyFeatures.length > 0 && (
-          <div className="mb-3">
-            <h4 className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-1.5">
-              Key Features
-            </h4>
-            <ul className="space-y-1">
-              {idea.keyFeatures.map((feature, i) => (
-                <li key={i} className="text-sm text-neutral-700 pl-4 relative">
-                  <span className="absolute left-0 top-1.5 w-1.5 h-1.5 rounded-full bg-neutral-400" />
-                  {feature}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* Pros */}
-        {idea.pros && idea.pros.length > 0 && (
-          <div className="mb-3">
-            <h4 className="text-xs font-semibold text-emerald-600 uppercase tracking-wider mb-1.5">
-              Pros
-            </h4>
-            <ul className="space-y-1">
-              {idea.pros.map((pro, i) => (
-                <li key={i} className="text-sm text-neutral-700 pl-4 relative">
-                  <span className="absolute left-0 top-1.5 w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                  {pro}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* Cons */}
-        {idea.cons && idea.cons.length > 0 && (
-          <div>
-            <h4 className="text-xs font-semibold text-amber-600 uppercase tracking-wider mb-1.5">
-              Cons
-            </h4>
-            <ul className="space-y-1">
-              {idea.cons.map((con, i) => (
-                <li key={i} className="text-sm text-neutral-700 pl-4 relative">
-                  <span className="absolute left-0 top-1.5 w-1.5 h-1.5 rounded-full bg-amber-400" />
-                  {con}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+          {/* Description */}
+          {idea.description && (
+            <p className="text-sm text-neutral-700 leading-relaxed">
+              {idea.description}
+            </p>
+          )}
         </div>
       </div>
     </div>

@@ -91,7 +91,7 @@ export async function POST(req: Request) {
     manifestoContext,
     personaContext,
     flowContext,
-    wireframeContext,
+    userFlowContext,
     modelId,
   } = await req.json();
 
@@ -103,7 +103,7 @@ export async function POST(req: Request) {
       pageId,
       pageName,
       componentName || pageName,
-      wireframeContext || undefined,
+      userFlowContext || undefined,
     ) +
     "\n\n" +
     DESIGN_SYSTEM_RULES;

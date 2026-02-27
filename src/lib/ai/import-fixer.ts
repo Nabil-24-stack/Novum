@@ -1,0 +1,503 @@
+/**
+ * Import Fixer - Phase -1 of the Design System Gatekeeper
+ *
+ * Fixes common AI-hallucinated import errors before other gatekeeper phases run.
+ * Uses regex-based string manipulation for consistency with the existing pipeline.
+ *
+ * Steps (in order):
+ * A. Fix known path aliases (use-toast → toast, @/ → ./)
+ * B. Fix Select API mismatch (Radix patterns → native Select/SelectOption)
+ * C. Remove non-existent export specifiers (DialogFooter, DialogClose, etc.)
+ * D. Add missing imports for known components used in JSX
+ *
+ * Fail-safe: wrapped in try/catch — original code passes through on any error.
+ */
+
+import { addImportIfMissing } from "@/lib/ast/import-manager";
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export interface ImportFix {
+  type: "path-alias" | "select-api" | "removed-specifier" | "added-import";
+  original: string;
+  replacement: string;
+  reason: string;
+}
+
+// ============================================================================
+// Component Registry — canonical export → import path map
+// ============================================================================
+
+const COMPONENT_REGISTRY: Record<string, string> = {
+  // Form Controls
+  Button: "./components/ui/button",
+  Input: "./components/ui/input",
+  Textarea: "./components/ui/textarea",
+  Checkbox: "./components/ui/checkbox",
+  Switch: "./components/ui/switch",
+  RadioGroup: "./components/ui/radio-group",
+  RadioGroupItem: "./components/ui/radio-group",
+  Toggle: "./components/ui/toggle",
+  Slider: "./components/ui/slider",
+  Select: "./components/ui/select",
+  SelectOption: "./components/ui/select",
+  Label: "./components/ui/label",
+  DatePicker: "./components/ui/date-picker",
+
+  // Layout & Display
+  Card: "./components/ui/card",
+  CardHeader: "./components/ui/card",
+  CardTitle: "./components/ui/card",
+  CardDescription: "./components/ui/card",
+  CardContent: "./components/ui/card",
+  CardFooter: "./components/ui/card",
+  Table: "./components/ui/table",
+  TableHeader: "./components/ui/table",
+  TableBody: "./components/ui/table",
+  TableRow: "./components/ui/table",
+  TableHead: "./components/ui/table",
+  TableCell: "./components/ui/table",
+  Separator: "./components/ui/separator",
+  AspectRatio: "./components/ui/aspect-ratio",
+
+  // Feedback
+  Alert: "./components/ui/alert",
+  AlertTitle: "./components/ui/alert",
+  AlertDescription: "./components/ui/alert",
+  Progress: "./components/ui/progress",
+  Skeleton: "./components/ui/skeleton",
+  ToastProvider: "./components/ui/toast",
+  Toaster: "./components/ui/toast",
+  ToastComponent: "./components/ui/toast",
+  ToastTitle: "./components/ui/toast",
+  ToastDescription: "./components/ui/toast",
+  Badge: "./components/ui/badge",
+
+  // Navigation
+  Tabs: "./components/ui/tabs",
+  TabsList: "./components/ui/tabs",
+  TabsTrigger: "./components/ui/tabs",
+  TabsContent: "./components/ui/tabs",
+  Accordion: "./components/ui/accordion",
+  AccordionItem: "./components/ui/accordion",
+  AccordionTrigger: "./components/ui/accordion",
+  AccordionContent: "./components/ui/accordion",
+  Breadcrumb: "./components/ui/breadcrumb",
+  BreadcrumbItem: "./components/ui/breadcrumb",
+  BreadcrumbLink: "./components/ui/breadcrumb",
+  BreadcrumbSeparator: "./components/ui/breadcrumb",
+  BreadcrumbPage: "./components/ui/breadcrumb",
+
+  // Overlays
+  Dialog: "./components/ui/dialog",
+  DialogTrigger: "./components/ui/dialog",
+  DialogContent: "./components/ui/dialog",
+  DialogHeader: "./components/ui/dialog",
+  DialogTitle: "./components/ui/dialog",
+  DialogDescription: "./components/ui/dialog",
+  Tooltip: "./components/ui/tooltip",
+  TooltipProvider: "./components/ui/tooltip",
+  TooltipTrigger: "./components/ui/tooltip",
+  TooltipContent: "./components/ui/tooltip",
+  Popover: "./components/ui/popover",
+  PopoverTrigger: "./components/ui/popover",
+  PopoverContent: "./components/ui/popover",
+
+  // Display
+  Avatar: "./components/ui/avatar",
+  AvatarImage: "./components/ui/avatar",
+  AvatarFallback: "./components/ui/avatar",
+
+  // Hooks & Utilities
+  useToast: "./components/ui/toast",
+  useRouter: "./lib/router",
+  cn: "./lib/utils",
+};
+
+// Non-existent specifiers that the AI commonly hallucinates
+const NON_EXISTENT_SPECIFIERS = new Set([
+  "DialogFooter",
+  "DialogClose",
+  "SelectTrigger",
+  "SelectValue",
+  "SelectContent",
+  "SelectItem",
+  "SelectGroup",
+  "SelectLabel",
+  "SelectSeparator",
+  "SelectScrollUpButton",
+  "SelectScrollDownButton",
+]);
+
+// ============================================================================
+// Step A: Fix Known Path Aliases
+// ============================================================================
+
+/** Map of wrong path endings → correct path endings */
+const PATH_FIXES: Array<[RegExp, string]> = [
+  // use-toast → toast
+  [/\/components\/ui\/use-toast(?:['"])/g, "/components/ui/toast"],
+  [/\/components\/ui\/useToast(?:['"])/g, "/components/ui/toast"],
+  // hooks/use-toast → components/ui/toast
+  [/\/hooks\/use-toast(?:['"])/g, "/components/ui/toast"],
+  [/\/hooks\/useToast(?:['"])/g, "/components/ui/toast"],
+];
+
+function fixPathAliases(code: string): { code: string; fixes: ImportFix[] } {
+  const fixes: ImportFix[] = [];
+  let result = code;
+
+  // Fix @/ aliases → relative paths
+  // Match import statements with @/ paths
+  const atAliasRegex = /from\s+["']@\/(.*?)["']/g;
+  let match: RegExpExecArray | null;
+  const atAliasReplacements: Array<{ start: number; end: number; original: string; replacement: string }> = [];
+
+  while ((match = atAliasRegex.exec(result)) !== null) {
+    const fullMatch = match[0];
+    const innerPath = match[1];
+    const replacement = `from "./${innerPath}"`;
+    atAliasReplacements.push({
+      start: match.index,
+      end: match.index + fullMatch.length,
+      original: fullMatch,
+      replacement,
+    });
+  }
+
+  // Apply @ alias replacements in reverse order
+  for (let i = atAliasReplacements.length - 1; i >= 0; i--) {
+    const rep = atAliasReplacements[i];
+    result = result.slice(0, rep.start) + rep.replacement + result.slice(rep.end);
+    fixes.push({
+      type: "path-alias",
+      original: rep.original,
+      replacement: rep.replacement,
+      reason: "@/ alias not supported in Sandpack",
+    });
+  }
+
+  // Fix known wrong paths
+  for (const [pattern, correctEnding] of PATH_FIXES) {
+    const regex = new RegExp(pattern.source, pattern.flags);
+    let pathMatch: RegExpExecArray | null;
+    const pathReplacements: Array<{ start: number; end: number; original: string; replacement: string }> = [];
+
+    while ((pathMatch = regex.exec(result)) !== null) {
+      const fullMatch = pathMatch[0];
+      // Keep the quote character at the end
+      const quoteChar = fullMatch[fullMatch.length - 1];
+      const replacement = correctEnding + quoteChar;
+      // Find the start of the path portion (after the last / before the wrong part)
+      const wrongPathStart = pathMatch.index;
+      pathReplacements.push({
+        start: wrongPathStart,
+        end: wrongPathStart + fullMatch.length,
+        original: fullMatch,
+        replacement,
+      });
+    }
+
+    for (let i = pathReplacements.length - 1; i >= 0; i--) {
+      const rep = pathReplacements[i];
+      result = result.slice(0, rep.start) + rep.replacement + result.slice(rep.end);
+      fixes.push({
+        type: "path-alias",
+        original: rep.original,
+        replacement: rep.replacement,
+        reason: "Wrong import path corrected",
+      });
+    }
+  }
+
+  return { code: result, fixes };
+}
+
+// ============================================================================
+// Step B: Fix Select API Mismatch (Radix → Native)
+// ============================================================================
+
+function fixSelectApi(code: string): { code: string; fixes: ImportFix[] } {
+  const fixes: ImportFix[] = [];
+  let result = code;
+
+  // Check if this file uses any Radix Select patterns
+  const hasRadixSelect =
+    /\bSelectTrigger\b/.test(result) ||
+    /\bSelectContent\b/.test(result) ||
+    /\bSelectItem\b/.test(result) ||
+    /\bSelectValue\b/.test(result);
+
+  if (!hasRadixSelect) {
+    return { code: result, fixes };
+  }
+
+  const originalCode = result;
+
+  // 1. Replace <SelectItem → <SelectOption and </SelectItem> → </SelectOption>
+  result = result.replace(/<SelectItem\b/g, "<SelectOption");
+  result = result.replace(/<\/SelectItem>/g, "</SelectOption>");
+
+  // 2. Unwrap <SelectContent>...</SelectContent> (keep children)
+  result = result.replace(/<SelectContent[^>]*>\s*/g, "");
+  result = result.replace(/\s*<\/SelectContent>/g, "");
+
+  // 3. Unwrap <SelectTrigger>...</SelectTrigger> (keep children)
+  result = result.replace(/<SelectTrigger[^>]*>\s*/g, "");
+  result = result.replace(/\s*<\/SelectTrigger>/g, "");
+
+  // 4. Remove <SelectValue ... /> self-closing tags
+  result = result.replace(/<SelectValue\b[^/]*\/>\s*/g, "");
+
+  // 5. Convert onValueChange → onChange on <Select> elements
+  result = result.replace(/(<Select\b[^>]*)\bonValueChange\b/g, "$1onChange");
+
+  // 6. Fix import: remove Radix specifiers, ensure Select + SelectOption
+  // Match the import line for select
+  result = result.replace(
+    /import\s*\{([^}]*)\}\s*from\s*["']([^"']*\/select)["'];?/g,
+    (fullMatch, specifiers: string, path: string) => {
+      // Parse existing specifiers
+      const specs = specifiers
+        .split(",")
+        .map((s: string) => s.trim())
+        .filter(Boolean);
+
+      // Remove Radix-only specifiers, rename SelectItem → SelectOption
+      const validSpecs = new Set<string>();
+      for (const spec of specs) {
+        if (spec === "SelectItem") {
+          validSpecs.add("SelectOption");
+        } else if (
+          spec === "SelectTrigger" ||
+          spec === "SelectValue" ||
+          spec === "SelectContent" ||
+          spec === "SelectGroup" ||
+          spec === "SelectLabel" ||
+          spec === "SelectSeparator" ||
+          spec === "SelectScrollUpButton" ||
+          spec === "SelectScrollDownButton"
+        ) {
+          // Drop these
+        } else {
+          validSpecs.add(spec);
+        }
+      }
+
+      // Ensure Select and SelectOption are present
+      validSpecs.add("Select");
+      validSpecs.add("SelectOption");
+
+      return `import { ${Array.from(validSpecs).join(", ")} } from "${path}";`;
+    }
+  );
+
+  if (result !== originalCode) {
+    fixes.push({
+      type: "select-api",
+      original: "Radix Select pattern (SelectTrigger/SelectContent/SelectItem)",
+      replacement: "Native Select + SelectOption",
+      reason: "VFS uses native HTML select wrapper, not Radix primitives",
+    });
+  }
+
+  return { code: result, fixes };
+}
+
+// ============================================================================
+// Step C: Remove Non-Existent Export Specifiers
+// ============================================================================
+
+function removeNonExistentSpecifiers(code: string): { code: string; fixes: ImportFix[] } {
+  const fixes: ImportFix[] = [];
+  let result = code;
+
+  // Match import { ... } from "..."; statements
+  const importRegex = /import\s*\{([^}]*)\}\s*from\s*["']([^"']*)["'];?/g;
+  const replacements: Array<{ start: number; end: number; replacement: string }> = [];
+
+  let match: RegExpExecArray | null;
+  while ((match = importRegex.exec(result)) !== null) {
+    const fullMatch = match[0];
+    const specifiers = match[1];
+    const path = match[2];
+
+    const specs = specifiers
+      .split(",")
+      .map((s: string) => s.trim())
+      .filter(Boolean);
+
+    const removed: string[] = [];
+    const kept = specs.filter((spec) => {
+      if (NON_EXISTENT_SPECIFIERS.has(spec)) {
+        removed.push(spec);
+        return false;
+      }
+      return true;
+    });
+
+    if (removed.length > 0) {
+      let replacement: string;
+      if (kept.length === 0) {
+        // All specifiers removed — remove entire import line
+        replacement = "";
+      } else {
+        replacement = `import { ${kept.join(", ")} } from "${path}";`;
+      }
+
+      replacements.push({
+        start: match.index,
+        end: match.index + fullMatch.length,
+        replacement,
+      });
+
+      for (const spec of removed) {
+        fixes.push({
+          type: "removed-specifier",
+          original: spec,
+          replacement: kept.length > 0 ? `removed from import` : "entire import removed",
+          reason: `${spec} doesn't exist in VFS component library`,
+        });
+      }
+    }
+  }
+
+  // Apply in reverse order
+  for (let i = replacements.length - 1; i >= 0; i--) {
+    const rep = replacements[i];
+    result = result.slice(0, rep.start) + rep.replacement + result.slice(rep.end);
+  }
+
+  // Clean up empty lines from removed imports
+  result = result.replace(/\n{3,}/g, "\n\n");
+
+  return { code: result, fixes };
+}
+
+// ============================================================================
+// Step D: Add Missing Imports for Known Components
+// ============================================================================
+
+function addMissingImports(code: string, filePath: string): { code: string; fixes: ImportFix[] } {
+  const fixes: ImportFix[] = [];
+  let result = code;
+
+  // Find all PascalCase component usage in JSX: <ComponentName
+  const jsxComponentRegex = /<([A-Z][A-Za-z0-9]*)\b/g;
+  const usedComponents = new Set<string>();
+
+  let match: RegExpExecArray | null;
+  while ((match = jsxComponentRegex.exec(code)) !== null) {
+    usedComponents.add(match[1]);
+  }
+
+  // Find hook calls: useToast(), useRouter()
+  const hookRegex = /\b(useToast|useRouter)\s*\(/g;
+  while ((match = hookRegex.exec(code)) !== null) {
+    usedComponents.add(match[1]);
+  }
+
+  // Find cn() usage
+  if (/\bcn\s*\(/.test(code)) {
+    usedComponents.add("cn");
+  }
+
+  // Check each used component against existing imports
+  for (const componentName of usedComponents) {
+    const importPath = COMPONENT_REGISTRY[componentName];
+    if (!importPath) continue;
+
+    // Quick regex check: is this already imported?
+    // Look for the component name in any import statement
+    const importCheckRegex = new RegExp(
+      `import\\s*\\{[^}]*\\b${componentName}\\b[^}]*\\}\\s*from`,
+    );
+    if (importCheckRegex.test(result)) continue;
+
+    // Also check for default import pattern (shouldn't happen but be safe)
+    const defaultImportCheck = new RegExp(
+      `import\\s+${componentName}\\s+from`,
+    );
+    if (defaultImportCheck.test(result)) continue;
+
+    // Add the missing import using the AST-based import manager
+    const addResult = addImportIfMissing(
+      result,
+      componentName,
+      importPath,
+      true,
+      filePath,
+    );
+
+    if (addResult.success && addResult.newCode && !addResult.alreadyExists) {
+      result = addResult.newCode;
+      fixes.push({
+        type: "added-import",
+        original: componentName,
+        replacement: `import { ${componentName} } from "${importPath}"`,
+        reason: `${componentName} used in JSX but not imported`,
+      });
+    }
+  }
+
+  return { code: result, fixes };
+}
+
+// ============================================================================
+// Orchestrator
+// ============================================================================
+
+/**
+ * Fix common import errors in AI-generated code.
+ *
+ * @param code - The AI-generated code to process
+ * @param filePath - The target file path (for relative import resolution)
+ * @returns The fixed code and a list of applied fixes
+ */
+export function fixImports(
+  code: string,
+  filePath: string,
+): { code: string; fixes: ImportFix[] } {
+  const allFixes: ImportFix[] = [];
+  let currentCode = code;
+
+  // Step A: Fix known path aliases
+  try {
+    const { code: pathFixed, fixes } = fixPathAliases(currentCode);
+    currentCode = pathFixed;
+    allFixes.push(...fixes);
+  } catch (err) {
+    console.warn("[ImportFixer] Path alias fixing failed, skipping:", err);
+  }
+
+  // Step B: Fix Select API mismatch
+  try {
+    const { code: selectFixed, fixes } = fixSelectApi(currentCode);
+    currentCode = selectFixed;
+    allFixes.push(...fixes);
+  } catch (err) {
+    console.warn("[ImportFixer] Select API fixing failed, skipping:", err);
+  }
+
+  // Step C: Remove non-existent specifiers
+  try {
+    const { code: cleanedCode, fixes } = removeNonExistentSpecifiers(currentCode);
+    currentCode = cleanedCode;
+    allFixes.push(...fixes);
+  } catch (err) {
+    console.warn("[ImportFixer] Specifier removal failed, skipping:", err);
+  }
+
+  // Step D: Add missing imports
+  try {
+    const { code: importedCode, fixes } = addMissingImports(currentCode, filePath);
+    currentCode = importedCode;
+    allFixes.push(...fixes);
+  } catch (err) {
+    console.warn("[ImportFixer] Missing import addition failed, skipping:", err);
+  }
+
+  return { code: currentCode, fixes: allFixes };
+}

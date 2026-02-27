@@ -47,36 +47,25 @@ export interface IdeaData {
   id: string;
   title: string;
   description: string;
-  keyFeatures: string[];
-  pros: string[];
-  cons: string[];
-  illustrations: string[];
+  illustration: string; // single SVG string
 }
 
-export interface WireframeElement {
-  type: "button" | "input" | "toggle" | "search" | "select" | "badge" | "avatar" | "checkbox" | "textarea";
-  label: string;
-  variant?: "primary" | "secondary" | "outline" | "destructive" | "ghost";
+export interface KeyFeaturesData {
+  ideaTitle: string;
+  features: { name: string; description: string; priority: "high" | "medium" | "low" }[];
 }
 
-export interface WireframeSection {
-  label: string;
-  flex?: number;
-  type?: "header" | "row" | "grid" | "block" | "list";
-  children?: WireframeSection[];
-  columns?: number;
-  items?: string[];
-  elements?: WireframeElement[];
+export interface UserFlowStep {
+  nodeId: string;         // References a StrategyNode.id from the IA
+  action: string;         // Brief action annotation (e.g., "Reviews analytics")
 }
 
-export interface WireframePage {
+export interface UserFlow {
   id: string;
-  name: string;
-  sections: WireframeSection[];
-}
-
-export interface WireframeData {
-  pages: WireframePage[];
+  jtbdIndex: number;      // 0-based index into ManifestoData.jtbd[]
+  jtbdText: string;       // Full JTBD text for display
+  personaNames: string[]; // Must match PersonaData.name exactly
+  steps: UserFlowStep[];
 }
 
 export interface ManifestoData {
@@ -127,9 +116,13 @@ interface StrategyState {
   // Deep-dive mode (re-enter questioning phase after initial overview generation)
   isDeepDive: boolean;
 
-  // Wireframe data (JSON wireframes from solution-design phase)
-  wireframeData: WireframeData | null;
-  streamingWireframes: WireframeData | null;
+  // Key features data (from solution-design phase)
+  keyFeaturesData: KeyFeaturesData | null;
+  streamingKeyFeatures: Partial<KeyFeaturesData> | null;
+
+  // User flow data (JTBD-based flows through the IA, from solution-design phase)
+  userFlowsData: UserFlow[] | null;
+  streamingUserFlows: Partial<UserFlow>[] | null;
 
   // Actions
   setPhase: (phase: StrategyPhase) => void;
@@ -150,8 +143,10 @@ interface StrategyState {
   setBuildingPages: (pageIds: string[]) => void;
   setPendingApprovalPage: (pageId: string | null) => void;
   setDeepDive: (v: boolean) => void;
-  setWireframeData: (data: WireframeData) => void;
-  setStreamingWireframes: (data: WireframeData | null) => void;
+  setKeyFeaturesData: (data: KeyFeaturesData) => void;
+  setStreamingKeyFeatures: (data: Partial<KeyFeaturesData> | null) => void;
+  setUserFlowsData: (data: UserFlow[]) => void;
+  setStreamingUserFlows: (data: Partial<UserFlow>[] | null) => void;
   reset: () => void;
 }
 
@@ -174,8 +169,10 @@ const initialState = {
   currentBuildingPages: [] as string[],
   pendingApprovalPage: null as string | null,
   isDeepDive: false,
-  wireframeData: null as WireframeData | null,
-  streamingWireframes: null as WireframeData | null,
+  keyFeaturesData: null as KeyFeaturesData | null,
+  streamingKeyFeatures: null as Partial<KeyFeaturesData> | null,
+  userFlowsData: null as UserFlow[] | null,
+  streamingUserFlows: null as Partial<UserFlow>[] | null,
 };
 
 export const useStrategyStore = create<StrategyState>((set) => ({
@@ -257,9 +254,13 @@ export const useStrategyStore = create<StrategyState>((set) => ({
 
   setDeepDive: (v) => set({ isDeepDive: v }),
 
-  setWireframeData: (data) => set({ wireframeData: data, streamingWireframes: null }),
+  setKeyFeaturesData: (data) => set({ keyFeaturesData: data, streamingKeyFeatures: null }),
 
-  setStreamingWireframes: (data) => set({ streamingWireframes: data }),
+  setStreamingKeyFeatures: (data) => set({ streamingKeyFeatures: data }),
+
+  setUserFlowsData: (data) => set({ userFlowsData: data, streamingUserFlows: null }),
+
+  setStreamingUserFlows: (data) => set({ streamingUserFlows: data }),
 
   reset: () => set(initialState),
 }));

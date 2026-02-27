@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useState, type PointerEvent } from "react";
-import { CheckCircle2, Circle } from "lucide-react";
+import { CheckCircle2, Circle, ShieldCheck, AlertTriangle, Sparkles } from "lucide-react";
 import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
 import type { ManifestoData } from "@/hooks/useStrategyStore";
-import type { JtbdCoverage } from "@/lib/product-brain/types";
+import type { JtbdCoverage, CoverageSummary } from "@/lib/product-brain/types";
 
 interface ManifestoCardProps {
   manifestoData: Partial<ManifestoData>;
@@ -12,9 +12,11 @@ interface ManifestoCardProps {
   y: number;
   onMove?: (x: number, y: number) => void;
   jtbdCoverage?: JtbdCoverage[];
+  coverageSummary?: CoverageSummary | null;
+  onAddressGaps?: () => void;
 }
 
-export function ManifestoCard({ manifestoData, x, y, onMove, jtbdCoverage }: ManifestoCardProps) {
+export function ManifestoCard({ manifestoData, x, y, onMove, jtbdCoverage, coverageSummary, onAddressGaps }: ManifestoCardProps) {
   const canvasScale = useCanvasScale();
   const [isDragging, setIsDragging] = useState(false);
 
@@ -154,6 +156,112 @@ export function ManifestoCard({ manifestoData, x, y, onMove, jtbdCoverage }: Man
                 </li>
               ))}
             </ol>
+          </>
+        )}
+
+        {/* Strategy Coverage Section — only shown once all manifesto fields are populated */}
+        {hasTitle && hasProblem && hasUser && hasJtbd && hasHmw && (
+          <>
+            <div className="border-t border-neutral-200/60 mt-6 mb-5" />
+
+            <div className="flex items-center gap-2.5 mb-5">
+              <ShieldCheck className="w-5 h-5 text-emerald-500 shrink-0" />
+              <h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider">
+                Strategy Coverage
+              </h3>
+            </div>
+
+            {coverageSummary ? (
+              <>
+                <div className="text-center mb-5">
+                  <span className={`text-5xl font-bold ${
+                    coverageSummary.overallPercent >= 80
+                      ? "text-emerald-600"
+                      : coverageSummary.overallPercent >= 50
+                        ? "text-amber-600"
+                        : "text-neutral-400"
+                  }`}>
+                    {coverageSummary.overallPercent}%
+                  </span>
+                  <p className="text-sm text-neutral-500 mt-1">
+                    of jobs-to-be-done addressed
+                  </p>
+                </div>
+
+                {coverageSummary.personaCoverage.length > 0 && (
+                  <div className="mb-5">
+                    <h4 className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-3">
+                      Per Persona
+                    </h4>
+                    <div className="space-y-3">
+                      {coverageSummary.personaCoverage.map((persona) => (
+                        <div key={persona.personaName}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm font-medium text-neutral-700 truncate">
+                              {persona.personaName}
+                            </span>
+                            <span className="text-xs font-semibold text-neutral-500 shrink-0 ml-2">
+                              {persona.coveragePercent}%
+                            </span>
+                          </div>
+                          <div className="h-1.5 bg-neutral-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-emerald-400 rounded-full transition-all duration-500"
+                              style={{ width: `${persona.coveragePercent}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {coverageSummary.gaps.length > 0 && (
+                  <>
+                    <div className="border-t border-neutral-200/60 mb-4" />
+                    <div className="mb-4">
+                      <h4 className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                        Unaddressed
+                      </h4>
+                      <ul className="space-y-2">
+                        {coverageSummary.gaps.map((gap, i) => (
+                          <li key={i} className="text-sm text-neutral-600 leading-relaxed pl-5 relative">
+                            <span className="absolute left-0 top-1.5 w-1.5 h-1.5 rounded-full bg-amber-400" />
+                            {gap}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    {onAddressGaps && (
+                      <button
+                        onClick={onAddressGaps}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors"
+                      >
+                        <Sparkles className="w-4 h-4" />
+                        Address Gaps with AI
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {coverageSummary.gaps.length === 0 && (
+                  <div className="text-center py-2">
+                    <p className="text-sm text-emerald-600 font-medium">
+                      All jobs-to-be-done are addressed!
+                    </p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-center py-3">
+                <span className="text-2xl font-semibold text-neutral-300">Pending</span>
+                <p className="text-sm text-neutral-400 mt-1">
+                  Coverage will update as pages are built
+                </p>
+              </div>
+            )}
           </>
         )}
       </div>

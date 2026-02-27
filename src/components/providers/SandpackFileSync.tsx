@@ -92,6 +92,7 @@ export function SandpackFileSync({ files }: SandpackFileSyncProps) {
         }
       }, 500);
     }
+
   }, [sandpack]);
 
   useEffect(() => {

@@ -600,6 +600,7 @@ export function RightPanel({
           <ChatTab
             writeFile={writeFile}
             files={files}
+            getLatestFile={getLatestFile}
             strategyPhase={strategyPhase}
             onPhaseAction={onPhaseAction}
             onHeroSubmit={onHeroSubmit}

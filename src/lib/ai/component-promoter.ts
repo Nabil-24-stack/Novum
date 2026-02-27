@@ -1,8 +1,12 @@
 /**
  * Component Promoter - Rule 3 of the Design System Gatekeeper
  *
- * Promotes raw HTML elements (<button>, <input>, <textarea>, <label>)
- * to their Shadcn/ui equivalents (<Button>, <Input>, <Textarea>, <Label>).
+ * Promotes raw HTML elements to their Shadcn/ui equivalents.
+ *
+ * Two passes:
+ * 1. Tag-based promotions: <button> → <Button>, <input> → <Input>, etc.
+ * 2. Pattern-based promotions: detects Badge, Card, Alert, Avatar, etc.
+ *    from className patterns on generic tags (div, span, img).
  *
  * Uses Babel AST to safely detect elements and verify they don't use
  * unsafe props (ref, style, spread, complex event handlers, data-* attributes).
@@ -36,7 +40,32 @@ interface PromotionTarget {
 }
 
 // ============================================================================
-// Promotion Map
+// Pattern-Based Promotion Types
+// ============================================================================
+
+interface PatternContext {
+  tagName: string;
+  className: string;
+  classes: Set<string>;
+  attributes: Map<string, string | true>;
+  hasChildren: boolean;
+}
+
+interface PatternMatch {
+  componentName: string;
+  variant?: string;
+  propsToAdd?: Record<string, string>;
+  classesToRemove?: Set<string>;
+}
+
+interface PatternRule {
+  targetTags: Set<string>;
+  detect: (ctx: PatternContext) => PatternMatch | null;
+  target: PromotionTarget;
+}
+
+// ============================================================================
+// Tag-Based Promotion Map
 // ============================================================================
 
 const PROMOTION_MAP: Record<string, PromotionTarget> = {
@@ -44,6 +73,13 @@ const PROMOTION_MAP: Record<string, PromotionTarget> = {
   input: { componentName: "Input", importPath: "./components/ui/input" },
   textarea: { componentName: "Textarea", importPath: "./components/ui/textarea" },
   label: { componentName: "Label", importPath: "./components/ui/label" },
+  hr: { componentName: "Separator", importPath: "./components/ui/separator" },
+  table: { componentName: "Table", importPath: "./components/ui/table" },
+  thead: { componentName: "TableHeader", importPath: "./components/ui/table" },
+  tbody: { componentName: "TableBody", importPath: "./components/ui/table" },
+  tr: { componentName: "TableRow", importPath: "./components/ui/table" },
+  th: { componentName: "TableHead", importPath: "./components/ui/table" },
+  td: { componentName: "TableCell", importPath: "./components/ui/table" },
 };
 
 // ============================================================================
@@ -56,6 +92,8 @@ const SAFE_PROPS = new Set([
   "name", "id", "htmlFor", "rows", "defaultValue", "required", "autoFocus",
   "autoComplete", "readOnly", "min", "max", "step", "pattern", "maxLength",
   "checked", "defaultChecked",
+  // Additional safe props for pattern-based promotions
+  "role", "tabIndex", "title", "alt", "src", "href", "colSpan", "rowSpan", "scope",
 ]);
 
 /** Prop prefixes that are safe */
@@ -76,6 +114,9 @@ const UNSAFE_PROPS = new Set([
   "onInput", "onSelect", "onCopy", "onCut", "onPaste",
 ]);
 
+/** Tags eligible for pattern-based promotion */
+const GENERIC_TAGS = new Set(["div", "span", "img"]);
+
 /**
  * Check if an attribute name is safe for promotion.
  */
@@ -95,6 +136,220 @@ function isPropUnsafe(name: string): boolean {
 }
 
 // ============================================================================
+// Pattern Helpers
+// ============================================================================
+
+/** Check if the class set contains any class from the provided list */
+function hasAnyClass(classes: Set<string>, targets: string[]): boolean {
+  return targets.some(t => classes.has(t));
+}
+
+
+// ============================================================================
+// Pattern Rules
+// ============================================================================
+
+const PATTERN_RULES: PatternRule[] = [
+  // ── Role-based detections (highest priority) ──
+
+  // Alert: role="alert"
+  {
+    targetTags: new Set(["div"]),
+    target: { componentName: "Alert", importPath: "./components/ui/alert" },
+    detect: (ctx) => {
+      if (ctx.attributes.get("role") !== "alert") return null;
+      const isDestructive = ctx.classes.has("bg-destructive") || ctx.classes.has("border-destructive");
+      const classesToRemove = new Set<string>();
+      if (isDestructive) {
+        classesToRemove.add("bg-destructive");
+        classesToRemove.add("border-destructive");
+      }
+      return {
+        componentName: "Alert",
+        variant: isDestructive ? "destructive" : undefined,
+        classesToRemove: classesToRemove.size > 0 ? classesToRemove : undefined,
+      };
+    },
+  },
+
+  // Progress: role="progressbar"
+  {
+    targetTags: new Set(["div"]),
+    target: { componentName: "Progress", importPath: "./components/ui/progress" },
+    detect: (ctx) => {
+      if (ctx.attributes.get("role") !== "progressbar") return null;
+      return { componentName: "Progress" };
+    },
+  },
+
+  // Switch: role="switch"
+  {
+    targetTags: new Set(["div", "span"]),
+    target: { componentName: "Switch", importPath: "./components/ui/switch" },
+    detect: (ctx) => {
+      if (ctx.attributes.get("role") !== "switch") return null;
+      return { componentName: "Switch" };
+    },
+  },
+
+  // Checkbox: role="checkbox"
+  {
+    targetTags: new Set(["div", "span"]),
+    target: { componentName: "Checkbox", importPath: "./components/ui/checkbox" },
+    detect: (ctx) => {
+      if (ctx.attributes.get("role") !== "checkbox") return null;
+      return { componentName: "Checkbox" };
+    },
+  },
+
+  // Separator: role="separator" OR visual pattern
+  {
+    targetTags: new Set(["div"]),
+    target: { componentName: "Separator", importPath: "./components/ui/separator" },
+    detect: (ctx) => {
+      // Role-based
+      if (ctx.attributes.get("role") === "separator") {
+        return { componentName: "Separator" };
+      }
+      // Pattern-based: thin horizontal line div
+      const hasHeight = ctx.classes.has("h-px") || ctx.classes.has("h-[1px]");
+      const hasWidth = ctx.classes.has("w-full");
+      const hasBgLine = ctx.classes.has("bg-border") || ctx.classes.has("bg-muted");
+      if (hasHeight && hasWidth && hasBgLine && !ctx.hasChildren) {
+        return {
+          componentName: "Separator",
+          classesToRemove: new Set(["h-px", "h-[1px]", "w-full", "bg-border", "bg-muted"]),
+        };
+      }
+      return null;
+    },
+  },
+
+  // ── Pattern-based detections ──
+
+  // Badge: inline-flex + small padding + small text + font weight + rounded
+  {
+    targetTags: new Set(["div", "span"]),
+    target: { componentName: "Badge", importPath: "./components/ui/badge" },
+    detect: (ctx) => {
+      let signals = 0;
+
+      // Signal 1: inline-flex or inline-block
+      if (hasAnyClass(ctx.classes, ["inline-flex", "inline-block"])) signals++;
+
+      // Signal 2: small padding
+      if (hasAnyClass(ctx.classes, ["px-2", "px-2.5", "px-3", "py-0.5", "py-1"])) signals++;
+
+      // Signal 3: small text
+      if (hasAnyClass(ctx.classes, ["text-xs", "text-sm", "text-caption", "text-body-sm"])) signals++;
+
+      // Signal 4: font weight
+      if (hasAnyClass(ctx.classes, ["font-semibold", "font-medium", "font-bold"])) signals++;
+
+      // Signal 5: rounded
+      if (hasAnyClass(ctx.classes, [
+        "rounded", "rounded-full", "rounded-md", "rounded-lg", "rounded-sm", "rounded-xl",
+      ])) signals++;
+
+      if (signals < 4) return null;
+
+      // Determine variant from bg class
+      let variant: string | undefined;
+      if (ctx.classes.has("bg-destructive")) variant = "destructive";
+      else if (ctx.classes.has("bg-secondary")) variant = "secondary";
+      else if (ctx.classes.has("bg-muted")) variant = "secondary";
+
+      // Collect styling classes to remove (Badge provides its own)
+      const classesToRemove = new Set<string>();
+      const badgeAbsorbedClasses = [
+        "inline-flex", "inline-block", "items-center",
+        "px-2", "px-2.5", "px-3", "py-0.5", "py-1",
+        "text-xs", "text-sm", "text-caption", "text-body-sm",
+        "font-semibold", "font-medium", "font-bold",
+        "rounded", "rounded-full", "rounded-md", "rounded-lg", "rounded-sm", "rounded-xl",
+        "bg-primary", "bg-secondary", "bg-destructive", "bg-muted", "bg-accent",
+        "text-primary-foreground", "text-secondary-foreground", "text-destructive-foreground",
+        "text-muted-foreground", "text-accent-foreground",
+        "border", "border-border",
+      ];
+      for (const c of badgeAbsorbedClasses) {
+        if (ctx.classes.has(c)) classesToRemove.add(c);
+      }
+
+      return { componentName: "Badge", variant, classesToRemove };
+    },
+  },
+
+  // Avatar: rounded-full + matching square dimensions (h-N w-N)
+  {
+    targetTags: new Set(["div", "img"]),
+    target: { componentName: "Avatar", importPath: "./components/ui/avatar" },
+    detect: (ctx) => {
+      if (!ctx.classes.has("rounded-full")) return null;
+
+      // Look for matching h-N w-N pairs
+      const sizePattern = /^[hw]-(\d+)$/;
+      let hSize: string | undefined;
+      let wSize: string | undefined;
+
+      for (const cls of ctx.classes) {
+        const m = cls.match(sizePattern);
+        if (m) {
+          if (cls.startsWith("h-")) hSize = m[1];
+          if (cls.startsWith("w-")) wSize = m[1];
+        }
+      }
+
+      if (!hSize || !wSize || hSize !== wSize) return null;
+
+      // Size must be reasonable for an avatar (6-16 in Tailwind scale ≈ 24-64px)
+      const size = parseInt(hSize, 10);
+      if (size < 6 || size > 20) return null;
+
+      return {
+        componentName: "Avatar",
+        classesToRemove: new Set(["rounded-full", `h-${hSize}`, `w-${wSize}`, "overflow-hidden"]),
+      };
+    },
+  },
+
+  // Card: rounded + border + bg + children (lowest priority since it's broad)
+  {
+    targetTags: new Set(["div"]),
+    target: { componentName: "Card", importPath: "./components/ui/card" },
+    detect: (ctx) => {
+      if (!ctx.hasChildren) return null;
+
+      let signals = 0;
+
+      // Signal 1: rounded-lg or rounded-xl
+      if (hasAnyClass(ctx.classes, ["rounded-lg", "rounded-xl"])) signals++;
+
+      // Signal 2: border
+      if (hasAnyClass(ctx.classes, ["border", "border-border"])) signals++;
+
+      // Signal 3: card-like bg or shadow
+      if (hasAnyClass(ctx.classes, ["bg-card", "bg-background", "shadow", "shadow-sm", "shadow-md", "shadow-lg"])) signals++;
+
+      // Need all 3 signals for Card
+      if (signals < 3) return null;
+
+      const classesToRemove = new Set<string>();
+      const cardAbsorbed = [
+        "rounded-lg", "rounded-xl", "border", "border-border",
+        "bg-card", "bg-background", "shadow", "shadow-sm",
+        "text-card-foreground",
+      ];
+      for (const c of cardAbsorbed) {
+        if (ctx.classes.has(c)) classesToRemove.add(c);
+      }
+
+      return { componentName: "Card", classesToRemove };
+    },
+  },
+];
+
+// ============================================================================
 // AST-Based Promotion
 // ============================================================================
 
@@ -111,6 +366,184 @@ interface ReplacementEdit {
   tagName: string;
   componentName: string;
 }
+
+/**
+ * Build a PatternContext from a JSXOpeningElement AST node.
+ */
+function buildPatternContext(
+  path: NodePath<t.JSXOpeningElement>,
+): PatternContext | null {
+  const nameNode = path.node.name;
+  if (nameNode.type !== "JSXIdentifier") return null;
+
+  const tagName = nameNode.name;
+
+  // Extract className string
+  let className = "";
+  const attributes = new Map<string, string | true>();
+
+  for (const attr of path.node.attributes) {
+    if (attr.type === "JSXSpreadAttribute") return null; // bail on spread
+
+    if (attr.type === "JSXAttribute") {
+      const attrName = attr.name.type === "JSXIdentifier"
+        ? attr.name.name
+        : `${attr.name.namespace.name}:${attr.name.name.name}`;
+
+      if (isPropUnsafe(attrName)) return null; // bail on unsafe props
+
+      if (attrName === "className" && attr.value) {
+        if (attr.value.type === "StringLiteral") {
+          className = attr.value.value;
+        }
+        // For JSXExpressionContainer with string literal
+        else if (
+          attr.value.type === "JSXExpressionContainer" &&
+          attr.value.expression.type === "StringLiteral"
+        ) {
+          className = attr.value.expression.value;
+        }
+      } else if (attr.value) {
+        if (attr.value.type === "StringLiteral") {
+          attributes.set(attrName, attr.value.value);
+        } else {
+          attributes.set(attrName, true);
+        }
+      } else {
+        // Boolean attribute (e.g., disabled)
+        attributes.set(attrName, true);
+      }
+    }
+  }
+
+  // Check if parent JSXElement has children
+  const parent = path.parentPath;
+  let hasChildren = false;
+  if (parent?.node.type === "JSXElement") {
+    const children = (parent.node as t.JSXElement).children;
+    hasChildren = children.some(child => {
+      if (child.type === "JSXText") return child.value.trim().length > 0;
+      return true;
+    });
+  }
+
+  const classes = new Set(className.trim().split(/\s+/).filter(Boolean));
+
+  return { tagName, className, classes, attributes, hasChildren };
+}
+
+/**
+ * Build a ReplacementEdit for a pattern match.
+ * Handles className modification (removing absorbed classes) and tag name change.
+ */
+function buildPatternEdit(
+  path: NodePath<t.JSXOpeningElement>,
+  code: string,
+  match: PatternMatch,
+): ReplacementEdit | null {
+  const nameNode = path.node.name;
+  if (nameNode.type !== "JSXIdentifier") return null;
+
+  const tagName = nameNode.name;
+  const openStart = path.node.start;
+  const openEnd = path.node.end;
+  if (openStart == null || openEnd == null) return null;
+
+  let openingSource = code.slice(openStart, openEnd);
+
+  // Replace tag name
+  openingSource = openingSource.replace(
+    new RegExp(`^(<\\s*)${tagName}\\b`),
+    `$1${match.componentName}`
+  );
+
+  // Remove absorbed classes from className
+  if (match.classesToRemove && match.classesToRemove.size > 0) {
+    openingSource = removeClassesFromJSX(openingSource, match.classesToRemove);
+  }
+
+  // Add variant prop if specified
+  if (match.variant) {
+    // Insert variant prop after component name
+    openingSource = openingSource.replace(
+      new RegExp(`^(<\\s*${match.componentName})`),
+      `$1 variant="${match.variant}"`
+    );
+  }
+
+  // Add other props if specified
+  if (match.propsToAdd) {
+    for (const [key, value] of Object.entries(match.propsToAdd)) {
+      openingSource = openingSource.replace(
+        new RegExp(`^(<\\s*${match.componentName}(?:\\s+variant="[^"]*")?)`),
+        `$1 ${key}="${value}"`
+      );
+    }
+  }
+
+  // Remove role attribute if it was used for detection (component handles it internally)
+  // Use regex on the modified string (not AST offsets which are stale after earlier edits)
+  openingSource = openingSource.replace(/\s+role="[^"]*"/, "");
+
+  // Handle closing tag
+  let closeStart: number | null = null;
+  let closeEnd: number | null = null;
+  let newCloseTag: string | null = null;
+
+  if (!path.node.selfClosing) {
+    const parent = path.parentPath;
+    if (parent?.node.type === "JSXElement") {
+      const closingElement = (parent.node as t.JSXElement).closingElement;
+      if (closingElement && closingElement.start != null && closingElement.end != null) {
+        closeStart = closingElement.start;
+        closeEnd = closingElement.end;
+        newCloseTag = `</${match.componentName}>`;
+      }
+    }
+  }
+
+  return {
+    openStart,
+    openEnd,
+    newOpenTag: openingSource,
+    closeStart,
+    closeEnd,
+    newCloseTag,
+    tagName,
+    componentName: match.componentName,
+  };
+}
+
+/**
+ * Remove specific classes from a className attribute within a JSX opening tag string.
+ */
+function removeClassesFromJSX(openingTag: string, classesToRemove: Set<string>): string {
+  // Match className="..." or className={"..."}
+  return openingTag.replace(
+    /className=(?:"([^"]*)"|{["`']([^"`']*)["`']})/,
+    (fullMatch, strLiteral, exprLiteral) => {
+      const original = strLiteral ?? exprLiteral ?? "";
+      const remaining = original
+        .split(/\s+/)
+        .filter((c: string) => c && !classesToRemove.has(c))
+        .join(" ");
+
+      if (!remaining) {
+        // Remove the entire className attribute if no classes remain
+        return "";
+      }
+
+      if (strLiteral !== undefined) {
+        return `className="${remaining}"`;
+      }
+      return `className={"${remaining}"}`;
+    }
+  );
+}
+
+// ============================================================================
+// Main Entry Point
+// ============================================================================
 
 /**
  * Promote raw HTML elements to Shadcn components in the given code.
@@ -139,6 +572,7 @@ export function promoteComponents(
   const requiredImports: ImportInfo[] = [];
   const importsSeen = new Set<string>();
 
+  // ── Pass 1: Tag-based promotions ──
   traverse(ast, {
     JSXOpeningElement(path: NodePath<t.JSXOpeningElement>) {
       const nameNode = path.node.name;
@@ -229,6 +663,49 @@ export function promoteComponents(
           importPath: target.importPath,
           isNamedExport: true,
         });
+      }
+    },
+  });
+
+  // ── Pass 2: Pattern-based promotions on generic tags ──
+  // Re-parse since pass 1 may have already collected edits (we track edited positions)
+  const editedPositions = new Set(edits.map(e => e.openStart));
+
+  traverse(ast, {
+    JSXOpeningElement(path: NodePath<t.JSXOpeningElement>) {
+      const nameNode = path.node.name;
+      if (nameNode.type !== "JSXIdentifier") return;
+      if (!GENERIC_TAGS.has(nameNode.name)) return;
+
+      // Skip if this element was already edited in pass 1
+      if (path.node.start != null && editedPositions.has(path.node.start)) return;
+
+      const ctx = buildPatternContext(path);
+      if (!ctx) return;
+
+      // Try each pattern rule in order (first match wins)
+      for (const rule of PATTERN_RULES) {
+        if (!rule.targetTags.has(ctx.tagName)) continue;
+
+        const match = rule.detect(ctx);
+        if (!match) continue;
+
+        const edit = buildPatternEdit(path, code, match);
+        if (!edit) continue;
+
+        edits.push(edit);
+
+        // Track required imports
+        if (!importsSeen.has(match.componentName)) {
+          importsSeen.add(match.componentName);
+          requiredImports.push({
+            componentName: match.componentName,
+            importPath: rule.target.importPath,
+            isNamedExport: true,
+          });
+        }
+
+        break; // first match wins
       }
     },
   });

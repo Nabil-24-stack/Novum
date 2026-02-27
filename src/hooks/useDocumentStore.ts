@@ -11,8 +11,9 @@ export interface UploadedDocument {
 
 export interface InsightData {
   insight: string;
-  quote: string;         // Direct citation from document
-  sourceDocument: string; // File name
+  quote?: string;                          // Only for document-sourced insights
+  sourceDocument?: string;                 // Only for document-sourced insights
+  source?: "document" | "conversation";    // Provenance
 }
 
 export interface InsightsCardData {

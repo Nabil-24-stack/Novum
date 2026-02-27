@@ -69,12 +69,14 @@ export function FloatingChatPanel({
   const handleDragPointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!dragRef.current) return;
-      onMove(
-        e.clientX - dragRef.current.offsetX,
-        e.clientY - dragRef.current.offsetY
-      );
+      const rawX = e.clientX - dragRef.current.offsetX;
+      const rawY = e.clientY - dragRef.current.offsetY;
+      // Clamp so the panel stays within the viewport
+      const clampedX = Math.max(0, Math.min(rawX, window.innerWidth - width));
+      const clampedY = Math.max(0, Math.min(rawY, window.innerHeight - height));
+      onMove(clampedX, clampedY);
     },
-    [onMove]
+    [onMove, width, height]
   );
 
   const handleDragPointerUp = useCallback(() => {
@@ -103,17 +105,26 @@ export function FloatingChatPanel({
   const handleResizePointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!resizeRef.current) return;
-      const newW = Math.max(
-        MIN_WIDTH,
-        resizeRef.current.startW + (e.clientX - resizeRef.current.startX)
+      // Clamp so the panel doesn't extend past the viewport
+      const maxW = window.innerWidth - x;
+      const maxH = window.innerHeight - y;
+      const newW = Math.min(
+        maxW,
+        Math.max(
+          MIN_WIDTH,
+          resizeRef.current.startW + (e.clientX - resizeRef.current.startX)
+        )
       );
-      const newH = Math.max(
-        MIN_HEIGHT,
-        resizeRef.current.startH + (e.clientY - resizeRef.current.startY)
+      const newH = Math.min(
+        maxH,
+        Math.max(
+          MIN_HEIGHT,
+          resizeRef.current.startH + (e.clientY - resizeRef.current.startY)
+        )
       );
       onResize(newW, newH);
     },
-    [onResize]
+    [onResize, x, y]
   );
 
   const handleResizePointerUp = useCallback(() => {

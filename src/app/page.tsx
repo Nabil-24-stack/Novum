@@ -28,19 +28,22 @@ import { InspectorContextMenu } from "@/components/canvas/InspectorContextMenu";
 import { FlowFrame } from "@/components/flow/FlowFrame";
 import { FlowConnections } from "@/components/flow/FlowConnections";
 import { ManifestoCard } from "@/components/strategy/ManifestoCard";
+import { StrategyAnnotations } from "@/components/flow/StrategyAnnotations";
+import { useAnnotationStore } from "@/hooks/useAnnotationStore";
+import { useAnnotationResolution } from "@/hooks/useAnnotationResolution";
 import { InsightsCard } from "@/components/strategy/InsightsCard";
 import { useDocumentStore } from "@/hooks/useDocumentStore";
 import { PersonaCard } from "@/components/strategy/PersonaCard";
 import { JourneyMapCard } from "@/components/strategy/JourneyMapCard";
-import { CoverageCard } from "@/components/strategy/CoverageCard";
 import { IdeaCard } from "@/components/strategy/IdeaCard";
-import { WireframeCard, WIREFRAME_CARD_WIDTH, WIREFRAME_CARD_HEIGHT } from "@/components/strategy/WireframeCard";
+import { KeyFeaturesCard, KEY_FEATURES_CARD_WIDTH } from "@/components/strategy/KeyFeaturesCard";
+import { UserFlowCard, USER_FLOW_CARD_WIDTH, USER_FLOW_CARD_HEIGHT } from "@/components/strategy/UserFlowCard";
 import { StrategyFlowCanvas } from "@/components/strategy/StrategyFlowCanvas";
 import { calculateHorizontalLayout, type GroupId, type GroupConfig, type GroupOrigin } from "@/lib/strategy/section-layout";
 import { calculateStrategyLayout } from "@/lib/strategy/strategy-layout";
 import { initializeTestAPI, updateTestAPI } from "@/lib/ast/test-utils";
 import { PublishDialog } from "@/components/editor/PublishDialog";
-import { Smartphone, GitBranch, Share, RefreshCw } from "lucide-react";
+import { Smartphone, GitBranch, Share, RefreshCw, MessageSquareText } from "lucide-react";
 import { animateViewport, calculateCenteredViewport, calculateFitAllViewport } from "@/lib/canvas/viewport-animation";
 import { calculateFlowLayout } from "@/lib/flow/auto-layout";
 import type { CanvasTool, CanvasNode } from "@/lib/canvas/types";
@@ -84,9 +87,12 @@ export default function Home() {
   const ideaData = useStrategyStore((s) => s.ideaData);
   const streamingIdeas = useStrategyStore((s) => s.streamingIdeas);
   const selectedIdeaId = useStrategyStore((s) => s.selectedIdeaId);
-  const wireframeData = useStrategyStore((s) => s.wireframeData);
-  const streamingWireframes = useStrategyStore((s) => s.streamingWireframes);
-  const activeWireframeData = wireframeData || streamingWireframes;
+  const keyFeaturesData = useStrategyStore((s) => s.keyFeaturesData);
+  const streamingKeyFeatures = useStrategyStore((s) => s.streamingKeyFeatures);
+  const activeKeyFeatures = keyFeaturesData || streamingKeyFeatures;
+  const userFlowsData = useStrategyStore((s) => s.userFlowsData);
+  const streamingUserFlows = useStrategyStore((s) => s.streamingUserFlows);
+  const activeUserFlows = userFlowsData || streamingUserFlows;
   const completedPages = useStrategyStore((s) => s.completedPages);
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
   const currentBuildingPages = useStrategyStore((s) => s.currentBuildingPages);
@@ -103,6 +109,14 @@ export default function Home() {
     if (!brainData || !manifestoData || !personaData) return null;
     return computeCoverage(brainData, manifestoData, personaData, journeyMapData ?? []);
   }, [brainData, manifestoData, personaData, journeyMapData]);
+
+  // Annotation store + resolution
+  const annotationActiveFrames = useAnnotationStore((s) => s.activeFrames);
+  const annotationBounds = useAnnotationStore((s) => s.frameBounds);
+  const toggleAnnotationFrame = useAnnotationStore((s) => s.toggleFrame);
+  const openAllAnnotations = useAnnotationStore((s) => s.openAll);
+  const closeAllAnnotations = useAnnotationStore((s) => s.closeAll);
+  useAnnotationResolution({ brainData });
 
   // Compute visible page IDs for progressive FlowFrame rendering
   const visiblePageIds = useMemo(() => {
@@ -137,7 +151,7 @@ export default function Home() {
       id: "insights",
       width: 600,
       height: 500,
-      visible: !!(insightsData || streamingInsights),
+      visible: !!(insightsData || streamingInsights || manifestoData || streamingOverview),
     });
 
     configs.push({
@@ -168,8 +182,25 @@ export default function Home() {
     configs.push({
       id: "ideas",
       width: ideaCount > 0 ? Math.min(ideaCount, 4) * IDEA_CARD_COL_WIDTH - 20 : 0,
-      height: ideaCount > 0 ? ideaRows * IDEA_CARD_ESTIMATED_HEIGHT + (ideaRows - 1) * IDEA_CARD_ROW_GAP : 0,
+      height: ideaCount > 0 ? (() => {
+        let total = 0;
+        for (let r = 0; r < ideaRows; r++) {
+          const start = r * 4;
+          const rowHeights = ideaCardHeightsRef.current.slice(start, start + 4).filter(h => h > 0);
+          total += rowHeights.length > 0 ? Math.max(...rowHeights) : IDEA_CARD_ESTIMATED_HEIGHT;
+        }
+        return total + (ideaRows - 1) * IDEA_CARD_ROW_GAP;
+      })() : 0,
       visible: ideaCount > 0,
+    });
+
+    // Key features group (between ideas and architecture)
+    const KEY_FEATURES_ESTIMATED_HEIGHT = 500;
+    configs.push({
+      id: "key-features",
+      width: KEY_FEATURES_CARD_WIDTH,
+      height: KEY_FEATURES_ESTIMATED_HEIGHT,
+      visible: !!(activeKeyFeatures),
     });
 
     if (flowData) {
@@ -179,18 +210,18 @@ export default function Home() {
       configs.push({ id: "architecture", width: 0, height: 0, visible: false });
     }
 
-    // Wireframes group (below architecture)
-    const wireframePageCount = activeWireframeData?.pages?.length ?? 0;
-    const WIREFRAME_HEADER = 36;
+    // User flows group (after architecture)
+    const userFlowCount = activeUserFlows?.length ?? 0;
+    const USER_FLOW_GAP = 40;
     configs.push({
-      id: "wireframes",
-      width: wireframePageCount > 0 ? Math.min(wireframePageCount, 3) * (WIREFRAME_CARD_WIDTH + 40) - 40 : 0,
-      height: wireframePageCount > 0 ? Math.ceil(wireframePageCount / 3) * (WIREFRAME_CARD_HEIGHT + WIREFRAME_HEADER + 40) - 40 : 0,
-      visible: wireframePageCount > 0,
+      id: "user-flows",
+      width: userFlowCount > 0 ? USER_FLOW_CARD_WIDTH : 0,
+      height: userFlowCount > 0 ? userFlowCount * (USER_FLOW_CARD_HEIGHT + USER_FLOW_GAP) - USER_FLOW_GAP : 0,
+      visible: userFlowCount > 0,
     });
 
     return configs;
-  }, [insightsData, streamingInsights, manifestoData, streamingOverview, personaData, streamingPersonas, journeyMapData, streamingJourneyMaps, ideaData, streamingIdeas, flowData, activeWireframeData]);
+  }, [insightsData, streamingInsights, manifestoData, streamingOverview, personaData, streamingPersonas, journeyMapData, streamingJourneyMaps, ideaData, streamingIdeas, activeKeyFeatures, flowData, activeUserFlows]);
 
   // --- Layout effect: compute horizontal group origins when groups appear ---
   useEffect(() => {
@@ -221,85 +252,136 @@ export default function Home() {
   const [personaPositions, setPersonaPositions] = useState<{ x: number; y: number }[]>([]);
   const [journeyMapPositions, setJourneyMapPositions] = useState<{ x: number; y: number }[]>([]);
   const [ideaPositions, setIdeaPositions] = useState<{ x: number; y: number }[]>([]);
-  const [wireframePositions, setWireframePositions] = useState<{ x: number; y: number }[]>([]);
-  const [coverageCardPos, setCoverageCardPos] = useState<{ x: number; y: number } | null>(null);
-
+  const [userFlowPositions, setUserFlowPositions] = useState<{ x: number; y: number }[]>([]);
+  const [keyFeaturesPosition, setKeyFeaturesPosition] = useState<{ x: number; y: number } | null>(null);
   // Estimated height per journey map card (accounts for table with 5+ rows)
   const JOURNEY_CARD_ESTIMATED_HEIGHT = 520;
   const JOURNEY_CARD_GAP = 30;
 
-  // Estimated height per idea card row (cards have illustrations + title + description + features + pros/cons)
-  const IDEA_CARD_ESTIMATED_HEIGHT = 620;
+  // Estimated height per idea card row (cards have illustration + title + description)
+  const IDEA_CARD_ESTIMATED_HEIGHT = 360;
   const IDEA_CARD_COL_WIDTH = 320;
   const IDEA_CARD_ROW_GAP = 40;
 
+  // Dynamic idea card height tracking — measures actual card heights to position rows accurately
+  const ideaCardHeightsRef = useRef<number[]>([]);
+  const ideaDraggedRef = useRef<Set<number>>(new Set());
+  const [ideaHeightTick, setIdeaHeightTick] = useState(0);
+  const heightTickTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const handleIdeaHeightMeasured = useCallback((index: number, height: number) => {
+    const prev = ideaCardHeightsRef.current[index];
+    if (prev && Math.abs(height - prev) <= 1) return;
+    ideaCardHeightsRef.current[index] = height;
+    clearTimeout(heightTickTimerRef.current);
+    heightTickTimerRef.current = setTimeout(() => setIdeaHeightTick(t => t + 1), 50);
+  }, []);
+
+  // Compute row Y offset using measured heights (falls back to estimate)
+  const getIdeaRowY = useCallback((row: number, groupY: number) => {
+    let y = groupY;
+    for (let r = 0; r < row; r++) {
+      const start = r * 4;
+      const rowHeights = ideaCardHeightsRef.current.slice(start, start + 4).filter(h => h > 0);
+      const maxH = rowHeights.length > 0 ? Math.max(...rowHeights) : IDEA_CARD_ESTIMATED_HEIGHT;
+      y += maxH + IDEA_CARD_ROW_GAP;
+    }
+    return y;
+  }, []);
+
+  // Pre-compute counts for dependency arrays
+  const personaCount = (personaData || streamingPersonas)?.length ?? 0;
+  const journeyMapCount = (journeyMapData || streamingJourneyMaps)?.length ?? 0;
+  const ideaCount = (ideaData || streamingIdeas)?.length ?? 0;
+
   // Initialize persona positions from group origin when persona count changes
   useEffect(() => {
-    const count = (personaData || streamingPersonas)?.length ?? 0;
-    if (count === 0) return;
+    if (personaCount === 0) return;
     const g = getGroupOrigin("personas");
     if (!g) return;
 
     setPersonaPositions((prev) => {
-      if (prev.length === count) return prev;
-      return Array.from({ length: count }, (_, i) =>
+      if (prev.length === personaCount) return prev;
+      return Array.from({ length: personaCount }, (_, i) =>
         prev[i] ?? { x: g.x + i * (PERSONA_CARD_WIDTH + 20), y: g.y }
       );
     });
-  }, [(personaData || streamingPersonas)?.length, getGroupOrigin]);
+  }, [personaCount, getGroupOrigin]);
 
   // Initialize journey map positions from group origin when count changes
   useEffect(() => {
-    const count = (journeyMapData || streamingJourneyMaps)?.length ?? 0;
-    if (count === 0) return;
+    if (journeyMapCount === 0) return;
     const g = getGroupOrigin("journey-maps");
     if (!g) return;
 
     setJourneyMapPositions((prev) => {
-      if (prev.length === count) return prev;
-      return Array.from({ length: count }, (_, i) =>
+      if (prev.length === journeyMapCount) return prev;
+      return Array.from({ length: journeyMapCount }, (_, i) =>
         prev[i] ?? { x: g.x, y: g.y + i * (JOURNEY_CARD_ESTIMATED_HEIGHT + JOURNEY_CARD_GAP) }
       );
     });
-  }, [(journeyMapData || streamingJourneyMaps)?.length, getGroupOrigin]);
+  }, [journeyMapCount, getGroupOrigin]);
 
   // Initialize idea positions from group origin when count changes (2x4 grid layout)
   useEffect(() => {
-    const count = (ideaData || streamingIdeas)?.length ?? 0;
-    if (count === 0) return;
+    if (ideaCount === 0) return;
     const g = getGroupOrigin("ideas");
     if (!g) return;
 
     setIdeaPositions((prev) => {
-      if (prev.length === count) return prev;
-      return Array.from({ length: count }, (_, i) =>
+      if (prev.length === ideaCount) return prev;
+      ideaDraggedRef.current.clear();
+      return Array.from({ length: ideaCount }, (_, i) =>
         prev[i] ?? {
           x: g.x + (i % 4) * IDEA_CARD_COL_WIDTH,
-          y: g.y + Math.floor(i / 4) * (IDEA_CARD_ESTIMATED_HEIGHT + IDEA_CARD_ROW_GAP),
+          y: getIdeaRowY(Math.floor(i / 4), g.y),
         }
       );
     });
-  }, [(ideaData || streamingIdeas)?.length, getGroupOrigin]);
+  }, [ideaCount, getGroupOrigin, getIdeaRowY]);
 
-  // Initialize wireframe positions from group origin when count changes (3-column grid)
-  const WIREFRAME_HEADER_HEIGHT = 36;
-  const WIREFRAME_COL_GAP = 40;
+  // Correct row 2+ positions when measured heights differ from estimates
   useEffect(() => {
-    const count = activeWireframeData?.pages?.length ?? 0;
-    if (count === 0) return;
-    const g = getGroupOrigin("wireframes");
+    if (ideaHeightTick === 0) return;
+    const g = getGroupOrigin("ideas");
     if (!g) return;
 
-    setWireframePositions((prev) => {
+    setIdeaPositions(prev => {
+      if (prev.length <= 4) return prev; // Only 1 row, nothing to adjust
+      let changed = false;
+      const updated = prev.map((pos, i) => {
+        const row = Math.floor(i / 4);
+        if (row === 0) return pos; // Row 0 positions are always correct
+        if (ideaDraggedRef.current.has(i)) return pos; // User dragged this card
+        const targetY = getIdeaRowY(row, g.y);
+        if (Math.abs(pos.y - targetY) > 2) {
+          changed = true;
+          return { ...pos, y: targetY };
+        }
+        return pos;
+      });
+      return changed ? updated : prev;
+    });
+  }, [ideaHeightTick, getGroupOrigin, getIdeaRowY]);
+
+  // Initialize user flow positions from group origin when count changes (vertical stack)
+  const USER_FLOW_CARD_GAP = 40;
+  useEffect(() => {
+    const count = activeUserFlows?.length ?? 0;
+    if (count === 0) return;
+    const g = getGroupOrigin("user-flows");
+    if (!g) return;
+
+    setUserFlowPositions((prev) => {
       if (prev.length === count) return prev;
       return Array.from({ length: count }, (_, i) =>
         prev[i] ?? {
-          x: g.x + (i % 3) * (WIREFRAME_CARD_WIDTH + WIREFRAME_COL_GAP),
-          y: g.y + Math.floor(i / 3) * (WIREFRAME_CARD_HEIGHT + WIREFRAME_HEADER_HEIGHT + WIREFRAME_COL_GAP),
+          x: g.x,
+          y: g.y + i * (USER_FLOW_CARD_HEIGHT + USER_FLOW_CARD_GAP),
         }
       );
     });
-  }, [activeWireframeData?.pages?.length, getGroupOrigin]);
+  }, [activeUserFlows?.length, getGroupOrigin]);
 
   // Initialize product brain from VFS on mount
   useEffect(() => {
@@ -588,7 +670,7 @@ export default function Home() {
       return newMap;
     });
     setCanvasDimensions({ width: layout.width, height: layout.height });
-  }, [flowManifest, flowLayoutOffset, strategyPhase]);
+  }, [flowManifest, flowLayoutOffset, strategyPhase, setNodePositions]);
 
   // Snapshot architecture positions when entering building phase so that
   // partial flow.json rewrites don't cause position recalculation.
@@ -611,8 +693,10 @@ export default function Home() {
     const pos = nodePositions.get(centerOnPageId);
     if (!pos) return;
 
+    // Account for FlowFrame header height (36px) to center the full frame
+    const FRAME_HEADER_HEIGHT = 36;
     const targetViewport = calculateCenteredViewport(
-      { x: pos.x, y: pos.y, width: pos.width, height: pos.height },
+      { x: pos.x, y: pos.y, width: pos.width, height: pos.height + FRAME_HEADER_HEIGHT },
       containerDimensions.width,
       containerDimensions.height
     );
@@ -650,7 +734,8 @@ export default function Home() {
         height: Math.max(dims.height, pos.y + pos.height + 100),
       };
     });
-  }, []);
+
+  }, [setNodePositions]);
 
   // --- Node resize handler ---
   const handleNodeResize = useCallback((nodeId: string, width: number, height: number) => {
@@ -674,7 +759,8 @@ export default function Home() {
         height: Math.max(dims.height, pos.y + pos.height + 100),
       };
     });
-  }, []);
+
+  }, [setNodePositions]);
 
   // --- Frame activation handler ---
   const handleFrameActivate = useCallback((frameId: string) => {
@@ -971,34 +1057,120 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Mount only
 
+  // --- Compute which section to focus the viewport on during AI strategy phases ---
+  const focusSection = useMemo((): GroupId | null => {
+    // problem-overview: focus on whichever section is currently streaming/just appeared
+    if (strategyPhase === "problem-overview") {
+      if (streamingJourneyMaps) return "journey-maps";
+      if (journeyMapData) return "journey-maps";
+      if (streamingPersonas) return "personas";
+      if (personaData) return "personas";
+      if (streamingOverview) return "product-overview";
+      if (manifestoData) return "product-overview";
+      return null;
+    }
+    // ideation: focus on ideas
+    if (strategyPhase === "ideation") return "ideas";
+    // solution-design: features → architecture → user-flows
+    if (strategyPhase === "solution-design") {
+      if (streamingUserFlows) return "user-flows";
+      if (userFlowsData) return "user-flows";
+      if (flowData && !userFlowsData && !streamingUserFlows) return "architecture";
+      if (streamingKeyFeatures) return "key-features";
+      if (activeKeyFeatures && !flowData) return "key-features";
+      return null;
+    }
+    return null;
+  }, [strategyPhase, streamingOverview, manifestoData, streamingPersonas, personaData,
+      streamingJourneyMaps, journeyMapData, streamingKeyFeatures, activeKeyFeatures,
+      flowData, streamingUserFlows, userFlowsData]);
+
   // --- Unified viewport animation: fit all visible groups + floating chat ---
-  const prevVisibleGroupsRef = useRef<string>("");
+  const prevLayoutKeyRef = useRef<string>("");
+  const cancelViewportAnimRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     const visibleIds = Array.from(groupPositions.keys()).sort().join(",");
-    if (visibleIds === prevVisibleGroupsRef.current || visibleIds === "") return;
-    prevVisibleGroupsRef.current = visibleIds;
+    if (visibleIds === "") return;
 
     // Build world-space rects from group positions + computed dimensions
-    const rects: { x: number; y: number; width: number; height: number }[] = [];
+    const allRects: { x: number; y: number; width: number; height: number }[] = [];
     for (const gr of groupRects) {
       const pos = groupPositions.get(gr.id);
       if (pos) {
-        rects.push({ x: pos.x, y: pos.y, width: gr.width, height: gr.height });
+        allRects.push({ x: pos.x, y: pos.y, width: gr.width, height: gr.height });
       }
     }
-    if (rects.length === 0) return;
+    if (allRects.length === 0) return;
 
-    const screenW = window.innerWidth;
-    const screenH = window.innerHeight;
+    // Focus viewport on the active section during AI strategy phases
+    let focusRects = allRects;
+    if (focusSection && focusSection !== "ideas") {
+      // For group-level sections (product-overview, key-features, architecture)
+      const g = groupPositions.get(focusSection);
+      const r = groupRects.find((gr) => gr.id === focusSection);
+      if (g && r) {
+        focusRects = [{ x: g.x, y: g.y, width: r.width, height: r.height }];
+      }
+
+      // For per-card sections, override with individual card positions
+      if (focusSection === "personas" && personaPositions.length > 0) {
+        focusRects = personaPositions.map((pos) => ({
+          x: pos.x, y: pos.y, width: PERSONA_CARD_WIDTH, height: 420,
+        }));
+      } else if (focusSection === "journey-maps" && journeyMapPositions.length > 0) {
+        focusRects = journeyMapPositions.map((pos) => ({
+          x: pos.x, y: pos.y, width: 900, height: JOURNEY_CARD_ESTIMATED_HEIGHT,
+        }));
+      } else if (focusSection === "user-flows" && userFlowPositions.length > 0) {
+        focusRects = userFlowPositions.map((pos) => ({
+          x: pos.x, y: pos.y,
+          width: USER_FLOW_CARD_WIDTH,
+          height: USER_FLOW_CARD_HEIGHT,
+        }));
+      } else if (focusSection === "key-features" && keyFeaturesPosition) {
+        const kfr = groupRects.find((gr) => gr.id === "key-features");
+        if (kfr) focusRects = [{ x: keyFeaturesPosition.x, y: keyFeaturesPosition.y, width: kfr.width, height: kfr.height }];
+      }
+    } else if (focusSection === "ideas" && ideaPositions.length > 0) {
+      // Existing ideation behavior (unchanged)
+      focusRects = ideaPositions.map((pos) => ({
+        x: pos.x,
+        y: pos.y,
+        width: IDEA_CARD_COL_WIDTH - 20,
+        height: IDEA_CARD_ESTIMATED_HEIGHT,
+      }));
+    }
+
+    // Compute bounding box for change detection
+    const bboxW = Math.max(...focusRects.map((r) => r.x + r.width)) - Math.min(...focusRects.map((r) => r.x));
+    const bboxH = Math.max(...focusRects.map((r) => r.y + r.height)) - Math.min(...focusRects.map((r) => r.y));
+
+    // State key includes visible groups, chat mode, container size, phase, focus section,
+    // item count in focused section, and content bounding box (rounded to avoid micro-jitter).
+    const focusCount = focusSection === "personas" ? personaPositions.length
+      : focusSection === "journey-maps" ? journeyMapPositions.length
+      : focusSection === "user-flows" ? userFlowPositions.length
+      : focusSection === "ideas" ? ideaPositions.length
+      : 0;
+    const layoutKey = `${visibleIds}:${chatMode}:${strategyPhase}:${focusSection ?? "all"}:${focusCount}:${Math.round(containerDimensions.width)}:${Math.round(bboxW / 50)}x${Math.round(bboxH / 50)}`;
+    if (layoutKey === prevLayoutKeyRef.current) return;
+    prevLayoutKeyRef.current = layoutKey;
+
+    // Use actual canvas container dimensions (accounts for right panel, nav bar)
+    const screenW = containerDimensions.width;
+    const screenH = containerDimensions.height;
     const chatWidth = 630;
     const chatHeight = 720;
     const gap = 20;
 
+    // Cancel any in-progress viewport animation
+    cancelViewportAnimRef.current?.();
+
     if (chatMode === "floating") {
-      const worldLeft = Math.min(...rects.map((r) => r.x));
-      const worldRight = Math.max(...rects.map((r) => r.x + r.width));
-      const worldTop = Math.min(...rects.map((r) => r.y));
-      const worldBottom = Math.max(...rects.map((r) => r.y + r.height));
+      const worldLeft = Math.min(...focusRects.map((r) => r.x));
+      const worldRight = Math.max(...focusRects.map((r) => r.x + r.width));
+      const worldTop = Math.min(...focusRects.map((r) => r.y));
+      const worldBottom = Math.max(...focusRects.map((r) => r.y + r.height));
       const totalWorldWidth = worldRight - worldLeft;
       const totalWorldHeight = worldBottom - worldTop;
       const combinedWidth = totalWorldWidth + gap + chatWidth;
@@ -1012,7 +1184,7 @@ export default function Home() {
         y: (screenH - totalWorldHeight * scale) / 2 - worldTop * scale,
         scale,
       };
-      animateViewport(viewportRef.current, targetViewport, setViewport, { duration: 400 });
+      cancelViewportAnimRef.current = animateViewport(viewportRef.current, targetViewport, setViewport, { duration: 400 });
 
       const chatScreenX = (screenW - combinedWidth * scale) / 2 + totalWorldWidth * scale + gap;
       const chatScreenY = (screenH - chatHeight) / 2;
@@ -1022,21 +1194,21 @@ export default function Home() {
       const timer = setTimeout(() => setFloatingAnimate(false), 500);
       return () => clearTimeout(timer);
     } else {
-      const target = calculateFitAllViewport(rects, screenW, screenH);
-      animateViewport(viewportRef.current, target, setViewport, { duration: 400 });
+      const target = calculateFitAllViewport(focusRects, screenW, screenH);
+      cancelViewportAnimRef.current = animateViewport(viewportRef.current, target, setViewport, { duration: 400 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupPositions, groupRects, chatMode]);
+  }, [groupPositions, groupRects, chatMode, containerDimensions, strategyPhase,
+      focusSection, ideaPositions, personaPositions, journeyMapPositions,
+      keyFeaturesPosition, userFlowPositions]);
 
   const handlePhaseAction = useCallback((action: "approve-problem-overview" | "approve-ideation" | "approve-solution-design") => {
     if (action === "approve-problem-overview") {
       useStrategyStore.getState().setPhase("ideation");
-      // Chat stays floating during ideation
+      // Dock the chat panel to the sidebar before ideation begins
+      setChatMode("docked");
     } else if (action === "approve-ideation") {
       useStrategyStore.getState().setPhase("solution-design");
-
-      // Dock the chat panel to the sidebar for solution-design phase
-      setChatMode("docked");
     } else if (action === "approve-solution-design") {
       // Write /flow.json from the approved flow data
       const currentFlowData = useStrategyStore.getState().flowData;
@@ -1064,7 +1236,7 @@ export default function Home() {
         writeFile("/flow.json", JSON.stringify(flowJson, null, 2));
       }
 
-      // Compute flow layout offset so FlowFrames appear below strategy content (including wireframes)
+      // Compute flow layout offset so FlowFrames appear below strategy content (including user flows)
       const strategyBottomForOffset = Math.max(
         ...Array.from(groupPositions.entries()).map(([id, pos]) => {
           const rect = groupRects.find((r) => r.id === id);
@@ -1076,35 +1248,47 @@ export default function Home() {
       const flowYOffset = strategyBottomForOffset + 120;
       setFlowLayoutOffset({ x: overviewPosForOffset.x - 50, y: flowYOffset - 50 });
 
+      // Clear stale node positions so ALL nodes (including "home" from the
+      // initial VFS template) get fresh positions with the new flowLayoutOffset.
+      setNodePositions(new Map());
+
       // Transition to building phase
       useStrategyStore.getState().setPhase("building");
 
-      // Snapshot current node positions as architecture reference
-      // (positions already include flowLayoutOffset from approve-ideation)
-      architecturePositionsRef.current = new Map(nodePositionsRef.current);
+      // Architecture snapshot is empty now (we just cleared nodePositions);
+      // the flow layout useEffect will repopulate with offset-adjusted positions,
+      // and the snapshot effect (line ~603) will capture them via requestAnimationFrame.
+      architecturePositionsRef.current = null;
 
-      // Animate viewport to show strategy content + first FlowFrame area
-      const overviewPos = groupPositions.get("product-overview") ?? STRATEGY_ORIGIN;
-      const strategyBottom = Math.max(
-        ...Array.from(groupPositions.entries()).map(([id, pos]) => {
-          const rect = groupRects.find((r) => r.id === id);
-          return pos.y + (rect?.height ?? 0);
-        }),
-        STRATEGY_ORIGIN.y + 500,
-      );
-      requestAnimationFrame(() => {
-        const firstNodePos = nodePositionsRef.current.values().next().value;
-        const flowFrameY = firstNodePos?.y ?? (strategyBottom + 120);
-        const flowFrameX = firstNodePos?.x ?? (overviewPos.x - 50);
-        const rects = [
-          { x: overviewPos.x, y: overviewPos.y, width: 600, height: strategyBottom - overviewPos.y },
-          { x: flowFrameX, y: flowFrameY, width: DEFAULT_FRAME_WIDTH, height: DEFAULT_FRAME_HEIGHT },
-        ];
-        const target = calculateFitAllViewport(rects, containerDimensions.width, containerDimensions.height);
-        animateViewport(viewportRef.current, target, setViewport, { duration: 500 });
-      });
+      // Animate viewport to center on all FlowFrames (not strategy content).
+      // Use setTimeout to let the flow layout useEffect populate nodePositionsRef
+      // before we read them. The 36px accounts for the FlowFrame header.
+      const FRAME_HEADER_HEIGHT = 36;
+      setTimeout(() => {
+        const positions = Array.from(nodePositionsRef.current.values());
+        if (positions.length > 0) {
+          const rects = positions.map((pos) => ({
+            x: pos.x,
+            y: pos.y,
+            width: pos.width,
+            height: pos.height + FRAME_HEADER_HEIGHT,
+          }));
+          const target = calculateFitAllViewport(rects, containerDimensions.width, containerDimensions.height);
+          animateViewport(viewportRef.current, target, setViewport, { duration: 500 });
+        } else {
+          // Fallback: use computed offset as estimated position for a single frame
+          const fallbackRect = {
+            x: overviewPosForOffset.x - 50,
+            y: flowYOffset - 50,
+            width: DEFAULT_FRAME_WIDTH,
+            height: DEFAULT_FRAME_HEIGHT + FRAME_HEADER_HEIGHT,
+          };
+          const target = calculateFitAllViewport([fallbackRect], containerDimensions.width, containerDimensions.height);
+          animateViewport(viewportRef.current, target, setViewport, { duration: 500 });
+        }
+      }, 50);
     }
-  }, [writeFile, setViewport, containerDimensions, groupPositions, groupRects]);
+  }, [writeFile, setViewport, containerDimensions, groupPositions, groupRects, setNodePositions]);
 
   // Handle "Approve & Build Next Page" — animate viewport to the next page's FlowFrame
   const handleApproveAndBuildNext = useCallback((nextPageId: string) => {
@@ -1200,6 +1384,30 @@ export default function Home() {
               >
                 <RefreshCw className="w-4 h-4" />
               </button>
+              {/* Global annotations toggle — only when brain data has connections */}
+              {brainData && brainData.pages.some((p) => p.connections.length > 0) && (
+                <button
+                  onClick={() => {
+                    const pagesWithConnections = brainData.pages
+                      .filter((p) => p.connections.length > 0)
+                      .map((p) => p.pageId);
+                    // Toggle: if any are active, close all; otherwise open all
+                    if (annotationActiveFrames.size > 0) {
+                      closeAllAnnotations();
+                    } else {
+                      openAllAnnotations(pagesWithConnections);
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                    annotationActiveFrames.size > 0
+                      ? "text-amber-700 bg-amber-50 border border-amber-300 hover:bg-amber-100"
+                      : "text-neutral-600 hover:text-neutral-900 border border-neutral-300 hover:border-neutral-400"
+                  }`}
+                  title={annotationActiveFrames.size > 0 ? "Hide all annotations" : "Show all annotations"}
+                >
+                  <MessageSquareText className="w-4 h-4" />
+                </button>
+              )}
               <button
                 onClick={handlePrototypeToggle}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
@@ -1254,12 +1462,13 @@ export default function Home() {
             {/* Strategy artifacts — placed directly on canvas, left to right */}
 
             {/* Insights Card — first group, left of manifesto */}
-            {(insightsData || streamingInsights) && (() => {
+            {(() => {
               const g = getGroupOrigin("insights");
               if (!g) return null;
+              const data = insightsData || streamingInsights || { insights: [], documents: [] };
               return (
                 <InsightsCard
-                  data={insightsData || streamingInsights!}
+                  data={data}
                   x={g.x}
                   y={g.y}
                   onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("insights", { x: nx, y: ny }))}
@@ -1277,8 +1486,19 @@ export default function Home() {
                   manifestoData={manifestoData || streamingOverview!}
                   x={g.x}
                   y={g.y}
-                  onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("product-overview", { x: nx, y: ny }))}
+                  onMove={(nx, ny) => {
+                    setGroupPositions((prev) => new Map(prev).set("product-overview", { x: nx, y: ny }));
+                  }}
                   jtbdCoverage={coverageSummary?.jtbdCoverage}
+                  coverageSummary={coverageSummary}
+                  onAddressGaps={() => {
+                    if (!coverageSummary || coverageSummary.gaps.length === 0) return;
+                    const unaddressedJtbds = coverageSummary.jtbdCoverage
+                      .filter((j) => !j.addressed)
+                      .map((j) => ({ index: j.index, text: j.text }));
+                    useChatContextStore.getState().setPendingAddressGaps({ unaddressedJtbds });
+                    setRightPanelTab("chat");
+                  }}
                 />
               );
             })()}
@@ -1344,7 +1564,7 @@ export default function Home() {
                   key={idea.id ?? index}
                   idea={idea}
                   x={pos?.x ?? g.x + (index % 4) * IDEA_CARD_COL_WIDTH}
-                  y={pos?.y ?? g.y + Math.floor(index / 4) * (IDEA_CARD_ESTIMATED_HEIGHT + IDEA_CARD_ROW_GAP)}
+                  y={pos?.y ?? getIdeaRowY(Math.floor(index / 4), g.y)}
                   index={index}
                   isSelected={idea.id === selectedIdeaId}
                   onClick={() => {
@@ -1354,14 +1574,31 @@ export default function Home() {
                       );
                     }
                   }}
-                  onMove={(nx, ny) => setIdeaPositions((prev) => {
-                    const updated = [...prev];
-                    updated[index] = { x: nx, y: ny };
-                    return updated;
-                  })}
+                  onMove={(nx, ny) => {
+                    ideaDraggedRef.current.add(index);
+                    setIdeaPositions((prev) => {
+                      const updated = [...prev];
+                      updated[index] = { x: nx, y: ny };
+                      return updated;
+                    });
+                  }}
+                  onHeightMeasured={(h) => handleIdeaHeightMeasured(index, h)}
                 />
               );
             })}
+
+            {activeKeyFeatures && (() => {
+              const g = getGroupOrigin("key-features");
+              if (!g) return null;
+              return (
+                <KeyFeaturesCard
+                  data={activeKeyFeatures}
+                  x={keyFeaturesPosition?.x ?? g.x}
+                  y={keyFeaturesPosition?.y ?? g.y}
+                  onMove={(nx, ny) => setKeyFeaturesPosition({ x: nx, y: ny })}
+                />
+              );
+            })()}
 
             {flowData && (() => {
               const g = getGroupOrigin("architecture");
@@ -1375,18 +1612,20 @@ export default function Home() {
               );
             })()}
 
-            {/* Wireframe Cards — visible during solution-design phase */}
-            {activeWireframeData && activeWireframeData.pages.map((page, index) => {
-              const g = getGroupOrigin("wireframes");
+            {/* User Flow Cards — visible during solution-design phase */}
+            {activeUserFlows && activeUserFlows.map((flow, index) => {
+              const g = getGroupOrigin("user-flows");
               if (!g) return null;
-              const pos = wireframePositions[index];
+              const pos = userFlowPositions[index];
               return (
-                <WireframeCard
-                  key={page.id ?? index}
-                  page={page}
-                  x={pos?.x ?? g.x + (index % 3) * (WIREFRAME_CARD_WIDTH + WIREFRAME_COL_GAP)}
-                  y={pos?.y ?? g.y + Math.floor(index / 3) * (WIREFRAME_CARD_HEIGHT + WIREFRAME_HEADER_HEIGHT + WIREFRAME_COL_GAP)}
-                  onMove={(nx, ny) => setWireframePositions((prev) => {
+                <UserFlowCard
+                  key={flow.id ?? `flow-${index}`}
+                  flow={flow}
+                  flowData={flowData}
+                  personas={personaData}
+                  x={pos?.x ?? g.x}
+                  y={pos?.y ?? g.y + index * (USER_FLOW_CARD_HEIGHT + USER_FLOW_CARD_GAP)}
+                  onMove={(nx, ny) => setUserFlowPositions((prev) => {
                     const updated = [...prev];
                     updated[index] = { x: nx, y: ny };
                     return updated;
@@ -1394,26 +1633,6 @@ export default function Home() {
                 />
               );
             })}
-
-            {/* Coverage Card — visible after building phase when brain data exists */}
-            {coverageSummary && (strategyPhase === "building" || strategyPhase === "complete") && (() => {
-              // Position to the right of the manifesto card
-              const manifestoPos = getGroupOrigin("product-overview");
-              const defaultX = (manifestoPos?.x ?? STRATEGY_ORIGIN.x) + 640;
-              const defaultY = manifestoPos?.y ?? STRATEGY_ORIGIN.y;
-              const pos = coverageCardPos ?? { x: defaultX, y: defaultY };
-              return (
-                <CoverageCard
-                  summary={coverageSummary}
-                  x={pos.x}
-                  y={pos.y}
-                  onMove={(nx, ny) => setCoverageCardPos({ x: nx, y: ny })}
-                  onAddressGaps={() => {
-                    setRightPanelTab("chat");
-                  }}
-                />
-              );
-            })()}
 
             {/* FlowConnections — visible when not expanded */}
             {!isEarlyStrategyPhase && connectionOpacity > 0 && (
@@ -1441,6 +1660,7 @@ export default function Home() {
                 : basePosition;
 
               const framePreviewMode = framePreviewModes.get(page.id) ?? tokenState.previewMode;
+              const pageDec = brainData?.pages.find((p) => p.pageId === page.id);
 
               return (
                 <FlowFrame
@@ -1465,6 +1685,31 @@ export default function Home() {
                   isExpanded={isThisFrameExpanded || undefined}
                   forceStreamingOverlay={isThisFrameExpanded || undefined}
                   refreshSignal={(materializeRefreshMap.get(page.id) ?? 0) + globalRefreshCounter}
+                  annotationsAvailable={!!pageDec?.connections.length}
+                  annotationsOpen={annotationActiveFrames.has(page.id)}
+                  onAnnotationsOpenChange={() => toggleAnnotationFrame(page.id)}
+                />
+              );
+            })}
+
+            {/* Strategy Annotations — per-frame annotation cards */}
+            {!isEarlyStrategyPhase && !isFrameExpanded && manifestoData && personaData && visiblePages.map((page) => {
+              if (!annotationActiveFrames.has(page.id)) return null;
+              const pos = nodePositions.get(page.id);
+              if (!pos) return null;
+              const pageDec = brainData?.pages.find((p) => p.pageId === page.id);
+              if (!pageDec || pageDec.connections.length === 0) return null;
+              return (
+                <StrategyAnnotations
+                  key={`annot-${page.id}`}
+                  pageId={page.id}
+                  position={pos}
+                  connections={pageDec.connections}
+                  bounds={annotationBounds.get(page.id) ?? new Map()}
+                  manifestoData={manifestoData}
+                  personaData={personaData}
+                  insightsData={insightsData}
+                  isFrameActive={isFrameActive(page.id)}
                 />
               );
             })}

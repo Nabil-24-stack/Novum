@@ -16,6 +16,8 @@ interface SandpackWrapperProps {
   inspectionMode?: boolean;
   /** Whether flow mode is active (navigation interception) */
   flowModeActive?: boolean;
+  /** Identifies this SandpackWrapper instance (used by FlowFrame) */
+  pageId?: string;
 }
 
 function parseDependencies(files: Record<string, string>): Record<string, string> {

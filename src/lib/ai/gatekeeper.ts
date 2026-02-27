@@ -17,6 +17,7 @@ import { parse } from "@babel/parser";
 import _traverse from "@babel/traverse";
 import type { NodePath } from "@babel/traverse";
 import type * as t from "@babel/types";
+import { fixImports, type ImportFix } from "./import-fixer";
 import { promoteComponents, type ComponentPromotion } from "./component-promoter";
 import { enforceColors, type ColorViolation } from "./color-mapper";
 import { enforceSpacing, type SpacingViolation } from "./spacing-mapper";
@@ -42,6 +43,7 @@ export interface GatekeeperResult {
 
 export interface GatekeeperReport {
   hadChanges: boolean;
+  importFixes: ImportFix[];
   colorViolations: ColorViolation[];
   spacingViolations: SpacingViolation[];
   layoutViolations: LayoutViolation[];
@@ -186,6 +188,7 @@ export function runGatekeeper(
 ): GatekeeperResult {
   const emptyReport: GatekeeperReport = {
     hadChanges: false,
+    importFixes: [],
     colorViolations: [],
     spacingViolations: [],
     layoutViolations: [],
@@ -201,12 +204,22 @@ export function runGatekeeper(
 
   const tokens = loadTokens(files);
   let currentCode = code;
+  let allImportFixes: ImportFix[] = [];
   const allColorViolations: ColorViolation[] = [];
   const allSpacingViolations: SpacingViolation[] = [];
   const allLayoutViolations: LayoutViolation[] = [];
   const allTypographyViolations: TypographyViolation[] = [];
   let allPromotions: ComponentPromotion[] = [];
   let allLayoutDeclarationAdditions: LayoutDeclarationAddition[] = [];
+
+  // ── Phase -1: Import Fixing ──
+  try {
+    const { code: importFixed, fixes } = fixImports(currentCode, filePath);
+    currentCode = importFixed;
+    allImportFixes = fixes;
+  } catch (err) {
+    console.warn("[Gatekeeper] Import fixing failed, skipping:", err);
+  }
 
   // ── Phase 0: Layout Declaration Enforcement (AST-based) ──
   try {
@@ -293,6 +306,7 @@ export function runGatekeeper(
   }
 
   const hadChanges =
+    allImportFixes.length > 0 ||
     allColorViolations.length > 0 ||
     allSpacingViolations.length > 0 ||
     allLayoutViolations.length > 0 ||
@@ -304,6 +318,7 @@ export function runGatekeeper(
     code: currentCode,
     report: {
       hadChanges,
+      importFixes: allImportFixes,
       colorViolations: allColorViolations,
       spacingViolations: allSpacingViolations,
       layoutViolations: allLayoutViolations,

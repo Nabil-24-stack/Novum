@@ -7,6 +7,7 @@ interface BuildProgressCardsProps {
   pageBuilds: Record<string, PageBuildState>;
   pageNames: Record<string, { name: string; route: string }>;
   onRetry: (pageId: string) => void;
+  onRetryVerification: (pageId: string) => void;
   onRetryAllFailed: () => void;
   onReviewAll: () => void;
 }
@@ -15,6 +16,7 @@ export function BuildProgressCards({
   pageBuilds,
   pageNames,
   onRetry,
+  onRetryVerification,
   onRetryAllFailed,
   onReviewAll,
 }: BuildProgressCardsProps) {
@@ -108,6 +110,16 @@ export function BuildProgressCards({
                   {build.error || "Build failed"}
                 </span>
               )}
+              {/* Verification log */}
+              {build.verificationLog.length > 0 && (
+                <div className="mt-1 space-y-0.5">
+                  {build.verificationLog.map((entry, i) => (
+                    <span key={i} className="text-xs text-neutral-500 block">
+                      {entry}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Retry button for failed pages */}
@@ -115,6 +127,16 @@ export function BuildProgressCards({
               <button
                 onClick={() => onRetry(pageId)}
                 className="shrink-0 inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-700 bg-red-100 rounded hover:bg-red-200 transition-colors"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Retry
+              </button>
+            )}
+            {/* Retry verification button */}
+            {build.status === "completed" && build.verificationStatus === "failed" && (
+              <button
+                onClick={() => onRetryVerification(pageId)}
+                className="shrink-0 inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-700 bg-amber-100 rounded hover:bg-amber-200 transition-colors"
               >
                 <RotateCcw className="w-3 h-3" />
                 Retry

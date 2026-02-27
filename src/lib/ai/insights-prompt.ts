@@ -19,21 +19,25 @@ export function buildInsightsContext(documents: UploadedDocument[]): string {
 }
 
 /**
- * Prompt fragment appended to problem-overview system prompt when documents are uploaded.
- * Instructs the AI to output a `type="insights"` block FIRST.
+ * Prompt fragment appended to problem-overview system prompt.
+ * Instructs the AI to ALWAYS output a `type="insights"` block FIRST.
  */
 export const INSIGHTS_PROMPT_FRAGMENT = `
 
-## REMINDER: DOCUMENT INSIGHTS ARE MANDATORY
+## INSIGHTS REQUIREMENT (MANDATORY — ALWAYS)
 
-Research documents have been uploaded. When you generate your final artifacts, you MUST follow the output order defined in the OUTPUT FORMAT section above:
+You MUST output a \`type="insights"\` block as your FIRST artifact when generating final artifacts. This is mandatory regardless of whether research documents are present.
 
-1. \`type="insights"\` block FIRST (see "### 0. Insights Block" above for the exact format)
-2. Persona rationale text
-3. \`type="manifesto"\` block
-4. \`type="personas"\` block
-5. \`type="journey-maps"\` block
+**When research documents ARE present:**
+- Extract 4-8 insights from documents AND the Q&A conversation
+- Document insights: set \`"source": "document"\` with a direct \`quote\` and \`sourceDocument\`
+- Conversation insights: set \`"source": "conversation"\`, omit quote/sourceDocument
 
-Do NOT skip the insights block. Do NOT output it during Q&A rounds — only in the generation response.
-Ground your personas and journey maps in the document evidence extracted in the insights block.
+**When NO documents are uploaded:**
+- Extract 4-6 insights synthesized from the Q&A conversation
+- Each insight captures a key understanding about the user's problem, audience, workflow, or domain
+- Set \`"source": "conversation"\` on all insights
+- The \`documents\` array must be empty: \`[]\`
+
+Output order: insights → persona rationale → manifesto → personas → journey-maps. Omitting the insights block is treated as an incomplete response.
 `;

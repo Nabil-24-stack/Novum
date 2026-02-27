@@ -123,6 +123,7 @@ export function useFlowNavigation({
       isFlowMode,
       manifest.pages,
       nodePositions,
+      viewportRef,
       onViewportChange,
       containerDimensions,
     ]

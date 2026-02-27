@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useState, type PointerEvent } from "react";
 import { FileText, Check, Upload, Loader2 } from "lucide-react";
 import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
 import type { InsightsCardData, InsightData } from "@/hooks/useDocumentStore";
@@ -63,11 +63,9 @@ export function InsightsCard({ data, x, y, onMove, onUploadMore, isUploading }: 
             <FileText className="w-4 h-4 text-blue-600" />
           </div>
           <h2 className="text-2xl font-bold text-neutral-900">Key Insights</h2>
-          {hasDocs && (
-            <span className="ml-auto text-xs font-medium bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">
-              {documents.length} doc{documents.length !== 1 ? "s" : ""}
-            </span>
-          )}
+          <span className="ml-auto text-xs font-medium bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">
+            {documents.length} doc{documents.length !== 1 ? "s" : ""}
+          </span>
         </div>
 
         {/* Source Documents */}
@@ -103,10 +101,10 @@ export function InsightsCard({ data, x, y, onMove, onUploadMore, isUploading }: 
         )}
 
         {/* Streaming placeholder */}
-        {!hasInsights && hasDocs && (
+        {!hasInsights && (
           <div className="flex items-center gap-2 text-sm text-neutral-400 py-4">
             <Loader2 className="w-4 h-4 animate-spin" />
-            <span>Analyzing documents...</span>
+            <span>{hasDocs ? "Analyzing documents..." : "Gathering insights..."}</span>
           </div>
         )}
 
@@ -166,6 +164,9 @@ function InsightItem({ item, index }: { item: InsightData; index: number }) {
             </p>
           )}
         </div>
+      )}
+      {item.source === "conversation" && !item.quote && (
+        <p className="ml-8 text-xs text-neutral-400 italic">From conversation</p>
       )}
     </li>
   );
