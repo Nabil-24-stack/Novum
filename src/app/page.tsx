@@ -229,7 +229,13 @@ export default function Home() {
     const origins = calculateHorizontalLayout(configs, STRATEGY_ORIGIN);
     if (origins.length === 0) return;
 
-    setGroupRects(origins);
+    setGroupRects((prev) => {
+      // Only update if the layout actually changed
+      if (prev.length === origins.length && prev.every((r, i) => r.id === origins[i].id && r.x === origins[i].x && r.y === origins[i].y && r.width === origins[i].width && r.height === origins[i].height)) {
+        return prev;
+      }
+      return origins;
+    });
     setGroupPositions((prev) => {
       const next = new Map(prev);
       let changed = false;
@@ -470,15 +476,19 @@ export default function Home() {
   // Materializer hook for converting ghosts to actual code
   const { materializeNode } = useMaterializer({ files, writeFile });
 
-  // Canvas store for hierarchical ghost nodes
-  const canvasStore = useCanvasStore();
+  // Canvas store — use targeted selectors to avoid full-store subscription
+  const canvasPrimaryId = useCanvasStore((s) => s.selection.primaryId);
+  const canvasAddNode = useCanvasStore((s) => s.addNode);
+  const canvasSelectNode = useCanvasStore((s) => s.selectNode);
+  const canvasRemoveNode = useCanvasStore((s) => s.removeNode);
+  const canvasDeselectAll = useCanvasStore((s) => s.deselectAll);
 
   // Auto-switch to Design tab when canvas node is selected
   useEffect(() => {
-    if (canvasStore.selection.primaryId) {
+    if (canvasPrimaryId) {
       setRightPanelTab("design");
     }
-  }, [canvasStore.selection.primaryId]);
+  }, [canvasPrimaryId]);
 
   // Refs for test API to avoid stale closures
   const writerRef = useRef(writer);
@@ -547,11 +557,14 @@ export default function Home() {
   const canvasWrapperRef = useRef<HTMLDivElement>(null);
 
   // Coordinate canvas tool with inspection mode
+  // Use specific properties instead of the whole `inspection` object to prevent
+  // re-running this effect every render (useInspection returns a new object each time).
   useEffect(() => {
     if (canvasTool.activeTool !== "cursor" && inspection.inspectionMode) {
       inspection.setInspectionMode(false);
     }
-  }, [canvasTool.activeTool, inspection]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasTool.activeTool, inspection.inspectionMode, inspection.setInspectionMode]);
 
   // --- Container dimensions ResizeObserver ---
   useEffect(() => {
@@ -641,6 +654,7 @@ export default function Home() {
     const layout = calculateFlowLayout(flowManifest.pages, flowManifest.connections);
 
     setNodePositions((prev) => {
+      let changed = false;
       const newMap = new Map(prev);
       for (const node of layout.nodes) {
         if (!newMap.has(node.id)) {
@@ -655,6 +669,7 @@ export default function Home() {
               y: node.y + flowLayoutOffset.y,
             });
           }
+          changed = true;
         }
       }
       // Remove nodes that no longer exist in manifest — skip during building phase
@@ -664,10 +679,11 @@ export default function Home() {
         for (const id of newMap.keys()) {
           if (!layout.nodes.some((n) => n.id === id)) {
             newMap.delete(id);
+            changed = true;
           }
         }
       }
-      return newMap;
+      return changed ? newMap : prev;
     });
     setCanvasDimensions({ width: layout.width, height: layout.height });
   }, [flowManifest, flowLayoutOffset, strategyPhase, setNodePositions]);
@@ -842,10 +858,10 @@ export default function Home() {
       componentType,
     };
 
-    canvasStore.addNode(newNode);
-    canvasStore.selectNode(newNode.id);
+    canvasAddNode(newNode);
+    canvasSelectNode(newNode.id);
     canvasTool.setActiveTool("cursor");
-  }, [viewport, canvasStore, canvasTool]);
+  }, [viewport, canvasAddNode, canvasSelectNode, canvasTool]);
 
   // Unified materialization handler (works for both modes)
   const handleMaterialize = useCallback(
@@ -858,7 +874,7 @@ export default function Home() {
       const result = await materializeNode(node, nodes, activeFrameState ?? { x: 0, y: 0, width: DEFAULT_FRAME_WIDTH, height: DEFAULT_FRAME_HEIGHT }, iframeDropPoint, targetPageId);
 
       if (result.success) {
-        canvasStore.removeNode(node.id);
+        canvasRemoveNode(node.id);
         console.log("[Materializer] Node materialized successfully:", node.type, "→ page:", targetPageId);
 
         // Safety net: schedule a forced refresh on the target FlowFrame after 600ms
@@ -877,7 +893,7 @@ export default function Home() {
         console.error("[Materializer] Failed to materialize node:", result.error);
       }
     },
-    [materializeNode, activeFrameState, activePageId, canvasStore, inspection.inspectionMode]
+    [materializeNode, activeFrameState, activePageId, canvasRemoveNode, inspection.inspectionMode]
   );
 
   // Handle tool change - open component dialog immediately when component tool is selected
@@ -1456,7 +1472,7 @@ export default function Home() {
             activeTool={isEarlyStrategyPhase ? "cursor" : canvasTool.activeTool}
             onToolChange={isEarlyStrategyPhase ? undefined : handleToolChange}
             isDrawingActive={isEarlyStrategyPhase ? false : canvasTool.drawState.isDrawing}
-            onCanvasClick={() => canvasStore.deselectAll()}
+            onCanvasClick={canvasDeselectAll}
             hideChrome={isFrameExpanded}
           >
             {/* Strategy artifacts — placed directly on canvas, left to right */}

@@ -31,28 +31,37 @@ export function generateAppTsx(
     .filter((p) => p.route !== "/")
     .map(
       (p) =>
-        `    case "${p.route}":\n      return <${p.componentName} />;`
+        `    case "${p.route}":\n      page = <${p.componentName} />;\n      break;`
     )
     .join("\n");
 
   const defaultPage = pageComponents.find((p) => p.route === "/");
   const defaultReturn = defaultPage
-    ? `      return <${defaultPage.componentName} />;`
-    : `      return <div>No pages configured</div>;`;
+    ? `      page = <${defaultPage.componentName} />;`
+    : `      page = <div>No pages configured</div>;`;
 
   return `import * as React from "react";
 import { useRouter } from "./lib/router";
+import { ToastProvider, Toaster } from "./components/ui/toast";
 ${imports}
 import "./globals.css";
 
 export function App() {
   const { route } = useRouter();
 
+  let page: React.ReactNode;
   switch (route) {
 ${cases}
     default:
 ${defaultReturn}
   }
+
+  return (
+    <ToastProvider>
+      {page}
+      <Toaster />
+    </ToastProvider>
+  );
 }
 `;
 }

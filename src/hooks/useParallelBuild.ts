@@ -56,6 +56,23 @@ export function useParallelBuild({
   const evaluationTriggeredRef = useRef(false);
   const rebuildTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Core rebuild logic — generates and writes /App.tsx with only completed pages
+  const doRebuildAppTsx = useCallback(() => {
+    const completed = useStrategyStore.getState().completedPages;
+    const completedPages = allPagesRef.current.filter((p) =>
+      completed.includes(p.pageId)
+    );
+    if (completedPages.length === 0) return;
+    const appCode = generateAppTsx(
+      completedPages.map((p) => ({
+        id: p.pageId,
+        label: p.pageName,
+        route: p.pageRoute,
+      }))
+    );
+    writeFile("/App.tsx", appCode);
+  }, [writeFile]);
+
   // Rebuild /App.tsx with only completed pages so Sandpack never imports missing modules.
   // Debounced (500ms) so multiple page completions collapse into a single write,
   // preventing cascading re-syncs across all FlowFrame SandpackFileSyncs.
@@ -63,21 +80,19 @@ export function useParallelBuild({
     if (rebuildTimerRef.current) clearTimeout(rebuildTimerRef.current);
     rebuildTimerRef.current = setTimeout(() => {
       rebuildTimerRef.current = null;
-      const completed = useStrategyStore.getState().completedPages;
-      const completedPages = allPagesRef.current.filter((p) =>
-        completed.includes(p.pageId)
-      );
-      if (completedPages.length === 0) return;
-      const appCode = generateAppTsx(
-        completedPages.map((p) => ({
-          id: p.pageId,
-          label: p.pageName,
-          route: p.pageRoute,
-        }))
-      );
-      writeFile("/App.tsx", appCode);
+      doRebuildAppTsx();
     }, 500);
-  }, [writeFile]);
+  }, [doRebuildAppTsx]);
+
+  // Immediately execute any pending debounced rebuild — call before verification
+  // so App.tsx is guaranteed up-to-date when Sandpack settles.
+  const flushRebuildAppTsx = useCallback(() => {
+    if (rebuildTimerRef.current) {
+      clearTimeout(rebuildTimerRef.current);
+      rebuildTimerRef.current = null;
+      doRebuildAppTsx();
+    }
+  }, [doRebuildAppTsx]);
 
   // After ALL pages are built, run a single evaluation pass to generate annotations
   const evaluateAnnotations = useCallback(async () => {
@@ -324,6 +339,9 @@ export function useParallelBuild({
 
       // Check if all pages are done to trigger annotation evaluation
       checkAllPagesComplete();
+
+      // Flush any pending App.tsx rebuild so Sandpack has the latest routes
+      flushRebuildAppTsx();
 
       // Run screenshot verification loop for this page
       if (!signal.aborted) {

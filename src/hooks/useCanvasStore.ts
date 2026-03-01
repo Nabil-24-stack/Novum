@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { useShallow } from "zustand/shallow";
 import type { CanvasNode, LayoutConfig, NodeStyle, SelectionState } from "@/lib/canvas/types";
 import {
   getWorldPosition,
@@ -557,10 +558,12 @@ export function useNode(id: string): CanvasNode | undefined {
 }
 
 export function useRootNodes(): CanvasNode[] {
-  return useCanvasStore((state) =>
-    state.rootIds
-      .map((id) => state.nodes.get(id))
-      .filter((n): n is CanvasNode => n !== undefined)
+  return useCanvasStore(
+    useShallow((state) =>
+      state.rootIds
+        .map((id) => state.nodes.get(id))
+        .filter((n): n is CanvasNode => n !== undefined)
+    )
   );
 }
 

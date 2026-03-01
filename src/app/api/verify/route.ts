@@ -42,8 +42,9 @@ Keep fixes minimal — only fix the specific error.`;
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { files, modelId = "gemini-2.5-pro", errorText } = body as {
+    const { files, contextFiles, modelId = "gemini-2.5-pro", errorText } = body as {
       files: Record<string, string>;
+      contextFiles?: Record<string, string>;
       modelId?: ModelId;
       errorText?: string;
     };
@@ -52,10 +53,43 @@ export async function POST(req: Request) {
       return Response.json({ status: "pass" });
     }
 
-    // Build file context (only the files that were written)
+    // Build file context — written files are primary context
     const fileContext = Object.entries(files)
       .map(([path, content]) => `File: ${path}\n\`\`\`tsx\n${content}\n\`\`\``)
       .join("\n\n");
+
+    // Build additional context from the full VFS (structural files the AI might need)
+    let additionalContext = "";
+    if (contextFiles) {
+      const STRUCTURAL_PATTERNS = [
+        "/App.tsx",
+        "/index.tsx",
+        "/lib/router.tsx",
+        "/lib/utils.ts",
+        "/flow.json",
+        "/package.json",
+      ];
+      const extraFiles: [string, string][] = [];
+
+      for (const [path, content] of Object.entries(contextFiles)) {
+        // Skip files already in primary context
+        if (files[path]) continue;
+        // Include structural files, UI components, and page files
+        const isStructural = STRUCTURAL_PATTERNS.includes(path);
+        const isComponent = path.startsWith("/components/ui/");
+        const isPage = path.startsWith("/pages/");
+        if (isStructural || isComponent || isPage) {
+          extraFiles.push([path, content]);
+        }
+      }
+
+      // Cap at 15 extra files to avoid token bloat
+      const capped = extraFiles.slice(0, 15);
+      if (capped.length > 0) {
+        additionalContext = "\n\nAdditional project files (for context):\n" +
+          capped.map(([path, content]) => `File: ${path}\n\`\`\`tsx\n${content}\n\`\`\``).join("\n\n");
+      }
+    }
 
     const model = getModel(modelId);
 
@@ -65,7 +99,7 @@ export async function POST(req: Request) {
       messages: [
         {
           role: "user",
-          content: `The page shows this runtime error:\n\n"${errorText}"\n\nFiles that were just written:\n${fileContext}\n\nDiagnose the error and provide a fix. Respond with JSON only.`,
+          content: `The page shows this runtime error:\n\n"${errorText}"\n\nFiles that were just written:\n${fileContext}${additionalContext}\n\nDiagnose the error and provide a fix. Respond with JSON only.`,
         },
       ],
     });
@@ -100,13 +134,19 @@ export async function POST(req: Request) {
         }
       }
 
-      // Couldn't parse — fail-safe: treat as pass
+      // Couldn't parse — treat as fail so errors aren't hidden
       console.warn("[verify] Could not parse AI response as JSON:", text);
-      return Response.json({ status: "pass" });
+      return Response.json({
+        status: "fail",
+        issues: ["AI response could not be parsed — raw text returned"],
+        fixCode: text, // Pass raw text through; extractCodeBlocks will try to find code blocks
+      });
     }
   } catch (err) {
     console.error("[verify] Error:", err);
-    // Fail-safe: treat errors as pass
-    return Response.json({ status: "pass" });
+    return Response.json(
+      { status: "fail", issues: [`Server error: ${(err as Error).message || "unknown"}`] },
+      { status: 500 }
+    );
   }
 }

@@ -1985,6 +1985,17 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
         'Module not found',
         'Cannot find module',
         'does not provide an export',
+        'Too many re-renders',
+        'Invalid hook call',
+        'Objects are not valid as a React child',
+        'Minified React error',
+        'Rendered more hooks than during the previous render',
+        'Hooks can only be called inside',
+        'Cannot access',
+        'Maximum call stack size exceeded',
+        'is not iterable',
+        'Could not resolve',
+        'ModuleNotFoundError',
       ];
       var bodyText = (document.body.innerText || '').trim();
       var foundError = null;
@@ -2393,6 +2404,22 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
       document.head.appendChild(style);
     }
 
+    // Forward pinch-to-zoom (ctrl+wheel) to parent for canvas zoom
+    // Registered unconditionally — zoom must work regardless of inspection mode
+    function handleWheel(e) {
+      if (!e.ctrlKey) return; // Only intercept pinch-to-zoom, allow normal scrolling
+      e.preventDefault();     // Stop browser's native zoom
+      window.parent.postMessage({
+        type: 'novum:wheel-event',
+        deltaX: e.deltaX,
+        deltaY: e.deltaY,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        ctrlKey: e.ctrlKey,
+      }, '*');
+    }
+    document.addEventListener('wheel', handleWheel, { passive: false, capture: true });
+
     document.addEventListener('mousemove', handleMouseMove, true);
     document.addEventListener('click', handleClick, true);
     document.addEventListener('mouseleave', handleMouseLeave, true);
@@ -2405,6 +2432,7 @@ export function getInspectorScriptDataUrl(enabled: boolean): string {
 
     // Cleanup on unload
     window.addEventListener('unload', function() {
+      document.removeEventListener('wheel', handleWheel, true);
       document.removeEventListener('mousemove', handleMouseMove, true);
       document.removeEventListener('click', handleClick, true);
       document.removeEventListener('mouseleave', handleMouseLeave, true);

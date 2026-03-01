@@ -1428,13 +1428,17 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Hook to use toast
+// Hook to use toast — returns no-op fallback when used outside ToastProvider
+// so pages don't crash if the provider is missing.
+const noopToast: ToastContextValue = {
+  toasts: [],
+  toast: () => "",
+  dismiss: () => {},
+};
+
 export function useToast() {
   const context = React.useContext(ToastContext);
-  if (!context) {
-    throw new Error("useToast must be used within ToastProvider");
-  }
-  return context;
+  return context ?? noopToast;
 }
 
 // Individual Toast component

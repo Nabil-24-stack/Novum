@@ -7,9 +7,11 @@ import type { FlowManifest, FlowPage, FlowConnection } from "@/lib/flow/types";
  * Auto-generates sequential connections if none are defined
  */
 export function useFlowManifest(files: Record<string, string>): FlowManifest {
-  return useMemo(() => {
-    const flowJsonContent = files["/flow.json"];
+  // Depend only on the flow.json content string — not the entire files object.
+  // This prevents manifest recalculation when unrelated files change.
+  const flowJsonContent = files["/flow.json"];
 
+  return useMemo(() => {
     // If no flow.json exists, return fallback with single home page
     if (!flowJsonContent) {
       return createFallbackManifest();
@@ -42,7 +44,7 @@ export function useFlowManifest(files: Record<string, string>): FlowManifest {
       console.warn("[useFlowManifest] Failed to parse flow.json:", err);
       return createFallbackManifest();
     }
-  }, [files]);
+  }, [flowJsonContent]);
 }
 
 /**

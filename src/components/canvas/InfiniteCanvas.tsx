@@ -187,6 +187,62 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
     };
   }, [onViewportChange, isDrawingActive, hideChrome]);
 
+  // Listen for wheel events forwarded from Sandpack iframes via postMessage.
+  // Iframes capture wheel events (they don't bubble to parent document),
+  // so the inspector script forwards ctrl+wheel (pinch-to-zoom) here.
+  useEffect(() => {
+    const handleIframeWheel = (event: MessageEvent) => {
+      if (!event.data || event.data.type !== "novum:wheel-event") return;
+      if (isDrawingActive || hideChrome) return;
+
+      const container = containerRef.current;
+      if (!container) return;
+
+      // Find the iframe that sent this message
+      const iframes = container.querySelectorAll<HTMLIFrameElement>(
+        'iframe[title="Sandpack Preview"]'
+      );
+      let sourceIframe: HTMLIFrameElement | null = null;
+      for (const iframe of iframes) {
+        if (iframe.contentWindow === event.source) {
+          sourceIframe = iframe;
+          break;
+        }
+      }
+      if (!sourceIframe) return;
+
+      const { deltaX, deltaY, clientX, clientY, ctrlKey } = event.data;
+
+      // Convert iframe-local coordinates to container-local coordinates
+      const containerRect = container.getBoundingClientRect();
+      const iframeRect = sourceIframe.getBoundingClientRect();
+      const scaleX = iframeRect.width / sourceIframe.clientWidth;
+      const scaleY = iframeRect.height / sourceIframe.clientHeight;
+      const mouseX = iframeRect.left + clientX * scaleX - containerRect.left;
+      const mouseY = iframeRect.top + clientY * scaleY - containerRect.top;
+
+      if (ctrlKey) {
+        // Pinch-to-zoom with focal point preservation
+        onViewportChange((prev) => {
+          const pointXBefore = (mouseX - prev.x) / prev.scale;
+          const pointYBefore = (mouseY - prev.y) / prev.scale;
+          const delta = -deltaY * ZOOM_SENSITIVITY;
+          const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev.scale * (1 + delta)));
+          const pointXAfter = pointXBefore * newScale;
+          const pointYAfter = pointYBefore * newScale;
+          return {
+            x: mouseX - pointXAfter,
+            y: mouseY - pointYAfter,
+            scale: newScale,
+          };
+        });
+      }
+    };
+
+    window.addEventListener("message", handleIframeWheel);
+    return () => window.removeEventListener("message", handleIframeWheel);
+  }, [onViewportChange, isDrawingActive, hideChrome]);
+
   // Handle canvas background click to deselect
   const handleCanvasClick = (e: React.MouseEvent) => {
     // Only trigger if clicking directly on the canvas container (not on children)

@@ -175,6 +175,7 @@ export async function runVerificationLoop(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             files: writtenFiles,
+            contextFiles: allFiles,
             modelId,
             errorText: detectedError,
           }),
@@ -183,9 +184,13 @@ export async function runVerificationLoop(
         verifyResult = await response.json();
       } catch (err) {
         if ((err as Error).name === "AbortError") throw err;
-        console.warn("[verify] API call failed, treating as pass:", err);
-        cb.setPassed();
-        return { status: "passed", attempts: attempt, fixCount: totalFixes };
+        console.warn("[verify] API call failed:", err);
+        if (attempt === MAX_ATTEMPTS) {
+          cb.setFailed([`Verify API error: ${(err as Error).message || "unknown"}`]);
+          return { status: "failed", attempts: attempt, fixCount: totalFixes };
+        }
+        cb.addLog(`API call failed (attempt ${attempt}/${MAX_ATTEMPTS}), retrying...`);
+        continue;
       }
 
       // 5. Extract and apply fix
@@ -229,6 +234,7 @@ export async function runVerificationLoop(
 
         // Update the tracked files for next iteration
         writtenFiles[block.path] = finalContent;
+        allFiles[block.path] = finalContent;
         totalFixes++;
       }
 
@@ -246,9 +252,9 @@ export async function runVerificationLoop(
       cb.reset();
       return { status: "passed", attempts: 0, fixCount: 0 };
     }
-    // Unexpected error — fail-safe
+    // Unexpected error — mark as failed so the UI doesn't show a green checkmark
     console.error("[verify] Unexpected error:", err);
-    cb.reset();
-    return { status: "passed", attempts: 0, fixCount: 0 };
+    cb.setFailed([`Unexpected error: ${(err as Error).message || "unknown"}`]);
+    return { status: "failed", attempts: 0, fixCount: 0 };
   }
 }
