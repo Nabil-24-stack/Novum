@@ -1071,9 +1071,11 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
   // --- Stream partial overview data to the canvas in real-time ---
   useEffect(() => {
     if (!isLoading) {
-      // When streaming ends, clear streaming state (full parse in the extraction effect sets manifestoData)
-      if (useStrategyStore.getState().streamingOverview) {
-        useStrategyStore.getState().setStreamingOverview(null);
+      // Only clear streaming state if final data was successfully parsed.
+      // If the AI response was truncated, keep streaming data visible on canvas.
+      const store = useStrategyStore.getState();
+      if (store.streamingOverview && store.manifestoData) {
+        store.setStreamingOverview(null);
       }
       return;
     }
@@ -1101,8 +1103,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
   // --- Stream partial insights data to the canvas in real-time ---
   useEffect(() => {
     if (!isLoading) {
-      if (useDocumentStore.getState().streamingInsights) {
-        useDocumentStore.getState().setStreamingInsights(null);
+      const docStore = useDocumentStore.getState();
+      if (docStore.streamingInsights && docStore.insightsData) {
+        docStore.setStreamingInsights(null);
       }
       return;
     }
@@ -1130,8 +1133,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
   // --- Stream partial persona data to the canvas in real-time ---
   useEffect(() => {
     if (!isLoading) {
-      if (useStrategyStore.getState().streamingPersonas) {
-        useStrategyStore.getState().setStreamingPersonas(null);
+      const store = useStrategyStore.getState();
+      if (store.streamingPersonas && store.personaData) {
+        store.setStreamingPersonas(null);
       }
       return;
     }
@@ -1159,8 +1163,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
   // --- Stream partial journey map data to the canvas in real-time ---
   useEffect(() => {
     if (!isLoading) {
-      if (useStrategyStore.getState().streamingJourneyMaps) {
-        useStrategyStore.getState().setStreamingJourneyMaps(null);
+      const store = useStrategyStore.getState();
+      if (store.streamingJourneyMaps && store.journeyMapData) {
+        store.setStreamingJourneyMaps(null);
       }
       return;
     }
@@ -1188,8 +1193,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
   // --- Stream partial idea data to the canvas in real-time ---
   useEffect(() => {
     if (!isLoading) {
-      if (useStrategyStore.getState().streamingIdeas) {
-        useStrategyStore.getState().setStreamingIdeas(null);
+      const store = useStrategyStore.getState();
+      if (store.streamingIdeas && store.ideaData) {
+        store.setStreamingIdeas(null);
       }
       return;
     }
@@ -1217,8 +1223,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
   // --- Stream partial user flow data to the canvas in real-time ---
   useEffect(() => {
     if (strategyPhase !== "solution-design" || !isLoading) {
-      if (useStrategyStore.getState().streamingUserFlows) {
-        useStrategyStore.getState().setStreamingUserFlows(null);
+      const store = useStrategyStore.getState();
+      if (store.streamingUserFlows && store.userFlowsData) {
+        store.setStreamingUserFlows(null);
       }
       return;
     }
@@ -1246,8 +1253,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
   // --- Stream partial key features data to the canvas in real-time ---
   useEffect(() => {
     if (strategyPhase !== "solution-design" || !isLoading) {
-      if (useStrategyStore.getState().streamingKeyFeatures) {
-        useStrategyStore.getState().setStreamingKeyFeatures(null);
+      const store = useStrategyStore.getState();
+      if (store.streamingKeyFeatures && store.keyFeaturesData) {
+        store.setStreamingKeyFeatures(null);
       }
       return;
     }
@@ -2945,8 +2953,11 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
 function MessageContent({ content }: { content: string }) {
   if (!content) return null;
 
+  // Strip strategy blocks (including incomplete/open ones from truncated responses)
+  const cleaned = stripStrategyBlocks(content);
+
   // Simple rendering - split by code blocks
-  const parts = content.split(/(```[\s\S]*?```)/g);
+  const parts = cleaned.split(/(```[\s\S]*?```)/g);
 
   return (
     <div className="space-y-2">

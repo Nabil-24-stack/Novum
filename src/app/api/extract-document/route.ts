@@ -22,11 +22,9 @@ export async function POST(req: Request) {
       try {
         if (ext === "pdf") {
           const buffer = Buffer.from(await file.arrayBuffer());
-          const { PDFParse } = await import("pdf-parse");
-          const pdf = new PDFParse({ data: new Uint8Array(buffer) });
-          const result = await pdf.getText();
-          const text = result.text.slice(0, MAX_TEXT_LENGTH);
-          await pdf.destroy();
+          const { extractText } = await import("unpdf");
+          const { text: extracted } = await extractText(new Uint8Array(buffer), { mergePages: true });
+          const text = extracted.slice(0, MAX_TEXT_LENGTH);
           documents.push({ name, text });
         } else if (ext === "docx") {
           const buffer = Buffer.from(await file.arrayBuffer());
