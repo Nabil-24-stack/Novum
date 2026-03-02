@@ -34,6 +34,7 @@ interface DocumentState {
   setInsightsData: (data: InsightsCardData) => void;
   setStreamingInsights: (data: Partial<InsightsCardData> | null) => void;
   setPendingReanalysis: (v: boolean) => void;
+  setDocuments: (docs: UploadedDocument[]) => void;
   reset: () => void;
 }
 
@@ -60,6 +61,8 @@ export const useDocumentStore = create<DocumentState>((set) => ({
   setStreamingInsights: (data) => set({ streamingInsights: data }),
 
   setPendingReanalysis: (v) => set({ pendingReanalysis: v }),
+
+  setDocuments: (docs) => set({ documents: docs }),
 
   reset: () => set(initialState),
 }));

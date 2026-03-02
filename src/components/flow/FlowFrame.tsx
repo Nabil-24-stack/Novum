@@ -99,21 +99,18 @@ export function FlowFrame({
   }, [combinedSignal]);
 
   // Auto-refresh after AI finishes building this page
-  const pendingApprovalPage = useStrategyStore((s) => s.pendingApprovalPage);
+  const completedPages = useStrategyStore((s) => s.completedPages);
   const lastRefreshedPageRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (pendingApprovalPage === page.id && lastRefreshedPageRef.current !== page.id) {
+    if (completedPages.includes(page.id) && lastRefreshedPageRef.current !== page.id) {
       const timer = setTimeout(() => {
         lastRefreshedPageRef.current = page.id;
         setRefreshKey((k) => k + 1);
       }, 500);
       return () => clearTimeout(timer);
     }
-    if (pendingApprovalPage !== page.id) {
-      lastRefreshedPageRef.current = null;
-    }
-  }, [pendingApprovalPage, page.id]);
+  }, [completedPages, page.id]);
 
   // Auto-open layers panel when this frame's page is selected
   useEffect(() => {

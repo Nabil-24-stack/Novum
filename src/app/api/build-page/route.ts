@@ -2,6 +2,7 @@ import { streamText } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
 import { buildParallelPagePrompt } from "@/lib/ai/strategy-prompts";
+import { requireAuth } from "@/lib/supabase/auth-guard";
 
 type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-5";
 
@@ -83,6 +84,9 @@ const DESIGN_SYSTEM_RULES = `
 4. **Interactive Polish:** Use hover:bg-accent/50 on interactive elements.`;
 
 export async function POST(req: Request) {
+  const auth = await requireAuth();
+  if (auth.response) return auth.response;
+
   const {
     pageId,
     pageName,

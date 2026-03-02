@@ -1,6 +1,7 @@
 import { generateText } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
+import { requireAuth } from "@/lib/supabase/auth-guard";
 
 type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-5";
 
@@ -40,6 +41,9 @@ Common issues:
 Keep fixes minimal — only fix the specific error.`;
 
 export async function POST(req: Request) {
+  const auth = await requireAuth();
+  if (auth.response) return auth.response;
+
   try {
     const body = await req.json();
     const { files, contextFiles, modelId = "gemini-2.5-pro", errorText } = body as {

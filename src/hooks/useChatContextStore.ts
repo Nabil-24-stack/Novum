@@ -14,6 +14,7 @@ export interface PinnedElement {
 
 export interface AddressGapsPayload {
   unaddressedJtbds: { index: number; text: string }[];
+  gaps?: string[]; // Human-readable gap descriptions (may include persona context)
 }
 
 interface ChatContextState {

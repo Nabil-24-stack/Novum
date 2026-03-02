@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Check, AlertTriangle, RotateCcw, ArrowRight, Eye, ShieldCheck } from "lucide-react";
+import { Loader2, Check, AlertTriangle, RotateCcw, Eye, ShieldCheck } from "lucide-react";
 import type { PageBuildState } from "@/hooks/useStreamingStore";
 
 interface BuildProgressCardsProps {
@@ -9,7 +9,6 @@ interface BuildProgressCardsProps {
   onRetry: (pageId: string) => void;
   onRetryVerification: (pageId: string) => void;
   onRetryAllFailed: () => void;
-  onReviewAll: () => void;
 }
 
 export function BuildProgressCards({
@@ -18,7 +17,6 @@ export function BuildProgressCards({
   onRetry,
   onRetryVerification,
   onRetryAllFailed,
-  onReviewAll,
 }: BuildProgressCardsProps) {
   const entries = Object.entries(pageBuilds);
   const isVerifying = (b: PageBuildState) =>
@@ -169,26 +167,15 @@ export function BuildProgressCards({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          {allDone && failedCount > 0 && (
-            <button
-              onClick={onRetryAllFailed}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-700 bg-neutral-100 rounded-lg hover:bg-neutral-200 transition-colors"
-            >
-              <RotateCcw className="w-3 h-3" />
-              Retry Failed
-            </button>
-          )}
-          {allDone && (
-            <button
-              onClick={onReviewAll}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-neutral-900 rounded-lg hover:bg-neutral-800 transition-colors"
-            >
-              {failedCount > 0 ? "Skip & Review" : "Review & Finish"}
-              <ArrowRight className="w-3 h-3" />
-            </button>
-          )}
-        </div>
+        {allDone && failedCount > 0 && (
+          <button
+            onClick={onRetryAllFailed}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-700 bg-neutral-100 rounded-lg hover:bg-neutral-200 transition-colors"
+          >
+            <RotateCcw className="w-3 h-3" />
+            Retry Failed
+          </button>
+        )}
       </div>
     </div>
   );

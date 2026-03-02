@@ -52,8 +52,14 @@ interface ChatTabProps {
   onPhaseAction?: (action: "approve-problem-overview" | "approve-ideation" | "approve-solution-design") => void;
   /** Called when user sends their first message in hero phase (phase transition to manifesto) */
   onHeroSubmit?: () => void;
-  /** Called when user approves a built page and wants to build the next one */
-  onApproveAndBuildNext?: (nextPageId: string) => void;
+  /** Restore previous chat messages (e.g. from Supabase) */
+  initialMessages?: import("ai").UIMessage[];
+  /** Called when messages change for persistence */
+  onMessagesChange?: (messages: import("ai").UIMessage[]) => void;
+  /** Pre-fill the input field on mount (for new projects from dashboard) */
+  initialInput?: string;
+  /** Auto-submit on mount after initialInput is set */
+  autoSubmit?: boolean;
 }
 
 // Regex to match code blocks with file attribute
@@ -896,8 +902,8 @@ function getMessageText(message: any): string {
   return "";
 }
 
-export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhaseAction, onHeroSubmit, onApproveAndBuildNext }: ChatTabProps) {
-  const [input, setInput] = useState("");
+export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhaseAction, onHeroSubmit, initialMessages, onMessagesChange, initialInput, autoSubmit }: ChatTabProps) {
+  const [input, setInput] = useState(initialInput ?? "");
   const [selectedModel, setSelectedModel] = useState<ModelId>("claude-sonnet-4-6");
   const [stagedImages, setStagedImages] = useState<FileUIPart[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -919,7 +925,6 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   const docFileInputRef = useRef<HTMLInputElement>(null);
   const completedPages = useStrategyStore((s) => s.completedPages);
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
-  const pendingApprovalPage = useStrategyStore((s) => s.pendingApprovalPage);
   const parallelMode = useStreamingStore((s) => s.parallelMode);
   const pageBuilds = useStreamingStore((s) => s.pageBuilds);
   const annotationEvaluation = useStreamingStore((s) => s.annotationEvaluation);
@@ -933,12 +938,58 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   const parallelPageNamesRef = useRef<Record<string, { name: string; route: string }>>({});
 
   const { messages, sendMessage, status, error, stop } = useChat({
+    messages: initialMessages,
     onError: (err) => {
       console.error("Chat error:", err);
+      toast.error("AI response failed — please try again");
     },
   });
 
+  // Pre-populate dedup sets with restored messages so they don't re-trigger VFS writes
+  const didPrePopulateRef = useRef(false);
+  useEffect(() => {
+    if (didPrePopulateRef.current || !initialMessages?.length) return;
+    didPrePopulateRef.current = true;
+    for (const msg of initialMessages) {
+      if (msg.role !== "assistant") continue;
+      const text = getMessageText(msg);
+      if (!text) continue;
+      // Mark file code blocks as already processed
+      let m;
+      while ((m = CODE_BLOCK_REGEX.exec(text)) !== null) {
+        const path = m[2].startsWith("/") ? m[2] : `/${m[2]}`;
+        const content = m[3].trim();
+        processedBlocksSet.add(`${msg.id}-${path}-${content.length}`);
+      }
+      CODE_BLOCK_REGEX.lastIndex = 0;
+      // Mark strategy blocks as already processed
+      const strategyRegexes = [MANIFESTO_REGEX, PERSONA_REGEX, FLOW_REGEX, OPTIONS_REGEX, PAGE_BUILT_REGEX, CONFIDENCE_REGEX, JOURNEY_MAPS_REGEX, IDEAS_REGEX, DECISION_CONNECTIONS_REGEX, USER_FLOWS_REGEX, FEATURES_REGEX, INSIGHTS_REGEX];
+      for (const re of strategyRegexes) {
+        while (re.exec(text) !== null) {
+          processedStrategyBlocksSet.add(`${msg.id}-${re.source}-${RegExp.lastMatch.length}`);
+        }
+        re.lastIndex = 0;
+      }
+      // Mark flow.json synced
+      if (hasFileCodeBlocks(text)) {
+        flowJsonSyncedMessages.add(msg.id);
+      }
+    }
+  }, [initialMessages]);
+
+  // Ref to trigger submit programmatically from effects
+  const pendingSubmitRef = useRef<string | null>(null);
+  const didAutoSubmitRef = useRef(false);
+
   const isLoading = status === "submitted" || status === "streaming";
+
+  // Notify parent of message changes for persistence.
+  // Only fires when NOT streaming, to avoid excessive parent re-renders during AI
+  // response generation that can disrupt viewport animations and layout calculations.
+  useEffect(() => {
+    if (isLoading) return;
+    onMessagesChange?.(messages);
+  }, [messages, isLoading, onMessagesChange]);
 
   // Is ideation currently streaming?
   const isIdeationStreaming = isLoading && strategyPhase === "ideation";
@@ -1042,20 +1093,26 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     // Clear the flag immediately to prevent re-fires
     useChatContextStore.getState().setPendingAddressGaps(null);
 
-    const { unaddressedJtbds } = pendingAddressGaps;
-    if (unaddressedJtbds.length === 0) return;
+    const { unaddressedJtbds, gaps } = pendingAddressGaps;
 
-    // Build user-visible message
-    const jtbdList = unaddressedJtbds
-      .map((j) => `${j.index + 1}. "${j.text}"`)
-      .join("\n");
+    // Use per-persona gaps if available, fall back to globally unaddressed JTBDs
+    let gapList: string;
+    if (gaps && gaps.length > 0) {
+      gapList = gaps.map((g, i) => `${i + 1}. ${g}`).join("\n");
+    } else if (unaddressedJtbds.length > 0) {
+      gapList = unaddressedJtbds
+        .map((j) => `${j.index + 1}. "${j.text}"`)
+        .join("\n");
+    } else {
+      return; // Nothing to address
+    }
 
-    const text = `Address the following unaddressed jobs-to-be-done by enhancing existing pages or adding minimal new ones. Do NOT rewrite or significantly change existing pages — only add what's needed to cover these gaps.\n\n${jtbdList}\n\nFor each change, output a decision-connections block mapping the new/modified components to the JTBD indices they address.`;
+    const text = `Address the following unaddressed jobs-to-be-done by enhancing existing pages or adding minimal new ones. Do NOT rewrite or significantly change existing pages — only add what's needed to cover these gaps.\n\n${gapList}\n\nFor each change, output a decision-connections block mapping the new/modified components to the JTBD indices they address.`;
 
     // Build VFS context using shared helper (includes all pages, brain, insights, user flows)
     const vfsContext = buildBuildingPhaseVfsContext(files, {
       extra: {
-        gapContext: `## Unaddressed Jobs-To-Be-Done (GAPS)\n\nThese JTBDs are not yet covered by any page component. Address them by enhancing existing pages or adding new features.\n\n${jtbdList}`,
+        gapContext: `## Unaddressed Jobs-To-Be-Done (GAPS)\n\nThese JTBDs are not yet covered for all personas. Address them by enhancing existing pages or adding new features.\n\n${gapList}`,
       },
     });
 
@@ -1111,10 +1168,23 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   // --- Stream partial overview data to the canvas in real-time ---
   useEffect(() => {
     if (!isLoading) {
-      // Only clear streaming state if final data was successfully parsed.
-      // If the AI response was truncated, keep streaming data visible on canvas.
       const store = useStrategyStore.getState();
       if (store.streamingOverview && store.manifestoData) {
+        // Normal completion: final data was parsed, clear streaming
+        store.setStreamingOverview(null);
+      } else if (store.streamingOverview && !store.manifestoData) {
+        // Truncation: promote partial streaming data to final
+        const partial = store.streamingOverview;
+        if (partial.title || partial.problemStatement) {
+          store.setManifestoData({
+            title: partial.title || "Untitled",
+            problemStatement: partial.problemStatement || "",
+            targetUser: partial.targetUser || "",
+            jtbd: partial.jtbd || [],
+            hmw: partial.hmw || [],
+          });
+          toast.warning("Response was truncated — partial overview saved", { id: "stream-truncated" });
+        }
         store.setStreamingOverview(null);
       }
       return;
@@ -1146,6 +1216,13 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
       const docStore = useDocumentStore.getState();
       if (docStore.streamingInsights && docStore.insightsData) {
         docStore.setStreamingInsights(null);
+      } else if (docStore.streamingInsights && !docStore.insightsData) {
+        const partial = docStore.streamingInsights;
+        if (partial.insights && partial.insights.length > 0) {
+          docStore.setInsightsData(partial as InsightsCardData);
+          toast.warning("Response was truncated — partial insights saved", { id: "stream-truncated" });
+        }
+        docStore.setStreamingInsights(null);
       }
       return;
     }
@@ -1175,6 +1252,15 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     if (!isLoading) {
       const store = useStrategyStore.getState();
       if (store.streamingPersonas && store.personaData) {
+        store.setStreamingPersonas(null);
+      } else if (store.streamingPersonas && !store.personaData) {
+        const viable = store.streamingPersonas.filter(
+          (p): p is PersonaData => !!(p.name && p.role)
+        );
+        if (viable.length > 0) {
+          store.setPersonaData(viable);
+          toast.warning("Response was truncated — partial persona data saved", { id: "stream-truncated" });
+        }
         store.setStreamingPersonas(null);
       }
       return;
@@ -1206,6 +1292,15 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
       const store = useStrategyStore.getState();
       if (store.streamingJourneyMaps && store.journeyMapData) {
         store.setStreamingJourneyMaps(null);
+      } else if (store.streamingJourneyMaps && !store.journeyMapData) {
+        const viable = store.streamingJourneyMaps.filter(
+          (m): m is JourneyMapData => !!(m.personaName && m.stages && m.stages.length > 0)
+        );
+        if (viable.length > 0) {
+          store.setJourneyMapData(viable);
+          toast.warning("Response was truncated — partial journey map data saved", { id: "stream-truncated" });
+        }
+        store.setStreamingJourneyMaps(null);
       }
       return;
     }
@@ -1235,6 +1330,15 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     if (!isLoading) {
       const store = useStrategyStore.getState();
       if (store.streamingIdeas && store.ideaData) {
+        store.setStreamingIdeas(null);
+      } else if (store.streamingIdeas && !store.ideaData) {
+        const viable = store.streamingIdeas.filter(
+          (idea): idea is IdeaData => !!(idea.id && idea.title)
+        );
+        if (viable.length > 0) {
+          store.setIdeaData(viable);
+          toast.warning("Response was truncated — partial ideas saved", { id: "stream-truncated" });
+        }
         store.setStreamingIdeas(null);
       }
       return;
@@ -1266,6 +1370,15 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
       const store = useStrategyStore.getState();
       if (store.streamingUserFlows && store.userFlowsData) {
         store.setStreamingUserFlows(null);
+      } else if (store.streamingUserFlows && !store.userFlowsData) {
+        const viable = store.streamingUserFlows.filter(
+          (f): f is UserFlow => !!(f.id && f.steps && f.steps.length > 0)
+        );
+        if (viable.length > 0) {
+          store.setUserFlowsData(viable);
+          toast.warning("Response was truncated — partial user flows saved", { id: "stream-truncated" });
+        }
+        store.setStreamingUserFlows(null);
       }
       return;
     }
@@ -1295,6 +1408,13 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     if (strategyPhase !== "solution-design" || !isLoading) {
       const store = useStrategyStore.getState();
       if (store.streamingKeyFeatures && store.keyFeaturesData) {
+        store.setStreamingKeyFeatures(null);
+      } else if (store.streamingKeyFeatures && !store.keyFeaturesData) {
+        const partial = store.streamingKeyFeatures;
+        if (partial.features && partial.features.length > 0) {
+          store.setKeyFeaturesData(partial as KeyFeaturesData);
+          toast.warning("Response was truncated — partial features saved", { id: "stream-truncated" });
+        }
         store.setStreamingKeyFeatures(null);
       }
       return;
@@ -1615,7 +1735,6 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
             if (parsed.pageId) {
               const store = useStrategyStore.getState();
               store.addCompletedPage(parsed.pageId);
-              store.setPendingApprovalPage(parsed.pageId);
               store.setBuildingPage(null);
             }
           } catch (e) {
@@ -1721,7 +1840,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   useEffect(() => {
     const behavior = status === "streaming" ? "instant" : "smooth";
     messagesEndRef.current?.scrollIntoView({ behavior });
-  }, [messages, status, currentOptionBlocks.length, strategyPhase, pendingApprovalPage, annotationEvaluation.status]);
+  }, [messages, status, currentOptionBlocks.length, strategyPhase, annotationEvaluation.status]);
 
   // --- Self-healing verification loop ---
   const prevStatusRef = useRef(status);
@@ -2051,15 +2170,20 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
 
   // --- Submit ---
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: FormEvent) => {
+    e?.preventDefault();
 
-    const hasText = input.trim().length > 0;
+    // Check for programmatic submit override
+    const overrideText = pendingSubmitRef.current;
+    pendingSubmitRef.current = null;
+
+    const effectiveInput = overrideText ?? input;
+    const hasText = effectiveInput.trim().length > 0;
     const hasImages = stagedImages.length > 0;
 
     if ((!hasText && !hasImages) || isLoading) return;
 
-    const messageText = input.trim();
+    const messageText = effectiveInput.trim();
     const imagesToSend = [...stagedImages];
 
     // If "Write my own" is active, capture text as the answer for that question
@@ -2187,6 +2311,18 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
     // Clear pinned elements after sending
     clearPinnedElements();
   };
+
+  // Auto-submit initial message from dashboard
+  useEffect(() => {
+    if (!autoSubmit || !initialInput || didAutoSubmitRef.current) return;
+    didAutoSubmitRef.current = true;
+    const timer = setTimeout(() => {
+      pendingSubmitRef.current = initialInput;
+      handleSubmit();
+    }, 200);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSubmit, initialInput]);
 
   const hasImages = stagedImages.length > 0;
   const atImageLimit = stagedImages.length >= MAX_IMAGES_PER_MESSAGE;
@@ -2545,11 +2681,6 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                   );
                 }
               }}
-              onReviewAll={() => {
-                useStrategyStore.getState().setPhase("complete");
-                useStreamingStore.getState().endParallelStreaming();
-                useStrategyStore.getState().setBuildingPages([]);
-              }}
             />
           </div>
         )}
@@ -2602,78 +2733,6 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
             </div>
           </div>
         )}
-
-        {/* Page approval button during building phase (sequential mode only) */}
-        {strategyPhase === "building" && !parallelMode && pendingApprovalPage && !isLoading && (() => {
-          const storeState = useStrategyStore.getState();
-          const pageNodes = storeState.flowData?.nodes.filter((n) => n.type === "page") || [];
-          const nextPage = pageNodes.find((n) => !completedPages.includes(n.id));
-          const isLastPage = !nextPage;
-          const approvedPageName = pageNodes.find((n) => n.id === pendingApprovalPage)?.label || pendingApprovalPage;
-
-          return (
-            <div className="flex justify-center pt-2">
-              <button
-                onClick={() => {
-                  storeState.setPendingApprovalPage(null);
-
-                  if (isLastPage) {
-                    // All pages built
-                    storeState.setPhase("complete");
-                    return;
-                  }
-
-                  // Ensure next page is in /flow.json so its FlowFrame mounts immediately
-                  // (the AI may have overwritten flow.json with only built pages)
-                  const flowJsonRaw = files["/flow.json"];
-                  if (flowJsonRaw) {
-                    try {
-                      const flow = JSON.parse(flowJsonRaw);
-                      if (Array.isArray(flow.pages) && !flow.pages.some((p: { id: string }) => p.id === nextPage!.id)) {
-                        flow.pages.push({
-                          id: nextPage!.id,
-                          name: nextPage!.label,
-                          route: `/${nextPage!.id}`,
-                        });
-                        if (!flow.connections) flow.connections = [];
-                        flow.connections.push({
-                          from: pendingApprovalPage,
-                          to: nextPage!.id,
-                        });
-                        writeFile("/flow.json", JSON.stringify(flow, null, 2));
-                      }
-                    } catch {
-                      // Fail-safe: if parsing fails, continue without pre-populating
-                    }
-                  }
-
-                  // Build next page
-                  storeState.setBuildingPage(nextPage!.id);
-                  useStreamingStore.getState().startStreaming(nextPage!.id);
-                  onApproveAndBuildNext?.(nextPage!.id);
-
-                  sendMessage(
-                    { text: `"${approvedPageName}" looks great! Now build the next page: "${nextPage!.label}" (${nextPage!.id}).` },
-                    { body: { vfsContext: "", modelId: selectedModel, strategyPhase: "building", currentPageId: nextPage!.id, currentPageName: nextPage!.label } }
-                  );
-                }}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
-              >
-                {isLastPage ? (
-                  <>
-                    Approve & Finish
-                    <Check className="w-4 h-4" />
-                  </>
-                ) : (
-                  <>
-                    Approve & Build Next Page
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
-            </div>
-          );
-        })()}
 
         {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
           <StreamingStatus />

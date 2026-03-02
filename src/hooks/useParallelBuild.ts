@@ -214,6 +214,11 @@ export function useParallelBuild({
     } catch (err) {
       console.warn("[ParallelBuild] Annotation evaluation error:", err);
       useStreamingStore.getState().setAnnotationError("Could not evaluate annotations");
+    } finally {
+      // Auto-complete: transition to "complete" phase after evaluation finishes (or errors)
+      useStrategyStore.getState().setPhase("complete");
+      useStreamingStore.getState().endParallelStreaming();
+      useStrategyStore.getState().setBuildingPages([]);
     }
   }, [getLatestFile]);
 

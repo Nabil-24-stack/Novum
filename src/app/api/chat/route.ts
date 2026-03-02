@@ -3,6 +3,7 @@ import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
 import { PROBLEM_OVERVIEW_SYSTEM_PROMPT, IDEATION_SYSTEM_PROMPT, buildSolutionDesignSystemPrompt, buildBuildSystemPrompt, buildDeepDiveSystemPrompt } from "@/lib/ai/strategy-prompts";
 import { INSIGHTS_PROMPT_FRAGMENT } from "@/lib/ai/insights-prompt";
+import { requireAuth } from "@/lib/supabase/auth-guard";
 
 type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6";
 
@@ -486,6 +487,9 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     Always keep /flow.json in sync with the actual pages.`;
 
 export async function POST(req: Request) {
+  const auth = await requireAuth();
+  if (auth.response) return auth.response;
+
   const { messages, vfsContext, modelId, strategyPhase, currentPageId, currentPageName, isDeepDive, documentContext } = await req.json();
 
   // Convert UIMessage[] to ModelMessage[] format
@@ -537,6 +541,7 @@ export async function POST(req: Request) {
     model: getModel(modelId || "gemini-2.5-pro"),
     system: dynamicSystemPrompt,
     messages: modelMessages,
+    maxOutputTokens: 65536,
   });
 
   return result.toUIMessageStreamResponse();

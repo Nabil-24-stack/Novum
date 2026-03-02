@@ -111,8 +111,6 @@ interface StrategyState {
   completedPages: string[];
   currentBuildingPage: string | null;
   currentBuildingPages: string[];
-  pendingApprovalPage: string | null;
-
   // Deep-dive mode (re-enter questioning phase after initial overview generation)
   isDeepDive: boolean;
 
@@ -144,13 +142,13 @@ interface StrategyState {
   addCompletedPage: (pageId: string) => void;
   setBuildingPage: (pageId: string | null) => void;
   setBuildingPages: (pageIds: string[]) => void;
-  setPendingApprovalPage: (pageId: string | null) => void;
   setDeepDive: (v: boolean) => void;
   setKeyFeaturesData: (data: KeyFeaturesData) => void;
   setStreamingKeyFeatures: (data: Partial<KeyFeaturesData> | null) => void;
   setUserFlowsData: (data: UserFlow[]) => void;
   setStreamingUserFlows: (data: Partial<UserFlow>[] | null) => void;
   setStrategyUpdatedAfterBuild: (v: boolean) => void;
+  hydrate: (data: Partial<typeof initialState>) => void;
   reset: () => void;
 }
 
@@ -171,7 +169,6 @@ const initialState = {
   completedPages: [] as string[],
   currentBuildingPage: null as string | null,
   currentBuildingPages: [] as string[],
-  pendingApprovalPage: null as string | null,
   isDeepDive: false,
   keyFeaturesData: null as KeyFeaturesData | null,
   streamingKeyFeatures: null as Partial<KeyFeaturesData> | null,
@@ -264,8 +261,6 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
 
   setBuildingPages: (pageIds) => set({ currentBuildingPages: pageIds, currentBuildingPage: null }),
 
-  setPendingApprovalPage: (pageId) => set({ pendingApprovalPage: pageId }),
-
   setDeepDive: (v) => set({ isDeepDive: v }),
 
   setKeyFeaturesData: (data) => set({ keyFeaturesData: data, streamingKeyFeatures: null }),
@@ -277,6 +272,11 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   setStreamingUserFlows: (data) => set({ streamingUserFlows: data }),
 
   setStrategyUpdatedAfterBuild: (v) => set({ strategyUpdatedAfterBuild: v }),
+
+  hydrate: (data: Partial<typeof initialState>) => set({
+    ...initialState,
+    ...data,
+  }),
 
   reset: () => set(initialState),
 }));

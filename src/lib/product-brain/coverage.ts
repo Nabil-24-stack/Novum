@@ -92,13 +92,42 @@ export function computeCoverage(
   );
 
   // --- Overall ---
-  const overallPercent =
-    totalJtbds > 0 ? Math.round((addressedJtbdCount / totalJtbds) * 100) : 0;
+  // When personas exist, overall should reflect coverage across ALL personas,
+  // not just whether any single connection references a JTBD.
+  let overallPercent: number;
+  if (personaCoverage.length > 0) {
+    const avgCoverage =
+      personaCoverage.reduce((sum, p) => sum + p.coveragePercent, 0) /
+      personaCoverage.length;
+    overallPercent = Math.round(avgCoverage);
+  } else {
+    overallPercent =
+      totalJtbds > 0 ? Math.round((addressedJtbdCount / totalJtbds) * 100) : 0;
+  }
 
   // --- Gaps ---
-  const gaps = jtbdCoverage
-    .filter((j) => !j.addressed)
-    .map((j) => `JTBD #${j.index + 1}: "${j.text}"`);
+  const gaps: string[] = [];
+  if (personaCoverage.length > 0) {
+    // Per-persona gaps: JTBDs not covered for a specific persona
+    personas.forEach((persona) => {
+      const personaConns = allConnections.filter(
+        (c) =>
+          Array.isArray(c.personaNames) && c.personaNames.includes(persona.name)
+      );
+      const coveredIndices = new Set(
+        personaConns.flatMap((c) => c.jtbdIndices ?? [])
+      );
+      manifesto.jtbd.forEach((text, index) => {
+        if (!coveredIndices.has(index)) {
+          gaps.push(`${persona.name}: JTBD #${index + 1} — "${text}"`);
+        }
+      });
+    });
+  } else {
+    jtbdCoverage
+      .filter((j) => !j.addressed)
+      .forEach((j) => gaps.push(`JTBD #${j.index + 1}: "${j.text}"`));
+  }
 
   return {
     overallPercent,

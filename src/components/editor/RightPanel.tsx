@@ -106,10 +106,18 @@ interface RightPanelProps {
   floatingAnimate?: boolean;
   /** Called when user sends first message in hero phase */
   onHeroSubmit?: () => void;
-  /** Called when user approves a built page and wants to build the next one */
-  onApproveAndBuildNext?: (nextPageId: string) => void;
   /** Read the latest file content synchronously (includes writes not yet in React state) */
   getLatestFile: (path: string) => string | undefined;
+  /** Restore previous chat messages */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  initialMessages?: any[];
+  /** Called when messages change for persistence */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onMessagesChange?: (messages: any[]) => void;
+  /** Pre-fill the chat input on mount (for new projects from dashboard) */
+  initialInput?: string;
+  /** Auto-submit on mount after initialInput is set */
+  autoSubmit?: boolean;
   /** Called when element has strategy annotations — show confirmation modal instead of deleting immediately */
   onAnnotatedDeleteRequest?: (info: {
     tagName: string;
@@ -140,8 +148,11 @@ export function RightPanel({
   onFloatingResize,
   floatingAnimate,
   onHeroSubmit,
-  onApproveAndBuildNext,
   getLatestFile,
+  initialMessages,
+  onMessagesChange,
+  initialInput,
+  autoSubmit,
   onAnnotatedDeleteRequest,
 }: RightPanelProps) {
   const [isOpen, setIsOpen] = useState(true);
@@ -613,7 +624,10 @@ export function RightPanel({
             strategyPhase={strategyPhase}
             onPhaseAction={onPhaseAction}
             onHeroSubmit={onHeroSubmit}
-            onApproveAndBuildNext={onApproveAndBuildNext}
+            initialMessages={initialMessages}
+            onMessagesChange={onMessagesChange}
+            initialInput={initialInput}
+            autoSubmit={autoSubmit}
           />
         </FloatingChatPanel>
 

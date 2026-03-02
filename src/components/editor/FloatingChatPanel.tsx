@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useCallback, useState, type ReactNode } from "react";
+import { useRef, useCallback, useState, useEffect, type ReactNode } from "react";
 import { PanelRightClose, GripHorizontal } from "lucide-react";
 
 interface FloatingChatPanelProps {
@@ -52,6 +52,43 @@ export function FloatingChatPanel({
   } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+
+  // Stable refs for callbacks to avoid re-running the clamping effect on every render
+  const onMoveRef = useRef(onMove);
+  const onResizeRef = useRef(onResize);
+  onMoveRef.current = onMove;
+  onResizeRef.current = onResize;
+
+  // Clamp panel to stay fully within the viewport on any position/size change and window resize
+  useEffect(() => {
+    if (!floating) return;
+
+    const clamp = () => {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      // Shrink dimensions if they exceed the viewport
+      const clampedW = Math.min(width, Math.max(MIN_WIDTH, vw));
+      const clampedH = Math.min(height, Math.max(MIN_HEIGHT, vh));
+
+      // Keep the panel fully on-screen
+      const maxX = Math.max(0, vw - clampedW);
+      const maxY = Math.max(0, vh - clampedH);
+      const clampedX = Math.max(0, Math.min(x, maxX));
+      const clampedY = Math.max(0, Math.min(y, maxY));
+
+      if (clampedW !== width || clampedH !== height) {
+        onResizeRef.current(clampedW, clampedH);
+      }
+      if (clampedX !== x || clampedY !== y) {
+        onMoveRef.current(clampedX, clampedY);
+      }
+    };
+
+    clamp();
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+  }, [floating, x, y, width, height]);
 
   // --- Drag via title bar ---
 

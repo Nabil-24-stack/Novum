@@ -67,8 +67,13 @@ export const useProductBrainStore = create<ProductBrainState>((set, get) => ({
       .filter((p) => validPageSet.has(p.pageId))
       .map((p) => {
         const filtered = p.connections.filter((c) => {
+          // Use the connection's own pageId if present, otherwise inherit from the parent PageDecisions.
+          // The AI annotation prompt does NOT include pageId on individual connections,
+          // so c.pageId is typically undefined — falling back to p.pageId prevents
+          // every connection from being incorrectly classified as an orphan.
+          const effectivePageId = c.pageId || p.pageId;
           const isOrphan =
-            !validPageSet.has(c.pageId) ||
+            !validPageSet.has(effectivePageId) ||
             c.jtbdIndices.some((i) => i >= validJtbdCount) ||
             c.personaNames.some((n) => !validNameSet.has(n));
           if (isOrphan) removedCount++;

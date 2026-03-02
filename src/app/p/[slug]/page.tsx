@@ -1,4 +1,4 @@
-import { createSupabasePublic } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/server";
 import { PublishedAppViewer } from "./PublishedAppViewer";
 
 interface PageProps {
@@ -8,7 +8,7 @@ interface PageProps {
 export default async function PublishedAppPage({ params }: PageProps) {
   const { slug } = await params;
 
-  const supabase = createSupabasePublic();
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from("published_apps")
     .select("name, files")

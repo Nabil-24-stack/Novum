@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
+import { requireAuth } from "@/lib/supabase/auth-guard";
 
 export const maxDuration = 30;
 
 const MAX_TEXT_LENGTH = 100_000; // 100K chars per document
 
 export async function POST(req: Request) {
+  const auth = await requireAuth();
+  if (auth.response) return auth.response;
+
   try {
     const formData = await req.formData();
     const files = formData.getAll("files") as File[];

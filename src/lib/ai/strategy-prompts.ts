@@ -565,7 +565,6 @@ If the user asks to change only the features, regenerate ONLY the \`type="featur
 - Output the key features block FIRST, then the IA JSON block, then the user flows JSON block
 - After outputting, write a brief summary and ask if changes are needed
 - When iterating, output complete updated blocks (replace the whole structure)
-- When the user is satisfied, tell them: "Click **Approve & Start Building** when you're ready to start building the full pages."
 - You can update any output multiple times — just output new blocks`;
 
 export function buildParallelPagePrompt(

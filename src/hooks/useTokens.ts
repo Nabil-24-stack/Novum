@@ -26,7 +26,7 @@ export interface UseTokensReturn {
   setPreviewMode: (mode: PreviewMode) => void;
 
   // Preset operations
-  applyPreset: (presetTokens: TokenState) => void;
+  applyPreset: (presetTokens: TokenState, presetId?: string) => void;
 
   // Primitive operations
   updatePaletteBase: (paletteName: string, baseColor: string) => void;
@@ -127,9 +127,12 @@ export function useTokens({ files, writeFile }: UseTokensProps): UseTokensReturn
 
   // Apply a complete preset (replaces entire token state)
   const applyPreset = useCallback(
-    (presetTokens: TokenState) => {
-      setTokens(presetTokens);
-      syncToVFS(presetTokens);
+    (presetTokens: TokenState, presetId?: string) => {
+      const updated = presetId
+        ? { ...presetTokens, activePresetId: presetId }
+        : presetTokens;
+      setTokens(updated);
+      syncToVFS(updated);
     },
     [syncToVFS]
   );

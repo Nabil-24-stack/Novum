@@ -76,6 +76,7 @@ export interface GlobalSettings {
  */
 export interface TokenState {
   version: "1.0";
+  activePresetId?: string;
   primitives: {
     colors: Record<string, ColorScale>;
     // Stores the original hex color used to generate each palette

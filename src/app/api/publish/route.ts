@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
-import { createSupabaseAdmin } from "@/lib/supabase";
+import { requireAuth } from "@/lib/supabase/auth-guard";
 
 export async function POST(request: Request) {
   try {
+    const auth = await requireAuth();
+    if (auth.response) return auth.response;
+
     const body = await request.json();
     const { files, name } = body;
 
@@ -22,11 +25,11 @@ export async function POST(request: Request) {
 
     const slug = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
 
-    const supabase = createSupabaseAdmin();
-    const { error } = await supabase.from("published_apps").insert({
+    const { error } = await auth.supabase.from("published_apps").insert({
       slug,
       name: name.slice(0, 200),
       files,
+      user_id: auth.user.id,
     });
 
     if (error) {
