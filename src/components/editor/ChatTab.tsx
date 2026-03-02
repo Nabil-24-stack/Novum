@@ -75,6 +75,81 @@ const FEATURES_REGEX = /```json\s+type="features"\n([\s\S]*?)```/g;
 const INSIGHTS_REGEX = /```json\s+type="insights"\n([\s\S]*?)```/g;
 
 
+/**
+ * Builds the full VFS context object for building-phase follow-ups and address-gaps.
+ * Includes all page files, core files, strategy context, product brain, insights, and user flows.
+ */
+function buildBuildingPhaseVfsContext(
+  files: Record<string, string>,
+  options?: {
+    /** Extra keys to merge into the returned context object */
+    extra?: Record<string, string>;
+  }
+): Record<string, string> {
+  const storeState = useStrategyStore.getState();
+  const brainData = useProductBrainStore.getState().brainData;
+  const docStore = useDocumentStore.getState();
+
+  // Include all page files so AI can see what's already built
+  const pageFiles = Object.entries(files)
+    .filter(([path]) => path.startsWith("/pages/") && path.endsWith(".tsx"))
+    .map(([path, content]) => `Current ${path}:\n\`\`\`tsx\n${content}\n\`\`\``);
+
+  const coreFiles = ["/App.tsx", "/design-system.tsx", "/components/ui/index.ts"];
+  const coreFileParts = coreFiles
+    .filter((path) => files[path])
+    .map((path) => `Current ${path}:\n\`\`\`tsx\n${files[path]}\n\`\`\``);
+
+  const tokenReminder = `## IMPORTANT: Color Usage Reminder
+Use ONLY semantic token classes (bg-primary, bg-card, text-foreground, text-muted-foreground, border-border, etc.).
+NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as they break the user's theme customization.`;
+
+  const allFileParts = [...coreFileParts, ...pageFiles];
+  const vfs = allFileParts.length > 0
+    ? `## Current VFS State (use this as your source of truth)\n\n${allFileParts.join("\n\n")}\n\n${tokenReminder}`
+    : tokenReminder;
+
+  const ctx: Record<string, string> = {
+    vfs,
+    manifestoContext: storeState.manifestoData
+      ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\nWhat ${storeState.manifestoData.targetUser} Need To Get Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}\nHow Might We:\n${storeState.manifestoData.hmw.map((q, i) => `${i + 1}. ${q}`).join("\n")}`
+      : "",
+    personaContext: storeState.personaData
+      ? `## User Personas\n\n${storeState.personaData.map((p, i) => `### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${p.painPoints.map((pp) => `- ${pp}`).join("\n")}\nQuote: "${p.quote}"`).join("\n\n")}`
+      : "",
+    flowContext: storeState.flowData
+      ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`
+      : "",
+    existingConnections: brainData
+      ? `## Existing Product Brain Connections\n\n${JSON.stringify(brainData.pages.map((p) => ({ pageId: p.pageId, connections: p.connections })), null, 2)}`
+      : "",
+  };
+
+  // Add insights context if available
+  if (docStore.insightsData) {
+    ctx.insightsContext = `## Research Insights\n\n${docStore.insightsData.insights.map((ins, i) => {
+      const parts = [`${i + 1}. ${ins.insight}`];
+      if (ins.sourceDocument) parts.push(`Source: ${ins.sourceDocument}`);
+      if (ins.quote) parts.push(`Quote: "${ins.quote}"`);
+      return parts.join(" — ");
+    }).join("\n")}`;
+  }
+
+  // Add user flow context if available
+  if (storeState.userFlowsData) {
+    ctx.userFlowContext = `## User Flows (JTBD → Persona → Steps)\n\n${storeState.userFlowsData.map((flow) =>
+      `### JTBD ${flow.jtbdIndex + 1}: ${flow.jtbdText}\nPersonas: ${flow.personaNames.join(", ")}\nSteps:\n${flow.steps.map((s, i) => `${i + 1}. [${s.nodeId}] ${s.action}`).join("\n")}`
+    ).join("\n\n")}`;
+  }
+
+  // Merge any extra keys
+  if (options?.extra) {
+    Object.assign(ctx, options.extra);
+  }
+
+  return ctx;
+}
+
 interface OptionBlock {
   question: string;
   options: string[];
@@ -83,6 +158,7 @@ interface OptionBlock {
 // Module-scoped sets to survive component remounts (e.g., docked → floating switch)
 const processedBlocksSet = new Set<string>();
 const processedStrategyBlocksSet = new Set<string>();
+const flowJsonSyncedMessages = new Set<string>();
 
 function extractCodeBlocks(text: string): Array<{ path: string; content: string }> {
   const blocks: Array<{ path: string; content: string }> = [];
@@ -946,7 +1022,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     const docs = useDocumentStore.getState().documents;
     const docContext = buildInsightsContext(docs);
     sendMessage(
-      { text: "I've uploaded additional documents. Skip questions — immediately re-analyze ALL documents together and regenerate every artifact: output the updated insights block, then updated manifesto, personas, and journey maps. Incorporate new findings from the additional documents." },
+      { text: "I've uploaded additional documents. Skip questions — immediately re-analyze ALL documents together and regenerate every artifact: output the updated insights block, then updated manifesto, personas, journey maps, and user flows. Incorporate new findings from the additional documents." },
       {
         body: {
           vfsContext: "",
@@ -976,48 +1052,12 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
 
     const text = `Address the following unaddressed jobs-to-be-done by enhancing existing pages or adding minimal new ones. Do NOT rewrite or significantly change existing pages — only add what's needed to cover these gaps.\n\n${jtbdList}\n\nFor each change, output a decision-connections block mapping the new/modified components to the JTBD indices they address.`;
 
-    // Build VFS context (building phase format: Record<string, string>)
-    const storeState = useStrategyStore.getState();
-
-    // Include all page files so AI can see what's already built
-    const pageFiles = Object.entries(files)
-      .filter(([path]) => path.startsWith("/pages/") && path.endsWith(".tsx"))
-      .map(([path, content]) => `Current ${path}:\n\`\`\`tsx\n${content}\n\`\`\``);
-
-    const coreFiles = ["/App.tsx", "/design-system.tsx", "/components/ui/index.ts"];
-    const coreFileParts = coreFiles
-      .filter((path) => files[path])
-      .map((path) => `Current ${path}:\n\`\`\`tsx\n${files[path]}\n\`\`\``);
-
-    const tokenReminder = `## IMPORTANT: Color Usage Reminder
-Use ONLY semantic token classes (bg-primary, bg-card, text-foreground, text-muted-foreground, border-border, etc.).
-NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as they break the user's theme customization.`;
-
-    const allFileParts = [...coreFileParts, ...pageFiles];
-    const vfs = allFileParts.length > 0
-      ? `## Current VFS State (use this as your source of truth)\n\n${allFileParts.join("\n\n")}\n\n${tokenReminder}`
-      : tokenReminder;
-
-    // Include existing product brain connections so AI knows what's already addressed
-    const brainData = useProductBrainStore.getState().brainData;
-    const existingConnections = brainData
-      ? `## Existing Product Brain Connections\n\n${JSON.stringify(brainData.pages.map((p) => ({ pageId: p.pageId, connections: p.connections })), null, 2)}`
-      : "";
-
-    const vfsContext: Record<string, string> = {
-      vfs,
-      manifestoContext: storeState.manifestoData
-        ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\nWhat ${storeState.manifestoData.targetUser} Need To Get Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}\nHow Might We:\n${storeState.manifestoData.hmw.map((q, i) => `${i + 1}. ${q}`).join("\n")}`
-        : "",
-      personaContext: storeState.personaData
-        ? `## User Personas\n\n${storeState.personaData.map((p, i) => `### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${p.painPoints.map((pp) => `- ${pp}`).join("\n")}\nQuote: "${p.quote}"`).join("\n\n")}`
-        : "",
-      flowContext: storeState.flowData
-        ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`
-        : "",
-      existingConnections,
-      gapContext: `## Unaddressed Jobs-To-Be-Done (GAPS)\n\nThese JTBDs are not yet covered by any page component. Address them by enhancing existing pages or adding new features.\n\n${jtbdList}`,
-    };
+    // Build VFS context using shared helper (includes all pages, brain, insights, user flows)
+    const vfsContext = buildBuildingPhaseVfsContext(files, {
+      extra: {
+        gapContext: `## Unaddressed Jobs-To-Be-Done (GAPS)\n\nThese JTBDs are not yet covered by any page component. Address them by enhancing existing pages or adding new features.\n\n${jtbdList}`,
+      },
+    });
 
     sendMessage(
       { text },
@@ -1325,6 +1365,25 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
               toast.info(`Gatekeeper: ${total} design system fix${total > 1 ? "es" : ""} applied`);
               console.log("[Gatekeeper] Applied fixes:", gated.report);
             }
+            // Detect removed data-strategy-id attributes (AI-initiated annotation deletion)
+            try {
+              const oldContent = files[block.path];
+              if (oldContent) {
+                const oldIds = new Set(Array.from(oldContent.matchAll(/data-strategy-id="([^"]+)"/g)).map((m) => m[1]));
+                const newIds = new Set(Array.from(gated.code.matchAll(/data-strategy-id="([^"]+)"/g)).map((m) => m[1]));
+                const removedIds = [...oldIds].filter((id) => !newIds.has(id));
+                if (removedIds.length > 0) {
+                  const brainStore = useProductBrainStore.getState();
+                  for (const sid of removedIds) {
+                    brainStore.removeConnection(sid);
+                  }
+                  toast.info(`AI removed ${removedIds.length} annotated section(s) — connections cleaned from product brain`);
+                }
+              }
+            } catch {
+              // Fail-safe: don't break on regex/brain errors
+            }
+
             writeFile(block.path, gated.code);
           }
         });
@@ -1332,6 +1391,65 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- files is read via closure at call-time; adding it would re-run gatekeeper on every VFS change
   }, [messages, writeFile]);
+
+  // Sync flow.json after AI writes: remove pages whose files were deleted
+  useEffect(() => {
+    if (isLoading) return; // Wait until streaming completes
+    messages.forEach((message) => {
+      if (message.role !== "assistant") return;
+      if (flowJsonSyncedMessages.has(message.id)) return;
+
+      let textContent = "";
+      if (message.parts && Array.isArray(message.parts)) {
+        textContent = message.parts
+          .filter((part): part is { type: "text"; text: string } => part.type === "text")
+          .map((part) => part.text)
+          .join("");
+      }
+      if (!textContent && "content" in message && typeof message.content === "string") {
+        textContent = message.content;
+      }
+
+      const blocks = extractCodeBlocks(textContent);
+      if (blocks.length === 0) return;
+
+      flowJsonSyncedMessages.add(message.id);
+
+      try {
+        const flowRaw = files["/flow.json"];
+        if (!flowRaw) return;
+
+        const flow = JSON.parse(flowRaw);
+        if (!Array.isArray(flow.pages)) return;
+
+        const deletedPageIds: string[] = [];
+        const appTsx = files["/App.tsx"] || "";
+        const updatedPages = flow.pages.filter((page: { id: string; route: string }) => {
+          // Check by route match in App.tsx — if the route is no longer referenced, page was removed
+          const routeExists = appTsx.includes(`"${page.route}"`) || appTsx.includes(`'${page.route}'`) || page.route === "/";
+
+          if (!routeExists && page.route !== "/") {
+            deletedPageIds.push(page.id);
+            return false;
+          }
+          return true;
+        });
+
+        if (deletedPageIds.length > 0) {
+          const updatedConnections = (flow.connections || []).filter(
+            (conn: { from: string; to: string }) =>
+              !deletedPageIds.includes(conn.from) && !deletedPageIds.includes(conn.to)
+          );
+
+          const cleanedFlow = { ...flow, pages: updatedPages, connections: updatedConnections };
+          writeFile("/flow.json", JSON.stringify(cleanedFlow, null, 2));
+          toast.info(`Cleaned flow.json: removed ${deletedPageIds.length} deleted page(s)`);
+        }
+      } catch {
+        // Fail-safe: don't break on bad flow.json
+      }
+    });
+  }, [messages, isLoading, writeFile, files]);
 
   // Extract strategy JSON (manifesto/flow) from AI responses
   useEffect(() => {
@@ -1992,32 +2110,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
       vfsContext = parts.join("\n\n");
     } else if (effectivePhase === "building") {
       // In build phase, send full VFS context plus strategy context
-      const storeState = useStrategyStore.getState();
-      const contextFiles = ["/design-system.tsx", "/App.tsx", "/components/ui/index.ts"];
-      const fileContextParts = contextFiles
-        .filter((path) => files[path])
-        .map((path) => `Current ${path}:\n\`\`\`tsx\n${files[path]}\n\`\`\``);
-
-      const tokenReminder = `## IMPORTANT: Color Usage Reminder
-Use ONLY semantic token classes (bg-primary, bg-card, text-foreground, text-muted-foreground, border-border, etc.).
-NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as they break the user's theme customization.`;
-
-      const vfs = fileContextParts.length > 0
-        ? `## Current VFS State (use this as your source of truth)\n\n${fileContextParts.join("\n\n")}\n\n${tokenReminder}`
-        : tokenReminder;
-
-      vfsContext = {
-        vfs,
-        manifestoContext: storeState.manifestoData
-          ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\nWhat ${storeState.manifestoData.targetUser} Need To Get Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}\nHow Might We:\n${storeState.manifestoData.hmw.map((q, i) => `${i + 1}. ${q}`).join("\n")}`
-          : "",
-        personaContext: storeState.personaData
-          ? `## User Personas\n\n${storeState.personaData.map((p, i) => `### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${p.painPoints.map((pp) => `- ${pp}`).join("\n")}\nQuote: "${p.quote}"`).join("\n\n")}`
-          : "",
-        flowContext: storeState.flowData
-          ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`
-          : "",
-      };
+      vfsContext = buildBuildingPhaseVfsContext(files);
     } else {
       // Default: existing VFS context behavior
       const contextFiles = ["/design-system.tsx", "/App.tsx", "/components/ui/index.ts"];

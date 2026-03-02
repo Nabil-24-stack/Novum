@@ -124,6 +124,9 @@ interface StrategyState {
   userFlowsData: UserFlow[] | null;
   streamingUserFlows: Partial<UserFlow>[] | null;
 
+  // Flag: strategy artifacts were updated after pages were already built (triggers re-evaluation prompt)
+  strategyUpdatedAfterBuild: boolean;
+
   // Actions
   setPhase: (phase: StrategyPhase) => void;
   setUserPrompt: (prompt: string) => void;
@@ -147,6 +150,7 @@ interface StrategyState {
   setStreamingKeyFeatures: (data: Partial<KeyFeaturesData> | null) => void;
   setUserFlowsData: (data: UserFlow[]) => void;
   setStreamingUserFlows: (data: Partial<UserFlow>[] | null) => void;
+  setStrategyUpdatedAfterBuild: (v: boolean) => void;
   reset: () => void;
 }
 
@@ -173,20 +177,27 @@ const initialState = {
   streamingKeyFeatures: null as Partial<KeyFeaturesData> | null,
   userFlowsData: null as UserFlow[] | null,
   streamingUserFlows: null as Partial<UserFlow>[] | null,
+  strategyUpdatedAfterBuild: false,
 };
 
-export const useStrategyStore = create<StrategyState>((set) => ({
+export const useStrategyStore = create<StrategyState>((set, get) => ({
   ...initialState,
 
   setPhase: (phase) => set({ phase }),
 
   setUserPrompt: (prompt) => set({ userPrompt: prompt }),
 
-  setManifestoData: (data) => set({ manifestoData: data, streamingOverview: null }),
+  setManifestoData: (data) => {
+    const afterBuild = get().completedPages.length > 0;
+    set({ manifestoData: data, streamingOverview: null, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+  },
 
   setStreamingOverview: (data) => set({ streamingOverview: data }),
 
-  setPersonaData: (data) => set({ personaData: data, streamingPersonas: null }),
+  setPersonaData: (data) => {
+    const afterBuild = get().completedPages.length > 0;
+    set({ personaData: data, streamingPersonas: null, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+  },
 
   setStreamingPersonas: (data) => set({ streamingPersonas: data }),
 
@@ -229,7 +240,10 @@ export const useStrategyStore = create<StrategyState>((set) => ({
       return { confidenceData: data };
     }),
 
-  setJourneyMapData: (data) => set({ journeyMapData: data, streamingJourneyMaps: null }),
+  setJourneyMapData: (data) => {
+    const afterBuild = get().completedPages.length > 0;
+    set({ journeyMapData: data, streamingJourneyMaps: null, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+  },
 
   setStreamingJourneyMaps: (data) => set({ streamingJourneyMaps: data }),
 
@@ -261,6 +275,8 @@ export const useStrategyStore = create<StrategyState>((set) => ({
   setUserFlowsData: (data) => set({ userFlowsData: data, streamingUserFlows: null }),
 
   setStreamingUserFlows: (data) => set({ streamingUserFlows: data }),
+
+  setStrategyUpdatedAfterBuild: (v) => set({ strategyUpdatedAfterBuild: v }),
 
   reset: () => set(initialState),
 }));

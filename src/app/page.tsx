@@ -43,7 +43,10 @@ import { calculateHorizontalLayout, type GroupId, type GroupConfig, type GroupOr
 import { calculateStrategyLayout } from "@/lib/strategy/strategy-layout";
 import { initializeTestAPI, updateTestAPI } from "@/lib/ast/test-utils";
 import { PublishDialog } from "@/components/editor/PublishDialog";
-import { Smartphone, GitBranch, Share, RefreshCw, MessageSquareText } from "lucide-react";
+import { AnnotatedDeleteModal, type AnnotatedDeleteInfo } from "@/components/canvas/AnnotatedDeleteModal";
+import { evaluateAnnotationsStandalone } from "@/hooks/useParallelBuild";
+import { useStreamingStore } from "@/hooks/useStreamingStore";
+import { Smartphone, GitBranch, Share, RefreshCw, MessageSquareText, RotateCw } from "lucide-react";
 import { animateViewport, calculateCenteredViewport, calculateFitAllViewport } from "@/lib/canvas/viewport-animation";
 import { calculateFlowLayout } from "@/lib/flow/auto-layout";
 import type { CanvasTool, CanvasNode } from "@/lib/canvas/types";
@@ -96,6 +99,7 @@ export default function Home() {
   const completedPages = useStrategyStore((s) => s.completedPages);
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
   const currentBuildingPages = useStrategyStore((s) => s.currentBuildingPages);
+  const strategyUpdatedAfterBuild = useStrategyStore((s) => s.strategyUpdatedAfterBuild);
 
   // Document/Insights state
   const insightsData = useDocumentStore((s) => s.insightsData);
@@ -118,6 +122,20 @@ export default function Home() {
   const closeAllAnnotations = useAnnotationStore((s) => s.closeAll);
   useAnnotationResolution({ brainData });
 
+  // Re-evaluate annotations state
+  const [isReEvaluating, setIsReEvaluating] = useState(false);
+
+  // Toast notification when strategy artifacts are updated after build
+  useEffect(() => {
+    if (strategyUpdatedAfterBuild && completedPages.length > 0) {
+      import("sonner").then(({ toast }) => {
+        toast.info("Strategy artifacts updated. Existing annotations may be outdated.", {
+          duration: 5000,
+        });
+      });
+    }
+  }, [strategyUpdatedAfterBuild, completedPages.length]);
+
   // Compute visible page IDs for progressive FlowFrame rendering
   const visiblePageIds = useMemo(() => {
     if (strategyPhase !== "building") return undefined; // Show all pages when not building
@@ -126,6 +144,9 @@ export default function Home() {
     for (const pid of currentBuildingPages) ids.add(pid);
     return ids;
   }, [strategyPhase, completedPages, currentBuildingPage, currentBuildingPages]);
+
+  // State for annotated element delete confirmation modal
+  const [pendingAnnotatedDelete, setPendingAnnotatedDelete] = useState<AnnotatedDeleteInfo | null>(null);
 
   // State for auto-centering viewport on newly built pages
   const [centerOnPageId, setCenterOnPageId] = useState<string | null>(null);
@@ -409,6 +430,94 @@ export default function Home() {
 
   // Flow manifest parsed from /flow.json
   const flowManifest = useFlowManifest(files);
+
+  // Orphan detection: clean up product-brain connections that reference deleted pages/personas/JTBDs
+  useEffect(() => {
+    if (!brainData || !manifestoData || !personaData || !flowManifest) return;
+    const validPageIds = flowManifest.pages.map((p: { id: string }) => p.id);
+    const validPersonaNames = personaData.map((p) => p.name);
+    const jtbdCount = manifestoData.jtbd.length;
+
+    const removed = useProductBrainStore.getState().removeOrphanedConnections(
+      validPageIds,
+      jtbdCount,
+      validPersonaNames
+    );
+
+    if (removed > 0) {
+      import("sonner").then(({ toast }) => {
+        toast.info(`Cleaned ${removed} orphaned annotation(s) from product brain`);
+      });
+    }
+  }, [brainData, manifestoData, personaData, flowManifest]);
+
+  // Re-evaluate annotations handler (placed after flowManifest is available)
+  const handleReEvaluateAnnotations = useCallback(async () => {
+    if (isReEvaluating || !manifestoData || !personaData) return;
+
+    setIsReEvaluating(true);
+    useStreamingStore.getState().setAnnotationEvaluating();
+
+    const mCtx = `Title: ${manifestoData.title}\nProblem: ${manifestoData.problemStatement}\nTarget User: ${manifestoData.targetUser}\nJTBDs:\n${manifestoData.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}`;
+    const pCtx = personaData.map((p, i) => `Persona ${i + 1}: ${p.name} — ${p.role}\nGoals: ${p.goals.join("; ")}\nPain Points: ${p.painPoints.join("; ")}`).join("\n\n");
+
+    const insData = useDocumentStore.getState().insightsData;
+    const insCtx = insData
+      ? insData.insights.map((ins, i) => {
+          const parts = [`${i}. ${ins.insight}`];
+          if (ins.sourceDocument) parts.push(`Source: ${ins.sourceDocument}`);
+          if (ins.quote) parts.push(`Quote: "${ins.quote}"`);
+          return parts.join(" — ");
+        }).join("\n")
+      : undefined;
+
+    const oldBrain = useProductBrainStore.getState().brainData;
+
+    const result = await evaluateAnnotationsStandalone(files, mCtx, pCtx, insCtx, "gemini-2.5-pro");
+
+    if (result?.pages && Array.isArray(result.pages)) {
+      let totalNew = 0;
+      for (const page of result.pages) {
+        if (page.pageId && Array.isArray(page.connections)) {
+          useProductBrainStore.getState().addPageDecisions({
+            pageId: page.pageId,
+            pageName: page.pageName || page.pageId,
+            connections: page.connections,
+          });
+          totalNew += page.connections.length;
+        }
+      }
+
+      const oldCount = oldBrain?.pages.reduce((sum, p) => sum + p.connections.length, 0) ?? 0;
+      const delta = totalNew - oldCount;
+      useStreamingStore.getState().setAnnotationDone(totalNew);
+
+      import("sonner").then(({ toast }) => {
+        if (delta > 0) toast.success(`Annotations updated: ${totalNew} total (+${delta} new)`);
+        else if (delta < 0) toast.success(`Annotations updated: ${totalNew} total (${delta} removed)`);
+        else toast.success(`Annotations re-evaluated: ${totalNew} total (no changes)`);
+      });
+
+      useStrategyStore.getState().setStrategyUpdatedAfterBuild(false);
+
+      // Auto-clean orphans
+      if (flowManifest && manifestoData && personaData) {
+        const validPageIds = flowManifest.pages.map((p: { id: string }) => p.id);
+        useProductBrainStore.getState().removeOrphanedConnections(
+          validPageIds,
+          manifestoData.jtbd.length,
+          personaData.map((p) => p.name),
+        );
+      }
+    } else {
+      useStreamingStore.getState().setAnnotationError("Re-evaluation failed");
+      import("sonner").then(({ toast }) => {
+        toast.error("Failed to re-evaluate annotations");
+      });
+    }
+
+    setIsReEvaluating(false);
+  }, [isReEvaluating, manifestoData, personaData, files, flowManifest]);
 
   // --- Unified viewport state (single viewport for both modes) ---
   const viewportRef = useRef<ViewportState>({ x: 0, y: 0, scale: 1 });
@@ -1424,6 +1533,23 @@ export default function Home() {
                   <MessageSquareText className="w-4 h-4" />
                 </button>
               )}
+              {/* Re-evaluate annotations button */}
+              {brainData && completedPages.length > 0 && (
+                <button
+                  onClick={handleReEvaluateAnnotations}
+                  disabled={isReEvaluating}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                    strategyUpdatedAfterBuild
+                      ? "text-blue-700 bg-blue-50 border border-blue-300 hover:bg-blue-100 animate-pulse"
+                      : isReEvaluating
+                        ? "text-neutral-400 border border-neutral-200 cursor-not-allowed"
+                        : "text-neutral-600 hover:text-neutral-900 border border-neutral-300 hover:border-neutral-400"
+                  }`}
+                  title={strategyUpdatedAfterBuild ? "Strategy changed — re-evaluate annotations" : "Re-evaluate annotations"}
+                >
+                  <RotateCw className={`w-4 h-4 ${isReEvaluating ? "animate-spin" : ""}`} />
+                </button>
+              )}
               <button
                 onClick={handlePrototypeToggle}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
@@ -1799,6 +1925,7 @@ export default function Home() {
           onHeroSubmit={handleHeroSubmit}
           onApproveAndBuildNext={handleApproveAndBuildNext}
           getLatestFile={getLatestFile}
+          onAnnotatedDeleteRequest={setPendingAnnotatedDelete}
         />
 
         {/* Token Studio - only shown in design-system mode */}
@@ -1825,6 +1952,15 @@ export default function Home() {
 
       {/* Inspector context menu (right-click "Add to AI Chat") */}
       <InspectorContextMenu onAddToChat={() => setRightPanelTab("chat")} />
+
+      {/* Annotated element delete confirmation modal */}
+      {pendingAnnotatedDelete && (
+        <AnnotatedDeleteModal
+          info={pendingAnnotatedDelete}
+          onClose={() => setPendingAnnotatedDelete(null)}
+          manifestoJtbd={manifestoData?.jtbd}
+        />
+      )}
     </main>
   );
 }

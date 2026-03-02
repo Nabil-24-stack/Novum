@@ -40,6 +40,54 @@ function ensureReactImport(code: string): string {
   return 'import * as React from "react";\n' + code;
 }
 
+/**
+ * Standalone annotation evaluation function — can be called independently of the build pipeline.
+ * Used by the "Re-evaluate Annotations" button after strategy changes.
+ */
+export async function evaluateAnnotationsStandalone(
+  files: Record<string, string>,
+  manifestoContext: string,
+  personaContext: string,
+  insightsContext: string | undefined,
+  modelId: string,
+): Promise<{ pages: Array<{ pageId: string; pageName: string; connections: import("@/lib/product-brain/types").DecisionConnection[] }> } | null> {
+  // Collect code for all page files in VFS
+  const pagesCode: { pageId: string; pageName: string; code: string }[] = [];
+  for (const [path, content] of Object.entries(files)) {
+    if (path.startsWith("/pages/") && path.endsWith(".tsx") && content?.trim()) {
+      const fileName = path.replace("/pages/", "").replace(".tsx", "");
+      const pageId = fileName.charAt(0).toLowerCase() + fileName.slice(1);
+      pagesCode.push({ pageId, pageName: fileName, code: content });
+    }
+  }
+
+  if (pagesCode.length === 0) return null;
+
+  try {
+    const response = await fetch("/api/evaluate-annotations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pages: pagesCode,
+        manifestoContext,
+        personaContext,
+        insightsContext,
+        modelId,
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn("[evaluateAnnotationsStandalone] Failed:", response.status);
+      return null;
+    }
+
+    return await response.json();
+  } catch (err) {
+    console.warn("[evaluateAnnotationsStandalone] Error:", err);
+    return null;
+  }
+}
+
 export function useParallelBuild({
   writeFile,
   files,

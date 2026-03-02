@@ -5,6 +5,8 @@ import { deleteNodeAtLocation } from "@/lib/ast/writer";
 import { sendToIframe } from "@/lib/inspection/iframe-messaging";
 import { toast } from "sonner";
 import type { SelectedElement } from "@/lib/inspection/types";
+import type { DecisionConnection } from "@/lib/product-brain/types";
+import { useProductBrainStore } from "@/hooks/useProductBrainStore";
 
 interface UseKeyboardDeleteOptions {
   files: Record<string, string>;
@@ -15,6 +17,13 @@ interface UseKeyboardDeleteOptions {
   cancelDraft: () => void;
   /** Clear inspection selection after delete */
   onClearSelection: () => void;
+  /** Called when element has strategy annotations — show confirmation modal instead of deleting immediately */
+  onAnnotatedDeleteRequest?: (info: {
+    tagName: string;
+    previewText?: string;
+    connections: DecisionConnection[];
+    onConfirm: () => void;
+  }) => void;
 }
 
 /**
@@ -29,6 +38,7 @@ export function useKeyboardDelete({
   inspectionMode,
   cancelDraft,
   onClearSelection,
+  onAnnotatedDeleteRequest,
 }: UseKeyboardDeleteOptions) {
   // Refs to always read latest values, avoiding stale closures
   const filesRef = useRef(files);
@@ -47,6 +57,41 @@ export function useKeyboardDelete({
     );
   }, []);
 
+  // Actually execute the delete (after any confirmation)
+  const executeDelete = useCallback(() => {
+    const currentElement = selectedElementRef.current;
+    if (!currentElement?.source) return;
+
+    cancelDraft();
+
+    const fileName = currentElement.source.fileName;
+    const fileContent = filesRef.current[fileName];
+    if (!fileContent) {
+      console.warn(`File not found: ${fileName}`);
+      return;
+    }
+
+    const result = deleteNodeAtLocation(fileContent, currentElement.source);
+
+    if (result.success && result.newCode) {
+      broadcastDelete();
+      writeFile(fileName, result.newCode);
+
+      // Remove strategy connections associated with this element
+      if (currentElement.strategyIds?.length) {
+        const brainStore = useProductBrainStore.getState();
+        for (const sid of currentElement.strategyIds) {
+          brainStore.removeConnection(sid);
+        }
+        toast.success(`Removed ${currentElement.strategyIds.length} annotation(s) from product brain`);
+      }
+
+      onClearSelection();
+    } else {
+      toast.error("Could not delete this element");
+    }
+  }, [writeFile, cancelDraft, onClearSelection, broadcastDelete]);
+
   // Core delete logic - shared by both event sources
   const performDelete = useCallback(() => {
     const currentElement = selectedElementRef.current;
@@ -55,33 +100,30 @@ export function useKeyboardDelete({
     if (!inspectionModeRef.current) return;
     if (!currentElement?.source || !currentElement?.selector) return;
 
-    // Cancel any pending draft edits (element is being deleted, don't flush stale edits)
-    cancelDraft();
+    // Check if element has strategy annotations — show confirmation modal if so
+    if (currentElement.strategyIds?.length && onAnnotatedDeleteRequest) {
+      const brainData = useProductBrainStore.getState().brainData;
+      if (brainData) {
+        const strategyIdSet = new Set(currentElement.strategyIds);
+        const linkedConnections: DecisionConnection[] = brainData.pages.flatMap((p) =>
+          p.connections.filter((c) => strategyIdSet.has(c.id))
+        );
 
-    // Get the file content
-    const fileName = currentElement.source.fileName;
-    const fileContent = filesRef.current[fileName];
-    if (!fileContent) {
-      console.warn(`File not found: ${fileName}`);
-      return;
+        if (linkedConnections.length > 0) {
+          onAnnotatedDeleteRequest({
+            tagName: currentElement.tagName,
+            previewText: currentElement.textContent,
+            connections: linkedConnections,
+            onConfirm: executeDelete,
+          });
+          return;
+        }
+      }
     }
 
-    // Perform AST-based delete
-    const result = deleteNodeAtLocation(fileContent, currentElement.source);
-
-    if (result.success && result.newCode) {
-      // Optimistic DOM removal in iframe(s)
-      broadcastDelete();
-
-      // Persist to VFS
-      writeFile(fileName, result.newCode);
-
-      // Clear selection
-      onClearSelection();
-    } else {
-      toast.error("Could not delete this element");
-    }
-  }, [writeFile, cancelDraft, onClearSelection, broadcastDelete]);
+    // No annotations or no callback — delete directly
+    executeDelete();
+  }, [executeDelete, onAnnotatedDeleteRequest]);
 
   // Handle keyboard events directly on the window (when iframe doesn't have focus)
   const handleKeyDown = useCallback(

@@ -259,6 +259,7 @@ If the user uploads additional documents after you have already generated artifa
 3. Updated \`type="manifesto"\` block (refined problem statement, JTBD, HMW based on new evidence)
 4. Updated \`type="personas"\` block (updated or new personas reflecting combined document evidence)
 5. Updated \`type="journey-maps"\` block (updated journey maps matching the updated personas)
+6. Updated \`type="user-flows"\` block (map any new JTBDs to persona paths through existing pages — if pages exist, reference their node IDs; if not, use the planned IA node IDs)
 
 This is a full regeneration — skip Q&A entirely and output everything in one response.
 
@@ -743,6 +744,14 @@ After you have output ALL code blocks and the decision-connections block (if any
 
 This marker tells the system you are done with this page. Do NOT build the next page — wait for the user to approve this page first.
 
+## REMOVING OR REPLACING A PAGE
+
+When removing or replacing a page:
+1. Remove the page entry from /flow.json
+2. Remove any connections in /flow.json that reference the deleted page (in \`from\` or \`to\`)
+3. Update /App.tsx to remove the route and import
+4. Delete the /pages/PageName.tsx file (output an empty code block: \`\`\`tsx file="/pages/PageName.tsx"\n\`\`\`)
+
 ## IMPORTANT RULES
 
 - Follow the existing code patterns (named exports, relative imports, semantic tokens)
@@ -750,5 +759,6 @@ This marker tells the system you are done with this page. Do NOT build the next 
 - Every page should feel like a real product — rich content, proper hierarchy, good spacing
 - Navigation between pages should use \`navigate()\` from \`useRouter()\` (import from \`./lib/router\`)
 - Always update /flow.json when adding a new page
+- Always update /flow.json when removing a page (remove the page entry and its connections)
 - Do NOT proceed to the next page until the user explicitly approves`;
 }

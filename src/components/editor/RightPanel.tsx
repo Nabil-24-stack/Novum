@@ -110,6 +110,13 @@ interface RightPanelProps {
   onApproveAndBuildNext?: (nextPageId: string) => void;
   /** Read the latest file content synchronously (includes writes not yet in React state) */
   getLatestFile: (path: string) => string | undefined;
+  /** Called when element has strategy annotations — show confirmation modal instead of deleting immediately */
+  onAnnotatedDeleteRequest?: (info: {
+    tagName: string;
+    previewText?: string;
+    connections: import("@/lib/product-brain/types").DecisionConnection[];
+    onConfirm: () => void;
+  }) => void;
 }
 
 export function RightPanel({
@@ -135,6 +142,7 @@ export function RightPanel({
   onHeroSubmit,
   onApproveAndBuildNext,
   getLatestFile,
+  onAnnotatedDeleteRequest,
 }: RightPanelProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [internalActiveTab, setInternalActiveTab] = useState<TabType>("chat");
@@ -502,6 +510,7 @@ export function RightPanel({
     inspectionMode,
     cancelDraft: draftEditor.cancel,
     onClearSelection: onClearSelection ?? (() => {}),
+    onAnnotatedDeleteRequest,
   });
 
   // Enable mouse drag-and-drop for element reordering

@@ -475,7 +475,15 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     - Call \`navigate("/dashboard")\` to navigate to a route
     - The router uses hash-based routing (e.g., \`#/dashboard\`)
 
-    **IMPORTANT:** Always update /flow.json when adding new pages so they appear in the Flow View!`;
+    **IMPORTANT:** Always update /flow.json when adding new pages so they appear in the Flow View!
+
+    ## Removing or Replacing Pages:
+    When removing or replacing a page:
+    1. Remove the page entry from /flow.json
+    2. Remove any connections in /flow.json referencing the deleted page (in \`from\` or \`to\`)
+    3. Update /App.tsx to remove the route and import
+    4. Delete the page file (output an empty code block: \`\`\`tsx file="/pages/PageName.tsx"\n\`\`\`)
+    Always keep /flow.json in sync with the actual pages.`;
 
 export async function POST(req: Request) {
   const { messages, vfsContext, modelId, strategyPhase, currentPageId, currentPageName, isDeepDive, documentContext } = await req.json();
