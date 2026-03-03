@@ -1323,11 +1323,19 @@ export default function ProjectEditor() {
   // --- Strategy Mode Handlers ---
 
   const handleHeroSubmit = useCallback(() => {
-    // Dock the chat when the user submits their first message (hero → problem-overview).
-    // This switches from floating chat viewport math (which produces extreme zoom-out)
-    // to the working calculateFitAllViewport path for centering strategy artifacts.
-    setChatMode("docked");
+    // Chat stays floating during the questioning phase for a centered, focused UX.
+    // Docking happens later when artifact generation begins (see effect below).
   }, []);
+
+  // --- Auto-dock chat when AI starts generating strategy artifacts ---
+  // The chat stays floating/centered during the questioning phase (hero + early problem-overview).
+  // Once the AI begins streaming the first artifact (product overview), dock to the right panel
+  // so the viewport can use calculateFitAllViewport to properly center the artifacts.
+  useEffect(() => {
+    if (chatMode === "floating" && strategyPhase === "problem-overview" && (streamingOverview || manifestoData)) {
+      setChatMode("docked");
+    }
+  }, [chatMode, strategyPhase, streamingOverview, manifestoData]);
 
   // Document upload handler (for InsightsCard "Upload More" and hidden input)
   const handleCanvasDocumentUpload = useCallback(async (fileList: FileList | null) => {
