@@ -1329,13 +1329,13 @@ export default function ProjectEditor() {
 
   // --- Auto-dock chat when AI starts generating strategy artifacts ---
   // The chat stays floating/centered during the questioning phase (hero + early problem-overview).
-  // Once the AI begins streaming the first artifact (product overview), dock to the right panel
-  // so the viewport can use calculateFitAllViewport to properly center the artifacts.
+  // Once the AI begins streaming any artifact (insights, product overview, etc.), dock to the
+  // right panel so the viewport can properly center the artifacts on canvas.
   useEffect(() => {
-    if (chatMode === "floating" && strategyPhase === "problem-overview" && (streamingOverview || manifestoData)) {
+    if (chatMode === "floating" && strategyPhase === "problem-overview" && (streamingInsights || insightsData || streamingOverview || manifestoData)) {
       setChatMode("docked");
     }
-  }, [chatMode, strategyPhase, streamingOverview, manifestoData]);
+  }, [chatMode, strategyPhase, streamingInsights, insightsData, streamingOverview, manifestoData]);
 
   // Document upload handler (for InsightsCard "Upload More" and hidden input)
   const handleCanvasDocumentUpload = useCallback(async (fileList: FileList | null) => {
