@@ -1493,21 +1493,33 @@ export default function ProjectEditor() {
       const worldBottom = Math.max(...focusRects.map((r) => r.y + r.height));
       const totalWorldWidth = worldRight - worldLeft;
       const totalWorldHeight = worldBottom - worldTop;
-      const combinedWidth = totalWorldWidth + gap + chatWidth;
 
-      const scaleX = (screenW - 80) / combinedWidth;
+      // Only world content scales with canvas zoom — subtract fixed-size
+      // elements (chat panel + gap + padding) before computing scale.
+      const availableForWorld = screenW - 80 - gap - chatWidth;
+      const scaleX = availableForWorld > 0 ? availableForWorld / totalWorldWidth : 0.1;
       const scaleY = (screenH - 80) / totalWorldHeight;
-      const scale = Math.min(1, scaleX, scaleY);
+      const scale = Math.min(1, Math.max(0.1, scaleX), scaleY);
+
+      // Total rendered width: scaled world content + fixed gap + fixed chat
+      const actualScreenWidth = totalWorldWidth * scale + gap + chatWidth;
+      const leftMargin = (screenW - actualScreenWidth) / 2;
 
       const targetViewport = {
-        x: (screenW - combinedWidth * scale) / 2 - worldLeft * scale,
+        x: leftMargin - worldLeft * scale,
         y: (screenH - totalWorldHeight * scale) / 2 - worldTop * scale,
         scale,
       };
       cancelViewportAnimRef.current = animateViewport(viewportRef.current, targetViewport, setViewport, { duration: 400 });
 
-      const chatScreenX = (screenW - combinedWidth * scale) / 2 + totalWorldWidth * scale + gap;
-      const chatScreenY = (screenH - chatHeight) / 2;
+      // Floating chat uses position:fixed (viewport-relative), so add the
+      // canvas wrapper's offset from the browser viewport origin.
+      const canvasRect = canvasWrapperRef.current?.getBoundingClientRect();
+      const offsetLeft = canvasRect?.left ?? 0;
+      const offsetTop = canvasRect?.top ?? 0;
+
+      const chatScreenX = offsetLeft + leftMargin + totalWorldWidth * scale + gap;
+      const chatScreenY = offsetTop + (screenH - chatHeight) / 2;
 
       setFloatingAnimate(true);
       setFloatingRect((prev) => ({ ...prev, x: chatScreenX, y: chatScreenY }));

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useMemo, type PointerEvent } from "react";
+import { useCallback, useState, useMemo, useEffect, useRef, type PointerEvent } from "react";
 import { FileText, Zap, GitBranch, Database } from "lucide-react";
 import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
 import type { UserFlow, FlowData, PersonaData, StrategyNode } from "@/hooks/useStrategyStore";
@@ -41,6 +41,9 @@ const ACTION_HEIGHT = 28;
 export const USER_FLOW_CARD_WIDTH = 700;
 export const USER_FLOW_CARD_HEIGHT = 280;
 
+// Delay between each node appearing (ms) — matches StrategyFlowCanvas
+const NODE_REVEAL_INTERVAL = 180;
+
 interface UserFlowCardProps {
   flow: Partial<UserFlow>;
   flowData: FlowData | null;
@@ -62,6 +65,35 @@ export function UserFlowCard({ flow, flowData, personas, x, y, onMove }: UserFlo
 
   const steps = useMemo(() => flow.steps ?? [], [flow.steps]);
   const personaNames = useMemo(() => flow.personaNames ?? [], [flow.personaNames]);
+
+  // Progressive node reveal animation
+  const [visibleCount, setVisibleCount] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    setVisibleCount(0);
+
+    if (steps.length === 0) return;
+
+    const startDelay = setTimeout(() => {
+      setVisibleCount(1);
+
+      timerRef.current = setInterval(() => {
+        setVisibleCount((prev) => {
+          const next = prev + 1;
+          if (next >= steps.length) {
+            if (timerRef.current) clearInterval(timerRef.current);
+          }
+          return next;
+        });
+      }, NODE_REVEAL_INTERVAL);
+    }, 100);
+
+    return () => {
+      clearTimeout(startDelay);
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [steps.length]);
 
   // Compute dynamic card width
   const cardWidth = useMemo(
@@ -133,6 +165,12 @@ export function UserFlowCard({ flow, flowData, personas, x, y, onMove }: UserFlo
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
     >
+      <style>{`
+        @keyframes userFlowNodeReveal {
+          from { opacity: 0; transform: scale(0.85) translateY(8px); }
+          to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+      `}</style>
       <div className="bg-white/90 backdrop-blur-sm border border-neutral-200/60 shadow-lg rounded-2xl overflow-hidden">
         {/* Header: JTBD + persona badges */}
         <div className="px-5 pt-4 pb-3">
@@ -198,6 +236,7 @@ export function UserFlowCard({ flow, flowData, personas, x, y, onMove }: UserFlo
             {/* Connection lines between nodes */}
             {nodePositions.map((pos, i) => {
               if (i === 0) return null;
+              if (i >= visibleCount) return null;
               const prev = nodePositions[i - 1];
               const x1 = prev.x + NODE_W;
               const y1 = NODE_H / 2;
@@ -227,6 +266,8 @@ export function UserFlowCard({ flow, flowData, personas, x, y, onMove }: UserFlo
 
           {/* Nodes + action annotations */}
           {steps.map((step, i) => {
+            if (i >= visibleCount) return null;
+
             const pos = nodePositions[i];
             const node = resolvedNodes[i];
             const nodeType = node?.type ?? "page";
@@ -238,7 +279,12 @@ export function UserFlowCard({ flow, flowData, personas, x, y, onMove }: UserFlo
               <div
                 key={`${step.nodeId}-${i}`}
                 className="absolute"
-                style={{ left: pos.x, top: 0, width: NODE_W }}
+                style={{
+                  left: pos.x,
+                  top: 0,
+                  width: NODE_W,
+                  animation: "userFlowNodeReveal 0.3s ease-out both",
+                }}
               >
                 {/* Node box */}
                 <div

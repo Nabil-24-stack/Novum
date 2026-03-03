@@ -74,6 +74,7 @@ export const useProductBrainStore = create<ProductBrainState>((set, get) => ({
           const effectivePageId = c.pageId || p.pageId;
           const isOrphan =
             !validPageSet.has(effectivePageId) ||
+            !Array.isArray(c.jtbdIndices) || !Array.isArray(c.personaNames) ||
             c.jtbdIndices.some((i) => i >= validJtbdCount) ||
             c.personaNames.some((n) => !validNameSet.has(n));
           if (isOrphan) removedCount++;
