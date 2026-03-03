@@ -195,6 +195,8 @@ export default function ProjectEditor() {
             setInitialInput(message);
             setAutoSubmit(true);
           }
+          // New project: float the chat centered on canvas during hero/questioning phase
+          setChatMode("floating");
         }
       } catch (err) {
         console.error("Failed to load project:", err);

@@ -16,7 +16,7 @@ export function findConnectionsForElement(
 ): DecisionConnection[] {
   // Try to find the page by pageId first
   if (pageId) {
-    const page = brain.pages.find((p) => p.pageId === pageId);
+    const page = (brain.pages ?? []).find((p) => p.pageId === pageId);
     if (page) {
       // Try fileName match within this page
       const byFile = page.connections.filter(
@@ -28,14 +28,15 @@ export function findConnectionsForElement(
   }
 
   // No pageId or page not found — search all pages by fileName
-  const byFile = brain.pages.flatMap((p) =>
+  const pages = brain.pages ?? [];
+  const byFile = pages.flatMap((p) =>
     p.connections.filter((c) => c.sourceLocation?.fileName === fileName)
   );
   if (byFile.length > 0) return byFile;
 
   // Last resort: try matching fileName against page-level file pattern
   // e.g., fileName "/pages/Dashboard.tsx" → pageId "dashboard"
-  for (const page of brain.pages) {
+  for (const page of pages) {
     const pageFileName = `/pages/${page.pageName}.tsx`;
     if (fileName === pageFileName || fileName === `/pages/${page.pageId}.tsx`) {
       return page.connections;
@@ -55,7 +56,7 @@ export function findConnectionsByStrategyIds(
   strategyIds: string[]
 ): DecisionConnection[] {
   const idSet = new Set(strategyIds);
-  return brain.pages.flatMap((p) =>
+  return (brain.pages ?? []).flatMap((p) =>
     p.connections.filter((c) => idSet.has(c.id))
   );
 }

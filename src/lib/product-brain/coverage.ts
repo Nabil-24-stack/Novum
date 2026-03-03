@@ -23,7 +23,7 @@ export function computeCoverage(
 ): CoverageSummary {
   // Flatten connections, carrying the parent page's pageId onto each connection
   // (the AI JSON has pageId at the PageDecisions level, not per-connection)
-  const allConnections = brain.pages.flatMap((p) =>
+  const allConnections = (brain.pages ?? []).flatMap((p) =>
     p.connections.map((c) => ({ ...c, pageId: c.pageId || p.pageId }))
   );
 

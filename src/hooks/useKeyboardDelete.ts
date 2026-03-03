@@ -105,7 +105,7 @@ export function useKeyboardDelete({
       const brainData = useProductBrainStore.getState().brainData;
       if (brainData) {
         const strategyIdSet = new Set(currentElement.strategyIds);
-        const linkedConnections: DecisionConnection[] = brainData.pages.flatMap((p) =>
+        const linkedConnections: DecisionConnection[] = (brainData.pages ?? []).flatMap((p) =>
           p.connections.filter((c) => strategyIdSet.has(c.id))
         );
 
