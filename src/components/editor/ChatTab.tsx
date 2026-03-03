@@ -987,6 +987,8 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   const docFileInputRef = useRef<HTMLInputElement>(null);
   const completedPages = useStrategyStore((s) => s.completedPages);
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
+  const isJourneyMapContinuing = useStrategyStore((s) => s.isJourneyMapContinuing);
+  const journeyMapContinueAttempts = useStrategyStore((s) => s.journeyMapContinueAttempts);
   const parallelMode = useStreamingStore((s) => s.parallelMode);
   const pageBuilds = useStreamingStore((s) => s.pageBuilds);
   const annotationEvaluation = useStreamingStore((s) => s.annotationEvaluation);
@@ -1359,7 +1361,21 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   useEffect(() => {
     if (!isLoading) {
       const store = useStrategyStore.getState();
-      if (store.streamingJourneyMaps && store.journeyMapData) {
+      if (store.streamingJourneyMaps && store.isJourneyMapContinuing && store.journeyMapData) {
+        // Continuation was truncated — merge what we got
+        const viable = store.streamingJourneyMaps.filter(
+          (m): m is JourneyMapData => !!(m.personaName && m.stages && m.stages.length > 0)
+        );
+        if (viable.length > 0) {
+          const existingNames = new Set(store.journeyMapData.map((jm) => jm.personaName));
+          const newMaps = viable.filter((jm) => !existingNames.has(jm.personaName));
+          if (newMaps.length > 0) {
+            store.setJourneyMapData([...store.journeyMapData, ...newMaps]);
+          }
+        }
+        store.setStreamingJourneyMaps(null);
+        store.setIsJourneyMapContinuing(false);
+      } else if (store.streamingJourneyMaps && store.journeyMapData) {
         store.setStreamingJourneyMaps(null);
       } else if (store.streamingJourneyMaps && !store.journeyMapData) {
         const viable = store.streamingJourneyMaps.filter(
@@ -1393,6 +1409,64 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
       useStrategyStore.getState().setStreamingJourneyMaps(partialMaps);
     }
   }, [messages, isLoading]);
+
+  // --- Auto-continue: detect incomplete journey maps and request missing ones ---
+  useEffect(() => {
+    if (isLoading) return;
+    if (strategyPhase !== "problem-overview") return;
+    if (!personaData || !journeyMapData) return;
+    if (isJourneyMapContinuing) return;
+
+    const store = useStrategyStore.getState();
+    if (store.journeyMapContinueAttempts >= 2) return;
+
+    // Check completeness: do we have a journey map for every persona?
+    const coveredNames = new Set(journeyMapData.map((jm) => jm.personaName));
+    const missingPersonas = personaData.filter((p) => !coveredNames.has(p.name));
+
+    if (missingPersonas.length === 0) {
+      // All personas covered — reset attempt counter
+      if (store.journeyMapContinueAttempts > 0) {
+        store.setJourneyMapContinueAttempts(0);
+      }
+      return;
+    }
+
+    console.log(`[Journey Map Auto-Continue] Missing maps for: ${missingPersonas.map(p => p.name).join(", ")}. Attempt ${store.journeyMapContinueAttempts + 1}/2`);
+
+    store.setIsJourneyMapContinuing(true);
+    store.setJourneyMapContinueAttempts(store.journeyMapContinueAttempts + 1);
+
+    // Build context for continuation
+    const parts: string[] = [];
+    if (store.manifestoData) {
+      parts.push(`## Current Overview\n\n${JSON.stringify(store.manifestoData, null, 2)}`);
+    }
+    if (store.personaData) {
+      parts.push(`## All Personas\n\n${JSON.stringify(store.personaData, null, 2)}`);
+    }
+    parts.push(`## Already Generated Journey Maps\n\n${JSON.stringify(journeyMapData, null, 2)}`);
+
+    const missingNames = missingPersonas.map((p) => p.name);
+    const vfsContext = parts.join("\n\n");
+
+    const timer = setTimeout(() => {
+      sendMessage(
+        {
+          text: `The journey maps are incomplete. You generated maps for ${coveredNames.size} out of ${personaData.length} personas. Please generate ONLY the missing journey maps for: ${missingNames.join(", ")}. Output them as a single \`\`\`json type="journey-maps"\`\`\` block containing ONLY the missing maps (do NOT repeat the ones already generated).`,
+        },
+        {
+          body: {
+            vfsContext,
+            modelId: selectedModel,
+            strategyPhase: "problem-overview",
+          },
+        }
+      );
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [isLoading, strategyPhase, personaData, journeyMapData, isJourneyMapContinuing, sendMessage, selectedModel]);
 
   // --- Stream partial idea data to the canvas in real-time ---
   useEffect(() => {
@@ -1717,7 +1791,16 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
           try {
             const parsed = JSON.parse(match[1]);
             if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].personaName) {
-              useStrategyStore.getState().setJourneyMapData(parsed);
+              const store = useStrategyStore.getState();
+              if (store.isJourneyMapContinuing && store.journeyMapData) {
+                // Merge: combine existing maps with newly received maps
+                const existingNames = new Set(store.journeyMapData.map((jm: JourneyMapData) => jm.personaName));
+                const newMaps = parsed.filter((jm: JourneyMapData) => !existingNames.has(jm.personaName));
+                store.setJourneyMapData([...store.journeyMapData, ...newMaps]);
+                store.setIsJourneyMapContinuing(false);
+              } else {
+                store.setJourneyMapData(parsed);
+              }
             }
           } catch (e) {
             console.warn("[Strategy] Failed to parse journey-maps JSON:", e);
@@ -2575,8 +2658,18 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           );
         })}
 
+        {/* Auto-continuing journey maps indicator */}
+        {strategyPhase === "problem-overview" && isJourneyMapContinuing && (
+          <div className="flex items-center justify-center gap-2 py-3">
+            <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+            <span className="text-sm text-neutral-600">
+              Completing journey maps ({journeyMapData?.length || 0}/{personaData?.length || 0} personas)...
+            </span>
+          </div>
+        )}
+
         {/* Strategy phase approve + discuss more buttons */}
-        {strategyPhase === "problem-overview" && manifestoData && personaData && journeyMapData && !isLoading && !isDeepDive && (
+        {strategyPhase === "problem-overview" && manifestoData && personaData && journeyMapData && !isLoading && !isDeepDive && !isJourneyMapContinuing && (journeyMapData.length >= personaData.length || journeyMapContinueAttempts >= 2) && (
           <div className="flex flex-col items-center gap-2 pt-2">
             <button
               onClick={() => {

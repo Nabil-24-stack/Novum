@@ -20,7 +20,7 @@ function getModel(modelId: ModelId) {
   }
 }
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const SYSTEM_PROMPT = `You are an expert Product Designer and Senior Frontend Architect building high-quality, code-first UI.
 Your goal is to create "dribbble-quality" web applications that look polished, spacious, and professional while maintaining rock-solid code structure.

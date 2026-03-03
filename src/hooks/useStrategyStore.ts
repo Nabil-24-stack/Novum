@@ -125,6 +125,10 @@ interface StrategyState {
   // Flag: strategy artifacts were updated after pages were already built (triggers re-evaluation prompt)
   strategyUpdatedAfterBuild: boolean;
 
+  // Journey map auto-continuation (for incomplete multi-persona generations)
+  journeyMapContinueAttempts: number;
+  isJourneyMapContinuing: boolean;
+
   // Actions
   setPhase: (phase: StrategyPhase) => void;
   setUserPrompt: (prompt: string) => void;
@@ -148,6 +152,8 @@ interface StrategyState {
   setUserFlowsData: (data: UserFlow[]) => void;
   setStreamingUserFlows: (data: Partial<UserFlow>[] | null) => void;
   setStrategyUpdatedAfterBuild: (v: boolean) => void;
+  setJourneyMapContinueAttempts: (n: number) => void;
+  setIsJourneyMapContinuing: (v: boolean) => void;
   hydrate: (data: Partial<typeof initialState>) => void;
   reset: () => void;
 }
@@ -175,6 +181,8 @@ const initialState = {
   userFlowsData: null as UserFlow[] | null,
   streamingUserFlows: null as Partial<UserFlow>[] | null,
   strategyUpdatedAfterBuild: false,
+  journeyMapContinueAttempts: 0,
+  isJourneyMapContinuing: false,
 };
 
 export const useStrategyStore = create<StrategyState>((set, get) => ({
@@ -193,7 +201,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
 
   setPersonaData: (data) => {
     const afterBuild = get().completedPages.length > 0;
-    set({ personaData: data, streamingPersonas: null, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+    set({ personaData: data, streamingPersonas: null, journeyMapContinueAttempts: 0, isJourneyMapContinuing: false, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
   },
 
   setStreamingPersonas: (data) => set({ streamingPersonas: data }),
@@ -272,6 +280,10 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   setStreamingUserFlows: (data) => set({ streamingUserFlows: data }),
 
   setStrategyUpdatedAfterBuild: (v) => set({ strategyUpdatedAfterBuild: v }),
+
+  setJourneyMapContinueAttempts: (n) => set({ journeyMapContinueAttempts: n }),
+
+  setIsJourneyMapContinuing: (v) => set({ isJourneyMapContinuing: v }),
 
   hydrate: (data: Partial<typeof initialState>) => set({
     ...initialState,
