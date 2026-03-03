@@ -1018,6 +1018,24 @@ export default function ProjectEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [centerOnPageId, nodePositions.size]);
 
+  // --- Auto-center on newly completed pages during building phase ---
+  const prevCompletedPagesRef = useRef<string[]>([]);
+  useEffect(() => {
+    if (strategyPhase !== "building") {
+      prevCompletedPagesRef.current = [];
+      return;
+    }
+    const prev = prevCompletedPagesRef.current;
+    const current = completedPages;
+    const newlyCompleted = current.filter(id => !prev.includes(id));
+    prevCompletedPagesRef.current = current;
+
+    if (newlyCompleted.length > 0) {
+      // Center on the most recently completed page
+      setCenterOnPageId(newlyCompleted[newlyCompleted.length - 1]);
+    }
+  }, [strategyPhase, completedPages]);
+
   // --- Node drag handler (updates position in real-time) ---
   const handleNodeDrag = useCallback((nodeId: string, deltaX: number, deltaY: number) => {
     setNodePositions((prev) => {
@@ -1305,7 +1323,10 @@ export default function ProjectEditor() {
   // --- Strategy Mode Handlers ---
 
   const handleHeroSubmit = useCallback(() => {
-    // Phase transition already handled by ChatTab + strategy store
+    // Dock the chat when the user submits their first message (hero → problem-overview).
+    // This switches from floating chat viewport math (which produces extreme zoom-out)
+    // to the working calculateFitAllViewport path for centering strategy artifacts.
+    setChatMode("docked");
   }, []);
 
   // Document upload handler (for InsightsCard "Upload More" and hidden input)
@@ -1527,6 +1548,11 @@ export default function ProjectEditor() {
       return () => clearTimeout(timer);
     } else {
       const target = calculateFitAllViewport(focusRects, screenW, screenH);
+      // Nudge content rightward when right panel is visible to visually center
+      // relative to the full window (compensate for panel's visual weight)
+      if (showRightPanel && isEarlyStrategyPhase) {
+        target.x += 40;
+      }
       cancelViewportAnimRef.current = animateViewport(viewportRef.current, target, setViewport, { duration: 400 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
