@@ -836,6 +836,10 @@ export default function ProjectEditor() {
   }, [canvasTool.activeTool, inspection.inspectionMode, inspection.setInspectionMode]);
 
   // --- Container dimensions ResizeObserver ---
+  // Depends on isProjectLoading because the canvas wrapper div is not rendered
+  // during the loading phase (early return). Without this dependency, the effect
+  // runs once on mount when canvasWrapperRef.current is null and never re-runs,
+  // leaving containerDimensions stuck at the initial {800, 600} default.
   useEffect(() => {
     const container = canvasWrapperRef.current;
     if (!container) return;
@@ -853,7 +857,7 @@ export default function ProjectEditor() {
     resizeObserver.observe(container);
 
     return () => resizeObserver.disconnect();
-  }, []);
+  }, [isProjectLoading]);
 
   // --- Prototype toggle: expands active frame to fill canvas (or collapses back to flow) ---
   const handlePrototypeToggle = useCallback(() => {

@@ -6,6 +6,8 @@ import type { PageBuildState } from "@/hooks/useStreamingStore";
 interface BuildProgressCardsProps {
   pageBuilds: Record<string, PageBuildState>;
   pageNames: Record<string, { name: string; route: string }>;
+  buildPhase: "idle" | "building";
+  foundationPageId: string | null;
   onRetry: (pageId: string) => void;
   onRetryVerification: (pageId: string) => void;
   onRetryAllFailed: () => void;
@@ -14,6 +16,8 @@ interface BuildProgressCardsProps {
 export function BuildProgressCards({
   pageBuilds,
   pageNames,
+  buildPhase,
+  foundationPageId,
   onRetry,
   onRetryVerification,
   onRetryAllFailed,
@@ -31,9 +35,20 @@ export function BuildProgressCards({
 
   return (
     <div className="flex flex-col gap-2">
+      {/* Phase indicator */}
+      {buildPhase === "building" && (
+        <div className="text-xs text-neutral-500 px-1 flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+            Building pages sequentially...
+          </span>
+        </div>
+      )}
+
       {/* Page status cards */}
       {entries.map(([pageId, build]) => {
         const info = pageNames[pageId] || { name: pageId, route: `/${pageId}` };
+        const isFoundation = pageId === foundationPageId;
         return (
           <div
             key={pageId}
@@ -77,6 +92,11 @@ export function BuildProgressCards({
                 <span className="text-sm font-medium text-neutral-900 truncate">
                   {info.name}
                 </span>
+                {isFoundation && (
+                  <span className="text-[10px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                    Foundation
+                  </span>
+                )}
                 <span className="text-xs text-neutral-500 font-mono">
                   {info.route}
                 </span>
@@ -84,6 +104,11 @@ export function BuildProgressCards({
               {build.status === "streaming" && build.currentFile && (
                 <span className="text-xs text-blue-600 font-mono truncate block">
                   {build.currentFile.path}
+                </span>
+              )}
+              {build.status === "pending" && buildPhase === "building" && (
+                <span className="text-xs text-neutral-400">
+                  Waiting...
                 </span>
               )}
               {build.status === "completed" && isVerifying(build) && (
@@ -150,7 +175,7 @@ export function BuildProgressCards({
           {!allDone ? (
             <span className="flex items-center gap-2">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Building {totalCount} pages...
+              Building pages...
               <span className="text-neutral-400">
                 ({completedCount}/{totalCount})
               </span>

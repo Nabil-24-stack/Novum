@@ -34,6 +34,8 @@ interface StreamingState {
   // --- Parallel-build mode ---
   parallelMode: boolean;
   pageBuilds: Record<string, PageBuildState>;
+  buildPhase: "idle" | "building";
+  foundationPageId: string | null;
 
   startParallelStreaming: (pageIds: string[]) => void;
   updatePageBuild: (pageId: string, update: Partial<PageBuildState>) => void;
@@ -120,6 +122,8 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
   // --- Parallel-build mode ---
   parallelMode: false,
   pageBuilds: {},
+  buildPhase: "idle",
+  foundationPageId: null,
 
   startParallelStreaming: (pageIds) => {
     const builds: Record<string, PageBuildState> = {};
@@ -137,6 +141,8 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
     set({
       parallelMode: true,
       pageBuilds: builds,
+      buildPhase: "building",
+      foundationPageId: pageIds[0] || null,
       annotationEvaluation: { status: "idle", connectionCount: 0 },
       // Also set isStreaming so overlays know something is happening
       isStreaming: true,
@@ -218,6 +224,8 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
     set({
       parallelMode: false,
       pageBuilds: {},
+      buildPhase: "idle",
+      foundationPageId: null,
       isStreaming: false,
       currentFile: null,
       targetPageId: null,

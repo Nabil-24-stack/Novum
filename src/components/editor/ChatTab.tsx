@@ -991,6 +991,8 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   const journeyMapContinueAttempts = useStrategyStore((s) => s.journeyMapContinueAttempts);
   const parallelMode = useStreamingStore((s) => s.parallelMode);
   const pageBuilds = useStreamingStore((s) => s.pageBuilds);
+  const buildPhase = useStreamingStore((s) => s.buildPhase);
+  const foundationPageId = useStreamingStore((s) => s.foundationPageId);
   const annotationEvaluation = useStreamingStore((s) => s.annotationEvaluation);
 
   // Parallel build orchestrator
@@ -2830,10 +2832,11 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         {/* Parallel build progress cards */}
         {strategyPhase === "building" && parallelMode && (
           <div className="px-2 py-3">
-            <div className="text-xs text-neutral-500 mb-2 px-1">Building all pages in parallel...</div>
             <BuildProgressCards
               pageBuilds={pageBuilds}
               pageNames={parallelPageNamesRef.current}
+              buildPhase={buildPhase}
+              foundationPageId={foundationPageId}
               onRetry={(pageId) => {
                 if (parallelBuildConfigRef.current) {
                   parallelBuild.retryPage(

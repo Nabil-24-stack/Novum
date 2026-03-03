@@ -189,7 +189,7 @@ export function useParallelBuild({
       });
 
       if (!response.ok) {
-        console.warn("[ParallelBuild] Annotation evaluation failed:", response.status);
+        console.warn("[Build] Annotation evaluation failed:", response.status);
         useStreamingStore.getState().setAnnotationError("Evaluation request failed");
         return;
       }
@@ -212,7 +212,7 @@ export function useParallelBuild({
         useStreamingStore.getState().setAnnotationDone(totalConnections);
       }
     } catch (err) {
-      console.warn("[ParallelBuild] Annotation evaluation error:", err);
+      console.warn("[Build] Annotation evaluation error:", err);
       useStreamingStore.getState().setAnnotationError("Could not evaluate annotations");
     } finally {
       // Auto-complete: transition to "complete" phase after evaluation finishes (or errors)
@@ -237,54 +237,238 @@ export function useParallelBuild({
     }
   }, [evaluateAnnotations]);
 
-  const startBuild = useCallback(
-    (pages: PageBuildConfig[], sharedContext: SharedContext, modelId: string) => {
-      modelIdRef.current = modelId;
-      allPagesRef.current = pages;
-      sharedContextRef.current = sharedContext;
-      evaluationTriggeredRef.current = false;
-      const pageIds = pages.map((p) => p.pageId);
+  // Map a file path like "/pages/Dashboard.tsx" to the matching PageBuildConfig
+  const findPageForPath = useCallback((filePath: string): PageBuildConfig | undefined => {
+    const match = filePath.match(/^\/pages\/([^/]+)\.tsx$/);
+    if (!match) return undefined;
+    const componentName = match[1];
+    return allPagesRef.current.find((p) => p.componentName === componentName);
+  }, []);
 
-      // Pre-add common dependencies to /package.json so pages can import them
-      try {
-        const pkgRaw = files["/package.json"];
-        const pkg = pkgRaw ? JSON.parse(pkgRaw) : { name: "novum-app", version: "1.0.0", dependencies: {} };
-        let changed = false;
-        const commonDeps: Record<string, string> = {
-          "lucide-react": "^0.460.0",
-          "recharts": "^2.12.0",
-          "date-fns": "^3.6.0",
-        };
-        for (const [dep, ver] of Object.entries(commonDeps)) {
-          if (!pkg.dependencies[dep]) {
-            pkg.dependencies[dep] = ver;
-            changed = true;
+  // Build verification callbacks for a given page
+  const makeVerificationCallbacks = useCallback((pageId: string): VerificationStateCallbacks => ({
+    startVerification: () =>
+      useStreamingStore.getState().updatePageVerification(pageId, "capturing", { attempt: 1 }),
+    setCapturing: () =>
+      useStreamingStore.getState().updatePageVerification(pageId, "capturing"),
+    setReviewing: () =>
+      useStreamingStore.getState().updatePageVerification(pageId, "reviewing"),
+    setFixing: (issues) =>
+      useStreamingStore.getState().updatePageVerification(pageId, "fixing", {
+        attempt: (useStreamingStore.getState().pageBuilds[pageId]?.verificationAttempt ?? 0) + 1,
+        issues,
+      }),
+    setPassed: () =>
+      useStreamingStore.getState().updatePageVerification(pageId, "passed"),
+    setFailed: (issues) =>
+      useStreamingStore.getState().updatePageVerification(pageId, "failed", { issues }),
+    reset: () =>
+      useStreamingStore.getState().updatePageVerification(pageId, "idle", { attempt: 0, issues: [] }),
+    addLog: (message) =>
+      useStreamingStore.getState().addPageVerificationLog(pageId, message),
+  }), []);
+
+  // Run verification for a single page
+  const verifyPage = async (page: PageBuildConfig, signal: AbortSignal) => {
+    const completedFilePaths = useStreamingStore.getState().pageBuilds[page.pageId]?.completedFilePaths || [];
+
+    // Build latest files map — `files` is a stale React closure, so
+    // we must read directly from the VFS store via getLatestFile.
+    const latestFiles: Record<string, string> = { ...files };
+    for (const fp of completedFilePaths) {
+      const latest = getLatestFile(fp);
+      if (latest) latestFiles[fp] = latest;
+    }
+
+    try {
+      const result = await runVerificationLoop({
+        completedFiles: completedFilePaths,
+        allFiles: latestFiles,
+        writeFile,
+        modelId: modelIdRef.current,
+        pageId: page.pageId,
+        signal,
+        stateCallbacks: makeVerificationCallbacks(page.pageId),
+      });
+
+      if (result.status === "fixed") {
+        toast.success(`${page.pageName}: auto-fixed ${result.fixCount} issue${result.fixCount > 1 ? "s" : ""}`);
+      } else if (result.status === "failed") {
+        toast.warning(`${page.pageName}: could not auto-fix all issues`);
+      }
+    } catch {
+      // Verification failed — page is still usable, just not verified
+    }
+  };
+
+  // Process a completed code block: run gatekeeper, write to VFS, update store
+  const processCompletedBlock = (block: { path: string; content: string }) => {
+    const ext = block.path.split(".").pop() || "";
+    let finalContent = block.content;
+    const page = findPageForPath(block.path);
+
+    if (["tsx", "ts", "jsx", "js"].includes(ext)) {
+      const gated = runGatekeeper(block.content, files, block.path);
+      finalContent = gated.code;
+      if (gated.report.hadChanges) {
+        const total =
+          (gated.report.importFixes?.length || 0) +
+          gated.report.colorViolations.length +
+          gated.report.spacingViolations.length +
+          gated.report.layoutViolations.length +
+          gated.report.componentPromotions.length +
+          gated.report.layoutDeclarationAdditions.length;
+        const pageName = page?.pageName || block.path;
+        toast.info(
+          `Gatekeeper (${pageName}): ${total} design system fix${total > 1 ? "es" : ""} applied`
+        );
+      }
+      // Ensure React is in scope for Sandpack's classic JSX transform
+      if (ext === "tsx" || ext === "jsx") {
+        finalContent = ensureReactImport(finalContent);
+      }
+    }
+
+    writeFile(block.path, finalContent);
+
+    // Update page status if this block corresponds to a known page
+    if (page) {
+      const { updatePageBuild, completePageBuild } = useStreamingStore.getState();
+      const current = useStreamingStore.getState().pageBuilds[page.pageId];
+      if (current) {
+        updatePageBuild(page.pageId, {
+          completedFilePaths: [...current.completedFilePaths, block.path],
+        });
+      }
+      completePageBuild(page.pageId);
+      useStrategyStore.getState().addCompletedPage(page.pageId);
+      rebuildAppTsx();
+    }
+  };
+
+  // Single-call sequential build: one API call generates all pages
+  const buildAllPages = async (
+    pages: PageBuildConfig[],
+    sharedContext: SharedContext,
+    signal: AbortSignal,
+    modelId: string,
+  ) => {
+    try {
+      const response = await fetch("/api/build-app", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pages: pages.map((p) => ({
+            pageId: p.pageId,
+            pageName: p.pageName,
+            componentName: p.componentName,
+            pageRoute: p.pageRoute,
+          })),
+          manifestoContext: sharedContext.manifestoContext,
+          personaContext: sharedContext.personaContext,
+          flowContext: sharedContext.flowContext,
+          userFlowContext: sharedContext.userFlowContext || "",
+          modelId,
+        }),
+        signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response body");
+
+      const decoder = new TextDecoder();
+      let fullText = "";
+      const writtenPaths = new Set<string>();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        fullText += chunk;
+
+        // Parse streaming content — returns all completed + current streaming blocks
+        const parsed = parseStreamingContent(fullText);
+
+        // Update current file in store — match to page for status tracking
+        if (parsed.currentFile) {
+          const currentPage = findPageForPath(parsed.currentFile.path);
+          if (currentPage) {
+            const { updatePageBuild } = useStreamingStore.getState();
+            const build = useStreamingStore.getState().pageBuilds[currentPage.pageId];
+            // Only set to streaming if not already completed
+            if (build && build.status !== "completed") {
+              updatePageBuild(currentPage.pageId, {
+                status: "streaming",
+                currentFile: parsed.currentFile,
+              });
+            }
           }
         }
-        if (changed) {
-          writeFile("/package.json", JSON.stringify(pkg, null, 2));
+
+        // Write completed blocks (deduped)
+        for (const block of parsed.completedBlocks) {
+          const dedupKey = block.path + "|" + block.content.length;
+          if (!writtenPaths.has(dedupKey)) {
+            writtenPaths.add(dedupKey);
+            processCompletedBlock(block);
+          }
         }
-      } catch {
-        // Fail-safe: if parsing fails, continue without pre-populating
       }
 
-      // Initialize stores
-      useStreamingStore.getState().startParallelStreaming(pageIds);
-      useStrategyStore.getState().setBuildingPages(pageIds);
+      // Stream ended — flush App.tsx and check completion
+      flushRebuildAppTsx();
+      checkAllPagesComplete();
 
-      // Launch all page builds
+      // Mark any pages that never got a code block as errors
       for (const page of pages) {
-        const controller = new AbortController();
-        abortControllersRef.current.set(page.pageId, controller);
-
-        buildPage(page, sharedContext, controller.signal, modelId);
+        const build = useStreamingStore.getState().pageBuilds[page.pageId];
+        if (build && build.status !== "completed") {
+          useStreamingStore.getState().failPageBuild(
+            page.pageId,
+            "Page was not generated (possible output truncation)"
+          );
+        }
       }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [writeFile, files]
-  );
 
-  const buildPage = async (
+      // Run verification on each completed page
+      if (!signal.aborted) {
+        const completedPages = pages.filter((p) => {
+          const build = useStreamingStore.getState().pageBuilds[p.pageId];
+          return build?.status === "completed";
+        });
+
+        for (const page of completedPages) {
+          if (signal.aborted) break;
+          await verifyPage(page, signal);
+        }
+
+        // Re-check completion after verification (in case all were already complete)
+        checkAllPagesComplete();
+      }
+    } catch (err: unknown) {
+      if (signal.aborted) return;
+      const message = err instanceof Error ? err.message : "Unknown error";
+      console.error("[Build] Failed to build app:", err);
+
+      // Mark all non-completed pages as errored
+      for (const page of pages) {
+        const build = useStreamingStore.getState().pageBuilds[page.pageId];
+        if (build && build.status !== "completed") {
+          useStreamingStore.getState().failPageBuild(page.pageId, message);
+        }
+      }
+    } finally {
+      abortControllersRef.current.delete("__build__");
+    }
+  };
+
+  // Build a single page via /api/build-page (used for retries)
+  const buildSinglePage = async (
     page: PageBuildConfig,
     sharedContext: SharedContext,
     signal: AbortSignal,
@@ -329,26 +513,18 @@ export function useParallelBuild({
         if (done) break;
 
         const chunk = decoder.decode(value, { stream: true });
-
-        // Plain text stream (from toTextStreamResponse)
         fullText += chunk;
 
-        // Parse streaming content
         const parsed = parseStreamingContent(fullText);
 
-        // Update current file in store (for overlay)
         if (parsed.currentFile) {
-          updatePageBuild(page.pageId, {
-            currentFile: parsed.currentFile,
-          });
+          updatePageBuild(page.pageId, { currentFile: parsed.currentFile });
         }
 
-        // Write completed blocks
         for (const block of parsed.completedBlocks) {
           if (!writtenPaths.has(block.path + "|" + block.content.length)) {
             writtenPaths.add(block.path + "|" + block.content.length);
 
-            // Run gatekeeper on code files
             const ext = block.path.split(".").pop() || "";
             let finalContent = block.content;
             if (["tsx", "ts", "jsx", "js"].includes(ext)) {
@@ -366,7 +542,6 @@ export function useParallelBuild({
                   `Gatekeeper (${page.pageName}): ${total} design system fix${total > 1 ? "es" : ""} applied`
                 );
               }
-              // Ensure React is in scope for Sandpack's classic JSX transform
               if (ext === "tsx" || ext === "jsx") {
                 finalContent = ensureReactImport(finalContent);
               }
@@ -374,7 +549,6 @@ export function useParallelBuild({
 
             writeFile(block.path, finalContent);
 
-            // Update completed file paths
             const current = useStreamingStore.getState().pageBuilds[page.pageId];
             if (current) {
               updatePageBuild(page.pageId, {
@@ -385,80 +559,69 @@ export function useParallelBuild({
         }
       }
 
-      // Mark as completed + rebuild App.tsx so this page is renderable
       completePageBuild(page.pageId);
       useStrategyStore.getState().addCompletedPage(page.pageId);
       rebuildAppTsx();
-
-      // Check if all pages are done to trigger annotation evaluation
       checkAllPagesComplete();
-
-      // Flush any pending App.tsx rebuild so Sandpack has the latest routes
       flushRebuildAppTsx();
 
-      // Run screenshot verification loop for this page
+      // Run verification
       if (!signal.aborted) {
-        const completedFilePaths = useStreamingStore.getState().pageBuilds[page.pageId]?.completedFilePaths || [];
-
-        // Build latest files map — `files` is a stale React closure, so
-        // we must read directly from the VFS store via getLatestFile.
-        const latestFiles: Record<string, string> = { ...files };
-        for (const fp of completedFilePaths) {
-          const latest = getLatestFile(fp);
-          if (latest) latestFiles[fp] = latest;
-        }
-
-        const pageCallbacks: VerificationStateCallbacks = {
-          startVerification: () =>
-            useStreamingStore.getState().updatePageVerification(page.pageId, "capturing", { attempt: 1 }),
-          setCapturing: () =>
-            useStreamingStore.getState().updatePageVerification(page.pageId, "capturing"),
-          setReviewing: () =>
-            useStreamingStore.getState().updatePageVerification(page.pageId, "reviewing"),
-          setFixing: (issues) =>
-            useStreamingStore.getState().updatePageVerification(page.pageId, "fixing", {
-              attempt: (useStreamingStore.getState().pageBuilds[page.pageId]?.verificationAttempt ?? 0) + 1,
-              issues,
-            }),
-          setPassed: () =>
-            useStreamingStore.getState().updatePageVerification(page.pageId, "passed"),
-          setFailed: (issues) =>
-            useStreamingStore.getState().updatePageVerification(page.pageId, "failed", { issues }),
-          reset: () =>
-            useStreamingStore.getState().updatePageVerification(page.pageId, "idle", { attempt: 0, issues: [] }),
-          addLog: (message) =>
-            useStreamingStore.getState().addPageVerificationLog(page.pageId, message),
-        };
-
-        try {
-          const result = await runVerificationLoop({
-            completedFiles: completedFilePaths,
-            allFiles: latestFiles,
-            writeFile,
-            modelId,
-            pageId: page.pageId,
-            signal,
-            stateCallbacks: pageCallbacks,
-          });
-
-          if (result.status === "fixed") {
-            toast.success(`${page.pageName}: auto-fixed ${result.fixCount} issue${result.fixCount > 1 ? "s" : ""}`);
-          } else if (result.status === "failed") {
-            toast.warning(`${page.pageName}: could not auto-fix all issues`);
-          }
-        } catch {
-          // Verification failed — page is still usable, just not verified
-        }
+        await verifyPage(page, signal);
       }
     } catch (err: unknown) {
-      if (signal.aborted) return; // Don't report aborted fetches as errors
+      if (signal.aborted) return;
       const message = err instanceof Error ? err.message : "Unknown error";
       failPageBuild(page.pageId, message);
-      console.error(`[ParallelBuild] Failed to build ${page.pageName}:`, err);
+      console.error(`[Build] Failed to build ${page.pageName}:`, err);
     } finally {
       abortControllersRef.current.delete(page.pageId);
     }
   };
+
+  const startBuild = useCallback(
+    (pages: PageBuildConfig[], sharedContext: SharedContext, modelId: string) => {
+      modelIdRef.current = modelId;
+      allPagesRef.current = pages;
+      sharedContextRef.current = sharedContext;
+      evaluationTriggeredRef.current = false;
+      const pageIds = pages.map((p) => p.pageId);
+
+      // Pre-add common dependencies to /package.json so pages can import them
+      try {
+        const pkgRaw = files["/package.json"];
+        const pkg = pkgRaw ? JSON.parse(pkgRaw) : { name: "novum-app", version: "1.0.0", dependencies: {} };
+        let changed = false;
+        const commonDeps: Record<string, string> = {
+          "lucide-react": "^0.460.0",
+          "recharts": "^2.12.0",
+          "date-fns": "^3.6.0",
+        };
+        for (const [dep, ver] of Object.entries(commonDeps)) {
+          if (!pkg.dependencies[dep]) {
+            pkg.dependencies[dep] = ver;
+            changed = true;
+          }
+        }
+        if (changed) {
+          writeFile("/package.json", JSON.stringify(pkg, null, 2));
+        }
+      } catch {
+        // Fail-safe: if parsing fails, continue without pre-populating
+      }
+
+      // Initialize stores — all pages visible immediately
+      useStreamingStore.getState().startParallelStreaming(pageIds);
+      useStrategyStore.getState().setBuildingPages(pageIds);
+
+      // Single API call to build all pages sequentially
+      const controller = new AbortController();
+      abortControllersRef.current.set("__build__", controller);
+      buildAllPages(pages, sharedContext, controller.signal, modelId);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [writeFile, files]
+  );
 
   const retryPage = useCallback(
     (pageId: string, pages: PageBuildConfig[], sharedContext: SharedContext) => {
@@ -476,9 +639,11 @@ export function useParallelBuild({
         verificationStatus: "idle",
         verificationAttempt: 0,
         verificationIssues: [],
+        verificationLog: [],
       });
 
-      buildPage(page, sharedContext, controller.signal, modelIdRef.current);
+      // Retry individual page via /api/build-page
+      buildSinglePage(page, sharedContext, controller.signal, modelIdRef.current);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [writeFile, files]
@@ -501,28 +666,6 @@ export function useParallelBuild({
         if (latest) latestFiles[filePath] = latest;
       }
 
-      const pageCallbacks: VerificationStateCallbacks = {
-        startVerification: () =>
-          useStreamingStore.getState().updatePageVerification(pageId, "capturing", { attempt: 1 }),
-        setCapturing: () =>
-          useStreamingStore.getState().updatePageVerification(pageId, "capturing"),
-        setReviewing: () =>
-          useStreamingStore.getState().updatePageVerification(pageId, "reviewing"),
-        setFixing: (issues) =>
-          useStreamingStore.getState().updatePageVerification(pageId, "fixing", {
-            attempt: (useStreamingStore.getState().pageBuilds[pageId]?.verificationAttempt ?? 0) + 1,
-            issues,
-          }),
-        setPassed: () =>
-          useStreamingStore.getState().updatePageVerification(pageId, "passed"),
-        setFailed: (issues) =>
-          useStreamingStore.getState().updatePageVerification(pageId, "failed", { issues }),
-        reset: () =>
-          useStreamingStore.getState().updatePageVerification(pageId, "idle", { attempt: 0, issues: [] }),
-        addLog: (message) =>
-          useStreamingStore.getState().addPageVerificationLog(pageId, message),
-      };
-
       runVerificationLoop({
         completedFiles: completedFilePaths,
         allFiles: latestFiles,
@@ -530,7 +673,7 @@ export function useParallelBuild({
         modelId: modelIdRef.current,
         pageId,
         signal: controller.signal,
-        stateCallbacks: pageCallbacks,
+        stateCallbacks: makeVerificationCallbacks(pageId),
       }).then((result) => {
         if (result.status === "fixed") {
           toast.success(`Auto-fixed ${result.fixCount} issue${result.fixCount > 1 ? "s" : ""}`);
@@ -543,7 +686,7 @@ export function useParallelBuild({
         abortControllersRef.current.delete(`verify-${pageId}`);
       });
     },
-    [writeFile, files, getLatestFile]
+    [writeFile, files, getLatestFile, makeVerificationCallbacks]
   );
 
   const cancelAll = useCallback(() => {

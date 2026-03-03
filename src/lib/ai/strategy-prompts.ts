@@ -659,6 +659,89 @@ Example:
 \`\`\``;
 }
 
+export function buildSequentialAppPrompt(
+  overviewContext: string,
+  flowContext: string,
+  personaContext: string,
+  pages: { pageId: string; pageName: string; componentName: string; pageRoute: string }[],
+  userFlowContext?: string,
+): string {
+  const userFlowSection = userFlowContext
+    ? `\n\n## USER FLOW REFERENCE\n\nThese user flows show how users navigate through the app. Use the actions listed for each page's node to guide which UI components and interactions to build.\n\n${userFlowContext}`
+    : "";
+
+  const pageList = pages
+    .map((p) => `- **${p.pageName}** (id: "${p.pageId}", route: "${p.pageRoute}") → \`/pages/${p.componentName}.tsx\` with \`export function ${p.componentName}()\``)
+    .join("\n");
+
+  const sectionTaggingExamples = pages.slice(0, 2)
+    .map((p) => `<section data-strategy-id="dc-${p.pageId}-0" className="...">...</section>`)
+    .join("\n");
+
+  return `You are an expert Product Designer and Senior Frontend Architect building a complete multi-page web application based on an approved product strategy.
+
+## PRODUCT CONTEXT
+
+${overviewContext}
+
+${personaContext}
+
+${flowContext}${userFlowSection}
+
+## BUILD INSTRUCTIONS
+
+You are building ALL pages of this application sequentially. Generate each page as a SEPARATE code block, **starting with the home page** (route "/") and proceeding through all remaining pages.
+
+### Pages to Build (in order):
+
+${pageList}
+
+### Output Format
+
+For EACH page, output a code block with the exact file path and export name:
+
+\`\`\`tsx file="/pages/{ComponentName}.tsx"
+import * as React from "react";
+// ... full component code ...
+export function ComponentName() { ... }
+\`\`\`
+
+Output ALL pages sequentially — one code block per page, no conversational text between them.
+
+### Critical Rules
+
+1. **EVERY .tsx file MUST start with \`import * as React from "react";\`** — required for JSX compilation
+2. **As you build later pages, reference and follow the patterns you established in earlier pages** — consistent navigation, layout structure, shared visual patterns
+3. Do NOT recreate navbars, sidebars, headers, or layout wrappers in later pages if you already built them in an earlier page — import shared components from the page that defined them, or define shared layout patterns consistently
+4. Use the JTBD and flow architecture to guide your design decisions
+5. Make every page polished and production-ready — rich content, proper hierarchy, good spacing
+6. Navigation between pages should use \`navigate()\` from \`useRouter()\` (import from \`../lib/router\`)
+7. Use the pre-installed component library (Button, Card, Input, etc.) — do NOT recreate these
+8. Follow named exports only — NEVER use \`export default\`
+9. Use semantic token classes (bg-primary, text-foreground, etc.) — NEVER hardcoded Tailwind colors
+10. Use semantic typography classes: text-h1, text-h2, text-h3, text-h4, text-body, text-body-sm, text-caption
+
+## AVAILABLE PACKAGES (DO NOT ADD OTHERS)
+
+These packages are pre-installed and available for import:
+- \`react\`, \`react-dom\` — React 18
+- \`clsx\`, \`tailwind-merge\` — for cn() utility (import from \`../lib/utils\`)
+- \`lucide-react\` — icons (e.g., \`import { Search, Plus, ArrowRight } from "lucide-react"\`)
+- \`recharts\` — charts (e.g., \`import { LineChart, Line, XAxis, YAxis } from "recharts"\`)
+- \`date-fns\` — date utilities
+
+**CRITICAL:** Do NOT import any package not listed above. Do NOT output a /package.json file. All dependencies are pre-configured.
+
+## SECTION TAGGING (REQUIRED)
+
+Tag up to 8 major UI sections per page with \`data-strategy-id\` attributes. Use the format \`data-strategy-id="dc-{pageId}-N"\` where N is a sequential number starting at 0.
+
+Example:
+\`\`\`tsx
+${sectionTaggingExamples}
+\`\`\``;
+}
+
 export function buildBuildSystemPrompt(overviewContext: string, flowContext: string, personaContext: string, currentPageId?: string, currentPageName?: string, userFlowContext?: string): string {
   const pageInstruction = currentPageId && currentPageName
     ? `You are now building the **${currentPageName}** page (id: "${currentPageId}").`
