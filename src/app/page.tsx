@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Send, Loader2, FileText, Check, LogOut } from "lucide-react";
+import { Send, Loader2, LogOut, X, Info } from "lucide-react";
 import { toast } from "sonner";
 import { useProjects } from "@/hooks/useProjects";
 import { useDocumentStore } from "@/hooks/useDocumentStore";
@@ -140,6 +140,37 @@ export default function Dashboard() {
             onSubmit={handleSubmit}
             className="bg-white rounded-2xl shadow-lg border border-neutral-200 p-4"
           >
+            {/* Document chips */}
+            {(uploadedDocuments.length > 0 || isDocUploading) && (
+              <div className="flex flex-wrap gap-2 mb-2">
+                {uploadedDocuments.map((doc) => (
+                  <span
+                    key={doc.id}
+                    className="inline-flex items-center gap-1.5 bg-neutral-100 text-neutral-600 text-sm rounded-full px-3 py-1"
+                  >
+                    <span className="truncate max-w-[180px]">{doc.name}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        useDocumentStore
+                          .getState()
+                          .setDocuments(uploadedDocuments.filter((d) => d.id !== doc.id))
+                      }
+                      className="text-neutral-400 hover:text-neutral-700 transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </span>
+                ))}
+                {isDocUploading && (
+                  <span className="inline-flex items-center gap-1.5 bg-neutral-100 text-neutral-400 text-sm rounded-full px-3 py-1">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Uploading...
+                  </span>
+                )}
+              </div>
+            )}
+
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -154,60 +185,33 @@ export default function Dashboard() {
               className="w-full resize-none text-neutral-900 placeholder-neutral-400 bg-transparent outline-none text-base"
             />
 
-            {/* Document upload area */}
-            <div className="mt-3 mb-3">
-              {uploadedDocuments.length > 0 ? (
-                <div className="space-y-1.5">
-                  {uploadedDocuments.map((doc) => (
-                    <div key={doc.id} className="flex items-center gap-2 text-sm text-neutral-600 bg-neutral-50 rounded-lg px-3 py-1.5">
-                      <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                      <span className="truncate">{doc.name}</span>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => docFileInputRef.current?.click()}
-                    disabled={isDocUploading}
-                    className="w-full py-1.5 text-xs text-neutral-400 hover:text-blue-500 transition-colors flex items-center justify-center gap-1"
-                  >
-                    {isDocUploading ? (
-                      <><Loader2 className="w-3 h-3 animate-spin" /> Uploading...</>
-                    ) : (
-                      <>+ Add more documents</>
-                    )}
-                  </button>
-                </div>
-              ) : (
+            <input
+              ref={docFileInputRef}
+              type="file"
+              accept=".pdf,.docx"
+              multiple
+              className="hidden"
+              onChange={(e) => handleDocumentUpload(e.target.files)}
+            />
+
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => docFileInputRef.current?.click()}
                   disabled={isDocUploading}
-                  className="w-full py-2.5 border-2 border-dashed border-neutral-200 rounded-xl text-sm text-neutral-400 hover:border-blue-300 hover:text-blue-500 hover:bg-blue-50/30 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                  className="px-3 py-2 border border-neutral-300 rounded-lg text-sm text-neutral-500 hover:border-neutral-400 hover:text-neutral-700 transition-colors disabled:opacity-50"
                 >
-                  {isDocUploading ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /> Extracting text...</>
-                  ) : (
-                    <>
-                      <FileText className="w-4 h-4" />
-                      Upload Interview Transcripts or Notes
-                    </>
-                  )}
+                  Add research docs
                 </button>
-              )}
-              <input
-                ref={docFileInputRef}
-                type="file"
-                accept=".pdf,.docx"
-                multiple
-                className="hidden"
-                onChange={(e) => handleDocumentUpload(e.target.files)}
-              />
-              {uploadedDocuments.length === 0 && (
-                <p className="text-xs text-neutral-400 mt-1 text-center">PDF or DOCX</p>
-              )}
-            </div>
-
-            <div className="flex justify-end">
+                <div className="relative group">
+                  <Info className="w-4 h-4 text-neutral-400 cursor-help" />
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-neutral-900 text-white text-xs rounded-lg w-56 text-center opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity">
+                    Upload any user research documents like interview transcripts or notes to give more context about the problem.
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-neutral-900" />
+                  </div>
+                </div>
+              </div>
               <button
                 type="submit"
                 disabled={!input.trim() || isCreating}
