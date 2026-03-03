@@ -252,16 +252,35 @@ Rules for journey maps:
 
 ## DOCUMENT RE-ANALYSIS (ADDITIONAL UPLOADS)
 
-If the user uploads additional documents after you have already generated artifacts, you MUST immediately regenerate ALL blocks — do NOT ask more questions. Output the full set in order:
+When the user uploads additional documents after artifacts already exist, perform a **SELECTIVE EVALUATION** — not a full regeneration. The existing artifacts are provided in the context under "EXISTING ARTIFACTS". Skip Q&A entirely and output in one response.
 
-1. Updated \`type="insights"\` block (incorporating findings from ALL documents — old and new)
-2. Brief text explaining what new insights emerged from the additional documents
-3. Updated \`type="manifesto"\` block (refined problem statement, JTBD, HMW based on new evidence)
-4. Updated \`type="personas"\` block (updated or new personas reflecting combined document evidence)
-5. Updated \`type="journey-maps"\` block (updated journey maps matching the updated personas)
-6. Updated \`type="user-flows"\` block (map any new JTBDs to persona paths through existing pages — if pages exist, reference their node IDs; if not, use the planned IA node IDs)
+### Step 1: Always regenerate insights
 
-This is a full regeneration — skip Q&A entirely and output everything in one response.
+Output an updated \`type="insights"\` block incorporating findings from ALL documents (old + new). This is mandatory.
+
+### Step 2: Write a change log
+
+In plain text BEFORE any updated blocks, evaluate each existing artifact against the new insights. For each artifact state one of:
+- **Updated** — what changed and why (cite the new evidence)
+- **Unchanged** — briefly confirm it still aligns with the new insights
+
+### Step 3: Selectively output only changed artifact blocks
+
+Compare each existing artifact against the new insights. Only output a block if the artifact genuinely needs updating:
+
+- **Manifesto**: Does the problem statement still hold? Are there new JTBDs or HMW angles revealed by the new documents? If so → output updated \`type="manifesto"\`. If existing manifesto fully captures the problem → omit.
+- **Personas**: Do existing personas still represent distinct jobs-to-be-done? Does a new document reveal an underserved user group? You may add to an existing persona (new pain points, goals) or add a new persona. If existing personas are sufficient → omit.
+- **Journey Maps**: If personas changed → journey maps MUST be updated. If personas are unchanged but new friction points or opportunities emerged → update. Otherwise → omit. Output \`type="journey-maps"\` only if needed.
+- **Key Features**: If key features exist, evaluate whether new insights suggest missing features or reprioritization. If updates needed → output a \`type="features"\` block (format: \`\`\`json type="features" with \`ideaTitle\`, \`features[]\` each having \`name\`, \`description\`, \`priority\`). If existing features still cover the insights → omit.
+- **User Flows**: If JTBDs or personas changed → evaluate whether flows need updating. If so → output \`type="user-flows"\`. Otherwise → omit.
+
+### Rules
+
+- ALWAYS output the \`type="insights"\` block first (mandatory)
+- ALWAYS write the change log explaining your evaluation of each artifact
+- Artifacts you do NOT output remain unchanged in the system
+- When you DO update a block, output the COMPLETE updated version (not a diff)
+- Cascade logic: if manifesto JTBDs change → check personas. If personas change → journey maps MUST update
 
 ## PARTIAL REGENERATION
 

@@ -61,11 +61,9 @@ export function ManifestoCard({ manifestoData, x, y, onMove, jtbdCoverage, cover
     >
       <div className="bg-white/90 backdrop-blur-sm border border-neutral-200/60 shadow-lg rounded-2xl p-8">
         {/* Title */}
-        {hasTitle && (
-          <h2 className="text-2xl font-bold text-neutral-900 mb-6">
-            {manifestoData.title}
-          </h2>
-        )}
+        <h2 className="text-2xl font-bold text-neutral-900 mb-6">
+          Overview
+        </h2>
 
         {/* The Problem */}
         {hasProblem && (
@@ -236,6 +234,7 @@ export function ManifestoCard({ manifestoData, x, y, onMove, jtbdCoverage, cover
 
                     {onAddressGaps && (
                       <button
+                        onPointerDown={(e) => e.stopPropagation()}
                         onClick={onAddressGaps}
                         className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors"
                       >

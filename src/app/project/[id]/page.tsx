@@ -169,6 +169,10 @@ export default function ProjectEditor() {
         // Hydrate product brain
         if (project.product_brain) {
           useProductBrainStore.getState().setBrainData(project.product_brain);
+          // Restore insightsData into document store (persisted under product_brain)
+          if (project.product_brain.insightsData) {
+            useDocumentStore.getState().setInsightsData(project.product_brain.insightsData);
+          }
         }
 
         // Hydrate documents
@@ -663,6 +667,18 @@ export default function ProjectEditor() {
     setIsReEvaluating(false);
   }, [isReEvaluating, manifestoData, personaData, files, flowManifest]);
 
+  // --- Auto re-evaluate annotations after AI writes code ---
+  const reEvaluateRef = useRef(handleReEvaluateAnnotations);
+  reEvaluateRef.current = handleReEvaluateAnnotations;
+
+  const handleAutoReEvaluateAnnotations = useCallback(() => {
+    // Defer by 1s to ensure all VFS writes from code blocks have propagated
+    // through React state so handleReEvaluateAnnotations reads latest files
+    setTimeout(() => {
+      reEvaluateRef.current();
+    }, 1000);
+  }, []);
+
   // --- Unified viewport state (single viewport for both modes) ---
   const viewportRef = useRef<ViewportState>({ x: 0, y: 0, scale: 1 });
   const [viewport, setViewportInternal] = useState<ViewportState>({
@@ -899,6 +915,31 @@ export default function ProjectEditor() {
     onViewportChange: setViewport,
     containerDimensions,
   });
+
+  // --- Recompute flowLayoutOffset on project restore ---
+  // flowLayoutOffset is not persisted; recompute it from strategy card positions
+  // so FlowFrames appear below strategy content (same math as approve-solution-design).
+  useEffect(() => {
+    const needsOffset = strategyPhase === "building" || strategyPhase === "complete";
+    if (!needsOffset) return;
+    if (flowLayoutOffset.x !== 0 || flowLayoutOffset.y !== 0) return;
+    if (groupPositions.size === 0) return;
+    if (flowManifest.pages.length === 0) return;
+
+    const strategyBottomForOffset = Math.max(
+      ...Array.from(groupPositions.entries()).map(([id, pos]) => {
+        const rect = groupRects.find((r) => r.id === id);
+        return pos.y + (rect?.height ?? 0);
+      }),
+      STRATEGY_ORIGIN.y + 500,
+    );
+    const overviewPosForOffset = groupPositions.get("product-overview") ?? STRATEGY_ORIGIN;
+    const flowYOffset = strategyBottomForOffset + 120;
+
+    setFlowLayoutOffset({ x: overviewPosForOffset.x - 50, y: flowYOffset - 50 });
+    setNodePositions(new Map());
+    architecturePositionsRef.current = null;
+  }, [strategyPhase, flowLayoutOffset, groupPositions, groupRects, flowManifest.pages.length, setNodePositions]);
 
   // --- Calculate flow layout when manifest changes ---
   // Preserve existing positions for nodes the user may have dragged;
@@ -1279,11 +1320,23 @@ export default function ProjectEditor() {
     if (validFiles.length === 0) return;
 
     const { toast } = await import("sonner");
+
+    // Deduplicate: skip files that were already uploaded (by name)
+    const existingNames = new Set(useDocumentStore.getState().documents.map((d) => d.name));
+    const newFiles = validFiles.filter((f) => !existingNames.has(f.name));
+    if (newFiles.length === 0) {
+      toast.info("These documents have already been uploaded");
+      return;
+    }
+    if (newFiles.length < validFiles.length) {
+      toast.info(`${validFiles.length - newFiles.length} duplicate${validFiles.length - newFiles.length > 1 ? "s" : ""} skipped`);
+    }
+
     useDocumentStore.getState().setUploading(true);
 
     try {
       const formData = new FormData();
-      validFiles.forEach((f) => formData.append("files", f));
+      newFiles.forEach((f) => formData.append("files", f));
 
       const res = await fetch("/api/extract-document", { method: "POST", body: formData });
       if (!res.ok) throw new Error("Upload failed");
@@ -1299,10 +1352,8 @@ export default function ProjectEditor() {
       useDocumentStore.getState().addDocuments(docs);
       toast.success(`${docs.length} document${docs.length > 1 ? "s" : ""} uploaded`);
 
-      // Trigger re-analysis if insights already exist
-      if (useDocumentStore.getState().insightsData) {
-        useDocumentStore.getState().setPendingReanalysis(true);
-      }
+      // Trigger re-analysis — always trigger after uploading new docs
+      useDocumentStore.getState().setPendingReanalysis(true);
     } catch (err) {
       console.error("[DocumentUpload]", err);
       const { toast: t } = await import("sonner");
@@ -2095,6 +2146,7 @@ export default function ProjectEditor() {
           onMessagesChange={handleMessagesChange}
           initialInput={initialInput}
           autoSubmit={autoSubmit}
+          onBuildingResponseComplete={handleAutoReEvaluateAnnotations}
           onAnnotatedDeleteRequest={setPendingAnnotatedDelete}
         />
 

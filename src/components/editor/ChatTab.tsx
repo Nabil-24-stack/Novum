@@ -60,6 +60,8 @@ interface ChatTabProps {
   initialInput?: string;
   /** Auto-submit on mount after initialInput is set */
   autoSubmit?: boolean;
+  /** Called when an AI response that wrote code files completes — used to auto re-evaluate annotations */
+  onBuildingResponseComplete?: () => void;
 }
 
 // Regex to match code blocks with file attribute
@@ -154,6 +156,66 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
   }
 
   return ctx;
+}
+
+/**
+ * Builds a text summary of all existing strategy artifacts for document re-analysis.
+ * Sent to the AI so it can compare new insights against current artifacts and decide
+ * what needs updating vs. what remains valid.
+ */
+function buildExistingArtifactsContext(): string {
+  const s = useStrategyStore.getState();
+  const docStore = useDocumentStore.getState();
+  const sections: string[] = [];
+
+  // Insights
+  if (docStore.insightsData && docStore.insightsData.insights.length > 0) {
+    sections.push(`### EXISTING INSIGHTS\n\n${docStore.insightsData.insights.map((ins, i) => {
+      const parts = [`${i + 1}. ${ins.insight}`];
+      if (ins.sourceDocument) parts.push(`Source: ${ins.sourceDocument}`);
+      if (ins.quote) parts.push(`Quote: "${ins.quote}"`);
+      if (ins.source) parts.push(`(${ins.source})`);
+      return parts.join(" — ");
+    }).join("\n")}`);
+  }
+
+  // Manifesto
+  if (s.manifestoData) {
+    const m = s.manifestoData;
+    sections.push(`### EXISTING MANIFESTO\n\nTitle: ${m.title}\nProblem Statement: ${m.problemStatement}\nTarget User: ${m.targetUser}\nJTBDs:\n${m.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}\nHMW:\n${m.hmw.map((q, i) => `${i + 1}. ${q}`).join("\n")}`);
+  }
+
+  // Personas
+  if (s.personaData) {
+    sections.push(`### EXISTING PERSONAS\n\n${s.personaData.map((p, i) =>
+      `#### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${p.painPoints.map((pp) => `- ${pp}`).join("\n")}\nQuote: "${p.quote}"`
+    ).join("\n\n")}`);
+  }
+
+  // Journey Maps (abbreviated — stage names only to save tokens)
+  if (s.journeyMapData) {
+    sections.push(`### EXISTING JOURNEY MAPS\n\n${s.journeyMapData.map((jm) =>
+      `#### ${jm.personaName}\nStages: ${jm.stages.map((st) => st.stage).join(" → ")}\nKey pain points: ${jm.stages.flatMap((st) => st.painPoints).slice(0, 5).join("; ")}`
+    ).join("\n\n")}`);
+  }
+
+  // Key Features
+  if (s.keyFeaturesData) {
+    const kf = s.keyFeaturesData;
+    sections.push(`### EXISTING KEY FEATURES (Idea: "${kf.ideaTitle}")\n\n${kf.features.map((f, i) =>
+      `${i + 1}. **${f.name}** [${f.priority}]: ${f.description}`
+    ).join("\n")}`);
+  }
+
+  // User Flows
+  if (s.userFlowsData) {
+    sections.push(`### EXISTING USER FLOWS\n\n${s.userFlowsData.map((flow) =>
+      `#### JTBD ${flow.jtbdIndex + 1}: ${flow.jtbdText}\nPersonas: ${flow.personaNames.join(", ")}\nSteps:\n${flow.steps.map((step, i) => `${i + 1}. [${step.nodeId}] ${step.action}`).join("\n")}`
+    ).join("\n\n")}`);
+  }
+
+  if (sections.length === 0) return "";
+  return `## EXISTING ARTIFACTS (evaluate each against new insights)\n\n${sections.join("\n\n")}`;
 }
 
 interface OptionBlock {
@@ -902,7 +964,7 @@ function getMessageText(message: any): string {
   return "";
 }
 
-export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhaseAction, onHeroSubmit, initialMessages, onMessagesChange, initialInput, autoSubmit }: ChatTabProps) {
+export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhaseAction, onHeroSubmit, initialMessages, onMessagesChange, initialInput, autoSubmit, onBuildingResponseComplete }: ChatTabProps) {
   const [input, setInput] = useState(initialInput ?? "");
   const [selectedModel, setSelectedModel] = useState<ModelId>("claude-sonnet-4-6");
   const [stagedImages, setStagedImages] = useState<FileUIPart[]>([]);
@@ -1071,12 +1133,19 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
 
     // Auto-send re-analysis request
     const docs = useDocumentStore.getState().documents;
+    if (docs.length === 0) return; // Safety: nothing to analyze
+
     const docContext = buildInsightsContext(docs);
+    const existingArtifactsContext = buildExistingArtifactsContext();
+
+    const docNames = docs.map((d) => `"${d.name}"`).join(", ");
+    const messageText = `I've uploaded new documents: ${docNames}. Re-analyze ALL ${docs.length} document(s) together with the existing artifacts. Compare your new insights against each existing artifact — only update artifacts where the new evidence reveals gaps, contradictions, or missing elements. Keep artifacts that still align with the new insights unchanged. Explain what changed and why, or confirm what remains valid.`;
+
     sendMessage(
-      { text: "I've uploaded additional documents. Skip questions — immediately re-analyze ALL documents together and regenerate every artifact: output the updated insights block, then updated manifesto, personas, journey maps, and user flows. Incorporate new findings from the additional documents." },
+      { text: messageText },
       {
         body: {
-          vfsContext: "",
+          vfsContext: existingArtifactsContext ? { vfs: existingArtifactsContext } : "",
           modelId: selectedModel,
           strategyPhase: "problem-overview",
           documentContext: docContext,
@@ -1921,6 +1990,22 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
       useStrategyStore.getState().setDeepDive(false);
     }
   }, [messages, isLoading]);
+
+  // --- Auto re-evaluate annotations after AI writes code ---
+  const buildCompletePrevLoadingRef = useRef(isLoading);
+  useEffect(() => {
+    const wasLoading = buildCompletePrevLoadingRef.current;
+    buildCompletePrevLoadingRef.current = isLoading;
+    if (isLoading || !wasLoading) return;
+
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return;
+    const text = getMessageText(lastAssistant);
+    if (!CODE_BLOCK_REGEX.test(text)) return;
+    CODE_BLOCK_REGEX.lastIndex = 0; // reset stateful regex
+
+    onBuildingResponseComplete?.();
+  }, [messages, isLoading, onBuildingResponseComplete]);
 
   // --- Image upload helpers ---
 

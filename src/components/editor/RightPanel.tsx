@@ -118,6 +118,8 @@ interface RightPanelProps {
   initialInput?: string;
   /** Auto-submit on mount after initialInput is set */
   autoSubmit?: boolean;
+  /** Called when an AI response that wrote code files completes — used to auto re-evaluate annotations */
+  onBuildingResponseComplete?: () => void;
   /** Called when element has strategy annotations — show confirmation modal instead of deleting immediately */
   onAnnotatedDeleteRequest?: (info: {
     tagName: string;
@@ -153,6 +155,7 @@ export function RightPanel({
   onMessagesChange,
   initialInput,
   autoSubmit,
+  onBuildingResponseComplete,
   onAnnotatedDeleteRequest,
 }: RightPanelProps) {
   const [isOpen, setIsOpen] = useState(true);
@@ -628,6 +631,7 @@ export function RightPanel({
             onMessagesChange={onMessagesChange}
             initialInput={initialInput}
             autoSubmit={autoSubmit}
+            onBuildingResponseComplete={onBuildingResponseComplete}
           />
         </FloatingChatPanel>
 
