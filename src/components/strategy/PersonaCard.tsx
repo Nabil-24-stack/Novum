@@ -85,6 +85,11 @@ export function PersonaCard({ persona, x, y, onMove, index, coveragePercent }: P
       onPointerUp={handlePointerUp}
     >
       <div className="bg-white/90 backdrop-blur-sm border border-neutral-200/60 shadow-lg rounded-2xl p-6">
+        {/* Card title */}
+        <h2 className="text-lg font-bold text-neutral-900 mb-4">
+          Persona {index + 1}
+        </h2>
+
         {/* Header: initials circle + name + role */}
         {(hasName || hasRole) && (
           <div className="flex items-center gap-3 mb-4">

@@ -59,6 +59,28 @@ import type { PreviewMode } from "@/lib/tokens";
 
 type ViewMode = "app" | "design-system";
 
+// Merge streaming partial data onto existing data by a key field (e.g., "name" for personas)
+function mergeByKey<T extends object>(
+  existing: T[],
+  streaming: Partial<T>[],
+  key: keyof T
+): Partial<T>[] {
+  const result: Partial<T>[] = [...existing];
+  const indexByKey = new Map(existing.map((item, i) => [item[key], i]));
+
+  for (const item of streaming) {
+    const k = item[key];
+    if (k !== undefined && indexByKey.has(k)) {
+      const idx = indexByKey.get(k)!;
+      result[idx] = { ...result[idx], ...item };
+    } else if (k !== undefined) {
+      result.push(item);
+    }
+  }
+
+  return result;
+}
+
 // Inline editable title component
 function EditableTitle({ value, onSave }: { value: string; onSave: (v: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -228,6 +250,7 @@ export default function ProjectEditor() {
 
   // Strategy state
   const strategyPhase = useStrategyStore((s) => s.phase);
+  const isDeepDive = useStrategyStore((s) => s.isDeepDive);
   const manifestoData = useStrategyStore((s) => s.manifestoData);
   const streamingOverview = useStrategyStore((s) => s.streamingOverview);
   const personaData = useStrategyStore((s) => s.personaData);
@@ -1871,7 +1894,9 @@ export default function ProjectEditor() {
             {(() => {
               const g = getGroupOrigin("insights");
               if (!g) return null;
-              const data = insightsData || streamingInsights || { insights: [], documents: [] };
+              const data = (isDeepDive && streamingInsights && insightsData)
+                ? { ...insightsData, ...streamingInsights }
+                : (insightsData || streamingInsights || { insights: [], documents: [] });
               return (
                 <InsightsCard
                   data={data}
@@ -1889,7 +1914,9 @@ export default function ProjectEditor() {
               if (!g) return null;
               return (
                 <ManifestoCard
-                  manifestoData={manifestoData || streamingOverview!}
+                  manifestoData={(isDeepDive && streamingOverview && manifestoData)
+                    ? { ...manifestoData, ...streamingOverview }
+                    : (manifestoData || streamingOverview!)}
                   x={g.x}
                   y={g.y}
                   onMove={(nx, ny) => {
@@ -1913,7 +1940,11 @@ export default function ProjectEditor() {
               );
             })()}
 
-            {(personaData || streamingPersonas) && (personaData || streamingPersonas)!.map((persona, index) => {
+            {(() => {
+              const effectivePersonas = (isDeepDive && streamingPersonas && personaData)
+                ? mergeByKey(personaData, streamingPersonas, "name")
+                : (personaData || streamingPersonas);
+              return effectivePersonas && effectivePersonas.map((persona, index) => {
               const g = getGroupOrigin("personas");
               if (!g) return null;
               const pos = personaPositions[index];
@@ -1934,9 +1965,14 @@ export default function ProjectEditor() {
                   )?.coveragePercent}
                 />
               );
-            })}
+            });
+            })()}
 
-            {(journeyMapData || streamingJourneyMaps) && (journeyMapData || streamingJourneyMaps)!.map((map, index) => {
+            {(() => {
+              const effectiveJourneyMaps = (isDeepDive && streamingJourneyMaps && journeyMapData)
+                ? mergeByKey(journeyMapData, streamingJourneyMaps, "personaName")
+                : (journeyMapData || streamingJourneyMaps);
+              return effectiveJourneyMaps && effectiveJourneyMaps.map((map, index) => {
               const g = getGroupOrigin("journey-maps");
               if (!g) return null;
               const pos = journeyMapPositions[index];
@@ -1963,7 +1999,8 @@ export default function ProjectEditor() {
                   }
                 />
               );
-            })}
+            });
+            })()}
 
             {(ideaData || streamingIdeas) && (ideaData || streamingIdeas)!.map((idea, index) => {
               const g = getGroupOrigin("ideas");
@@ -2147,21 +2184,24 @@ export default function ProjectEditor() {
 
         </div>
 
-        {/* Design System: Full-width preview */}
-        <div className={`flex-1 h-full ${viewMode !== "design-system" || isEarlyStrategyPhase ? "hidden" : ""}`}>
-          <SandpackWrapper
-            files={shadowFiles}
-            previewMode={tokenState.previewMode}
-            key={`design-system-${cssHash}`}
-          >
-            <SandpackPreview
-              showNavigator={false}
-              showOpenInCodeSandbox={false}
-              startRoute="/design-system"
-              style={{ height: "100%" }}
-            />
-          </SandpackWrapper>
-        </div>
+        {/* Design System: Full-width preview — unmounted during early strategy phases
+            to avoid SandpackProvider re-render cascades from rapid Zustand updates */}
+        {!isEarlyStrategyPhase && (
+          <div className={`flex-1 h-full ${viewMode !== "design-system" ? "hidden" : ""}`}>
+            <SandpackWrapper
+              files={shadowFiles}
+              previewMode={tokenState.previewMode}
+              key={`design-system-${cssHash}`}
+            >
+              <SandpackPreview
+                showNavigator={false}
+                showOpenInCodeSandbox={false}
+                startRoute="/design-system"
+                style={{ height: "100%" }}
+              />
+            </SandpackWrapper>
+          </div>
+        )}
 
         {/* Right Panel - always mounted to preserve state, hidden during hero phase */}
         <RightPanel

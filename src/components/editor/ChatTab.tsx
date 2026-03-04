@@ -36,12 +36,13 @@ const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/web
 const MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024; // 4MB
 const MAX_IMAGES_PER_MESSAGE = 5;
 
-type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6";
+type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6" | "gpt-5.2";
 
 const MODEL_OPTIONS: { id: ModelId; label: string; provider: string }[] = [
   { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", provider: "Google" },
   { id: "gemini-3-pro-preview", label: "Gemini 3 Pro", provider: "Google" },
   { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", provider: "Anthropic" },
+  { id: "gpt-5.2", label: "GPT 5.2", provider: "OpenAI" },
 ];
 
 interface ChatTabProps {

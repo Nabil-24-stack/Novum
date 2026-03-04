@@ -1,10 +1,11 @@
 import { streamText } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
 import { buildSequentialAppPrompt } from "@/lib/ai/strategy-prompts";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 
-type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-5";
+type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-5" | "gpt-5.2";
 
 function getModel(modelId: ModelId) {
   switch (modelId) {
@@ -14,6 +15,8 @@ function getModel(modelId: ModelId) {
       return google("gemini-3-pro-preview");
     case "claude-sonnet-4-5":
       return anthropic("claude-sonnet-4-5-20250929");
+    case "gpt-5.2":
+      return openai("gpt-5.2");
     default:
       return google("gemini-2.5-pro");
   }
@@ -119,6 +122,9 @@ export async function POST(req: Request) {
         content: `Build all pages of the application sequentially: ${pageNames}. Output each page as a separate code block. Make every page polished and production-ready using the component library.`,
       },
     ],
+    providerOptions: {
+      openai: { store: false },
+    },
   });
 
   return result.toTextStreamResponse();

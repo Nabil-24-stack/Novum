@@ -1,10 +1,11 @@
 import { generateText } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
 import { buildAnnotationEvaluationPrompt } from "@/lib/ai/annotation-evaluation-prompt";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 
-type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-5";
+type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-5" | "gpt-5.2";
 
 function getModel(modelId: ModelId) {
   switch (modelId) {
@@ -14,6 +15,8 @@ function getModel(modelId: ModelId) {
       return google("gemini-3-pro-preview");
     case "claude-sonnet-4-5":
       return anthropic("claude-sonnet-4-5-20250929");
+    case "gpt-5.2":
+      return openai("gpt-5.2");
     default:
       return google("gemini-2.5-pro");
   }
@@ -67,6 +70,9 @@ export async function POST(req: Request) {
           content: `Review all ${pages.length} pages and output the decision-connections JSON for sections with strong strategic links. Remember: quality over quantity, and zero connections is fine for utility pages.`,
         },
       ],
+      providerOptions: {
+        openai: { store: false },
+      },
     });
 
     const text = result.text.trim();

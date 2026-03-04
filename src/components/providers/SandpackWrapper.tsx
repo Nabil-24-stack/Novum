@@ -214,8 +214,18 @@ function FlowModeSync({ flowModeActive }: { flowModeActive: boolean }) {
 }
 
 export function SandpackWrapper({ files, children, previewMode = "light", inspectionMode = false, flowModeActive = false }: SandpackWrapperProps) {
-  // Parse dependencies from VFS package.json, with fallback to defaults
-  const dependencies = useMemo(() => parseDependencies(files), [files]);
+  // Parse dependencies from VFS package.json, with fallback to defaults.
+  // Stabilize reference: only return a new object when the JSON content actually changes.
+  const prevDepsJsonRef = useRef("");
+  const prevDepsRef = useRef<Record<string, string>>(defaultPackageJson.dependencies);
+  const dependencies = useMemo(() => {
+    const parsed = parseDependencies(files);
+    const json = JSON.stringify(parsed);
+    if (json === prevDepsJsonRef.current) return prevDepsRef.current;
+    prevDepsJsonRef.current = json;
+    prevDepsRef.current = parsed;
+    return parsed;
+  }, [files]);
 
   // Filter out package.json and tokens.json from files passed to Sandpack
   // (Sandpack manages dependencies separately via customSetup)
@@ -238,21 +248,24 @@ export function SandpackWrapper({ files, children, previewMode = "light", inspec
     getInspectorScriptDataUrl(inspectionMode),
   ], [initialPreviewMode, inspectionMode]);
 
+  // Memoize customSetup and options to prevent SandpackProvider re-initialization
+  // from object identity changes during parent re-render cascades
+  const customSetup = useMemo(() => ({ dependencies }), [dependencies]);
+  const options = useMemo(() => ({
+    externalResources,
+    classes: {
+      "sp-wrapper": "!h-full",
+      "sp-layout": "!h-full",
+      "sp-stack": "!h-full",
+    },
+  }), [externalResources]);
+
   return (
     <SandpackProvider
       template="react-ts"
       files={sandpackFiles}
-      customSetup={{
-        dependencies,
-      }}
-      options={{
-        externalResources,
-        classes: {
-          "sp-wrapper": "!h-full",
-          "sp-layout": "!h-full",
-          "sp-stack": "!h-full",
-        },
-      }}
+      customSetup={customSetup}
+      options={options}
       theme="light"
     >
       <SandpackFileSync files={sandpackFiles} />

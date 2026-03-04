@@ -1,11 +1,12 @@
 import { streamText, convertToModelMessages } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
 import { PROBLEM_OVERVIEW_SYSTEM_PROMPT, IDEATION_SYSTEM_PROMPT, buildSolutionDesignSystemPrompt, buildBuildSystemPrompt, buildDeepDiveSystemPrompt } from "@/lib/ai/strategy-prompts";
 import { INSIGHTS_PROMPT_FRAGMENT } from "@/lib/ai/insights-prompt";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 
-type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6";
+type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6" | "gpt-5.2";
 
 function getModel(modelId: ModelId) {
   switch (modelId) {
@@ -15,6 +16,8 @@ function getModel(modelId: ModelId) {
       return google("gemini-3-pro-preview");
     case "claude-sonnet-4-6":
       return anthropic("claude-sonnet-4-6");
+    case "gpt-5.2":
+      return openai("gpt-5.2");
     default:
       return google("gemini-2.5-pro");
   }
@@ -542,6 +545,12 @@ export async function POST(req: Request) {
     system: dynamicSystemPrompt,
     messages: modelMessages,
     maxOutputTokens: 65536,
+    // Disable OpenAI Responses API storage so full message content is always
+    // sent instead of item_reference lookups that can fail with
+    // "Item with id ... not found" when stored items expire.
+    providerOptions: {
+      openai: { store: false },
+    },
   });
 
   return result.toUIMessageStreamResponse();
