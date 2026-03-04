@@ -2,7 +2,7 @@ import { streamText, convertToModelMessages } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
-import { PROBLEM_OVERVIEW_SYSTEM_PROMPT, IDEATION_SYSTEM_PROMPT, buildSolutionDesignSystemPrompt, buildBuildSystemPrompt, buildDeepDiveSystemPrompt } from "@/lib/ai/strategy-prompts";
+import { PROBLEM_OVERVIEW_SYSTEM_PROMPT, buildIdeationSystemPrompt, buildSolutionDesignSystemPrompt, buildBuildSystemPrompt, buildDeepDiveSystemPrompt } from "@/lib/ai/strategy-prompts";
 import { INSIGHTS_PROMPT_FRAGMENT } from "@/lib/ai/insights-prompt";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 
@@ -510,7 +510,7 @@ export async function POST(req: Request) {
       break;
     }
     case "ideation":
-      basePrompt = IDEATION_SYSTEM_PROMPT;
+      basePrompt = buildIdeationSystemPrompt();
       break;
     case "solution-design":
       basePrompt = buildSolutionDesignSystemPrompt(vfsContext?.selectedIdeaContext);
