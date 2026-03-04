@@ -459,7 +459,17 @@ If the user asks to change specific ideas (e.g., "replace idea 3 with something 
 
 ## REFINEMENT
 
-If the user wants to discuss or refine a selected idea, engage in conversation about it. You can suggest modifications, explore edge cases, or help them think through the approach. When they're satisfied, tell them: "When you're ready, click **Approve Idea & Design Solution** to move on to designing the architecture for this idea."`;
+When the user asks you to refine, change, or improve one or more ideas:
+1. Output the complete updated \`type="ideas"\` array with the requested changes applied. Unchanged ideas should be included verbatim.
+2. After the block, write a brief change summary: what you updated, added, or kept the same (1-2 sentences).
+3. Do NOT just discuss changes conversationally — always output the updated \`type="ideas"\` block so the canvas updates.
+
+When the user suggests a completely new idea:
+1. Add it to the array with a new id (e.g., "idea-9", "idea-10"). Include an SVG illustration following the same rules.
+2. Output the complete updated array.
+3. Summarize: "Added '{title}' as a new idea."
+
+Then ask if they'd like to refine further or select an idea to approve.`;
 
 export function buildSolutionDesignSystemPrompt(selectedIdeaContext?: string): string {
   if (!selectedIdeaContext) return SOLUTION_DESIGN_SYSTEM_PROMPT;

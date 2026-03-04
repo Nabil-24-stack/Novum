@@ -132,6 +132,154 @@ const NON_EXISTENT_SPECIFIERS = new Set([
 ]);
 
 // ============================================================================
+// Step 0: Ensure React Import (for .tsx/.jsx files)
+// ============================================================================
+
+function ensureReactImport(code: string, filePath: string): { code: string; fixes: ImportFix[] } {
+  const fixes: ImportFix[] = [];
+
+  // Only apply to TSX/JSX files
+  if (!/\.[jt]sx$/.test(filePath)) {
+    return { code, fixes };
+  }
+
+  // Check for existing React imports
+  const starImportRegex = /import\s+\*\s+as\s+React\s+from\s+["']react["']/;
+  const defaultImportRegex = /import\s+React\b(?:\s*,\s*\{[^}]*\})?\s+from\s+["']react["']/;
+
+  if (starImportRegex.test(code)) {
+    // Already has the correct import
+    return { code, fixes };
+  }
+
+  if (defaultImportRegex.test(code)) {
+    // Has `import React from "react"` — convert to star import
+    const result = code.replace(
+      /import\s+React\s+from\s+["']react["']\s*;?/,
+      'import * as React from "react";',
+    );
+    fixes.push({
+      type: "path-alias",
+      original: 'import React from "react"',
+      replacement: 'import * as React from "react"',
+      reason: "Star import required for Sandpack JSX compilation",
+    });
+    return { code: result, fixes };
+  }
+
+  // No React import at all — prepend it
+  const result = 'import * as React from "react";\n' + code;
+  fixes.push({
+    type: "added-import",
+    original: "(missing)",
+    replacement: 'import * as React from "react"',
+    reason: "React import required for Sandpack JSX compilation",
+  });
+  return { code: result, fixes };
+}
+
+// ============================================================================
+// Step 0b: Fix export default → Named Export
+// ============================================================================
+
+function fixExportDefault(code: string, filePath: string): { code: string; fixes: ImportFix[] } {
+  const fixes: ImportFix[] = [];
+  let result = code;
+
+  // Derive a component name from the file path as fallback
+  const pathParts = filePath.replace(/\.[jt]sx?$/, "").split("/");
+  const fallbackName = pathParts[pathParts.length - 1]
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .replace(/^[a-z]/, (c) => c.toUpperCase()) || "App";
+
+  // Pattern 1: `export default function ComponentName(` → `export function ComponentName(`
+  const namedFnRegex = /export\s+default\s+function\s+([A-Z][A-Za-z0-9]*)\s*\(/g;
+  if (namedFnRegex.test(result)) {
+    result = result.replace(
+      /export\s+default\s+function\s+([A-Z][A-Za-z0-9]*)\s*\(/g,
+      "export function $1(",
+    );
+    fixes.push({
+      type: "removed-specifier",
+      original: "export default function",
+      replacement: "export function",
+      reason: "export default causes Sandpack crashes — converted to named export",
+    });
+  }
+
+  // Pattern 2: `export default function(` (anonymous) → `export function FallbackName(`
+  const anonFnRegex = /export\s+default\s+function\s*\(/;
+  if (anonFnRegex.test(result)) {
+    result = result.replace(
+      /export\s+default\s+function\s*\(/,
+      `export function ${fallbackName}(`,
+    );
+    fixes.push({
+      type: "removed-specifier",
+      original: "export default function (anonymous)",
+      replacement: `export function ${fallbackName}`,
+      reason: "Anonymous default export converted to named export",
+    });
+  }
+
+  // Pattern 3: `export default ComponentName;` or `export default ComponentName` (re-export at end of file)
+  // Only match standalone `export default Identifier;` lines (not `export default function` which is handled above)
+  const reExportRegex = /^export\s+default\s+([A-Z][A-Za-z0-9]*)\s*;?\s*$/gm;
+  if (reExportRegex.test(result)) {
+    result = result.replace(
+      /^export\s+default\s+([A-Z][A-Za-z0-9]*)\s*;?\s*$/gm,
+      "",
+    );
+    // Clean up extra blank lines
+    result = result.replace(/\n{3,}/g, "\n\n");
+    fixes.push({
+      type: "removed-specifier",
+      original: "export default ComponentName",
+      replacement: "(removed — component already has named export or const)",
+      reason: "Removed default re-export to prevent Sandpack crash",
+    });
+  }
+
+  // Pattern 4: Fix default imports → named imports
+  // `import Foo from "./path"` → `import { Foo } from "./path"`
+  // But NOT `import * as Foo` or `import "path"` or `import React from "react"`
+  const defaultImportRegex = /import\s+([A-Z][A-Za-z0-9]*)\s+from\s+(["'][^"']+["'])/g;
+  let importMatch: RegExpExecArray | null;
+  const importReplacements: Array<{ start: number; end: number; original: string; replacement: string; name: string }> = [];
+
+  while ((importMatch = defaultImportRegex.exec(result)) !== null) {
+    const fullMatch = importMatch[0];
+    const name = importMatch[1];
+    const path = importMatch[2];
+
+    // Skip React imports (handled by ensureReactImport)
+    if (name === "React") continue;
+
+    importReplacements.push({
+      start: importMatch.index,
+      end: importMatch.index + fullMatch.length,
+      original: fullMatch,
+      replacement: `import { ${name} } from ${path}`,
+      name,
+    });
+  }
+
+  // Apply in reverse order
+  for (let i = importReplacements.length - 1; i >= 0; i--) {
+    const rep = importReplacements[i];
+    result = result.slice(0, rep.start) + rep.replacement + result.slice(rep.end);
+    fixes.push({
+      type: "removed-specifier",
+      original: rep.original,
+      replacement: rep.replacement,
+      reason: `Default import converted to named import (default imports crash Sandpack)`,
+    });
+  }
+
+  return { code: result, fixes };
+}
+
+// ============================================================================
 // Step A: Fix Known Path Aliases
 // ============================================================================
 
@@ -462,6 +610,24 @@ export function fixImports(
 ): { code: string; fixes: ImportFix[] } {
   const allFixes: ImportFix[] = [];
   let currentCode = code;
+
+  // Step 0: Ensure React import exists (for .tsx/.jsx files)
+  try {
+    const { code: reactFixed, fixes } = ensureReactImport(currentCode, filePath);
+    currentCode = reactFixed;
+    allFixes.push(...fixes);
+  } catch (err) {
+    console.warn("[ImportFixer] React import fixing failed, skipping:", err);
+  }
+
+  // Step 0b: Fix export default → named export
+  try {
+    const { code: defaultFixed, fixes } = fixExportDefault(currentCode, filePath);
+    currentCode = defaultFixed;
+    allFixes.push(...fixes);
+  } catch (err) {
+    console.warn("[ImportFixer] Export default fixing failed, skipping:", err);
+  }
 
   // Step A: Fix known path aliases
   try {

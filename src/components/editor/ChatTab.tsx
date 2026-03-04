@@ -2770,6 +2770,14 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           </div>
         )}
 
+        {strategyPhase === "ideation" && ideaData && !isLoading && (
+          <p className="text-center text-xs text-neutral-400 pt-1">
+            {selectedIdeaId
+              ? "You can also describe changes to refine this idea, or suggest a new one."
+              : "Click an idea card to select it, or tell me how to refine one."}
+          </p>
+        )}
+
         {strategyPhase === "solution-design" && flowData && !isLoading && (
           <div className="flex justify-center pt-2">
             <button

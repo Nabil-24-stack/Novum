@@ -1764,16 +1764,6 @@ export default function ProjectEditor() {
               <span className="ml-2 text-xs text-emerald-500">Saved</span>
             )}
 
-            {/* Back button when viewing Design System */}
-            {viewMode === "design-system" && (
-              <button
-                onClick={() => setViewMode("app")}
-                className="flex items-center gap-1 px-2 py-1.5 text-sm text-neutral-600 hover:text-neutral-900 transition-colors ml-2"
-              >
-                ← Back
-              </button>
-            )}
-
             {/* Phase indicator during strategy phases */}
             {isEarlyStrategyPhase && (
               <div className="flex items-center gap-2 ml-2">
@@ -2002,7 +1992,11 @@ export default function ProjectEditor() {
             });
             })()}
 
-            {(ideaData || streamingIdeas) && (ideaData || streamingIdeas)!.map((idea, index) => {
+            {(() => {
+              const effectiveIdeas = (ideaData && streamingIdeas)
+                ? mergeByKey(ideaData, streamingIdeas, "id")
+                : (ideaData || streamingIdeas);
+              return effectiveIdeas && effectiveIdeas.map((idea, index) => {
               const g = getGroupOrigin("ideas");
               if (!g) return null;
               const pos = ideaPositions[index];
@@ -2032,7 +2026,8 @@ export default function ProjectEditor() {
                   onHeightMeasured={(h) => handleIdeaHeightMeasured(index, h)}
                 />
               );
-            })}
+            });
+            })()}
 
             {activeKeyFeatures && (() => {
               const g = getGroupOrigin("key-features");
@@ -2187,7 +2182,17 @@ export default function ProjectEditor() {
         {/* Design System: Full-width preview — unmounted during early strategy phases
             to avoid SandpackProvider re-render cascades from rapid Zustand updates */}
         {!isEarlyStrategyPhase && (
-          <div className={`flex-1 h-full ${viewMode !== "design-system" ? "hidden" : ""}`}>
+          <div className={`flex-1 flex flex-col h-full ${viewMode !== "design-system" ? "hidden" : ""}`}>
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-neutral-200 bg-white shrink-0">
+              <button
+                onClick={() => setViewMode("app")}
+                className="p-1 hover:bg-neutral-100 rounded transition-colors"
+                title="Back to app"
+              >
+                <ChevronLeft className="w-4 h-4 text-neutral-500" />
+              </button>
+              <h2 className="text-sm font-medium text-neutral-700">Design System</h2>
+            </div>
             <SandpackWrapper
               files={shadowFiles}
               previewMode={tokenState.previewMode}
