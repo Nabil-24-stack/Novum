@@ -1805,47 +1805,59 @@ export default function ProjectEditor() {
               >
                 <RefreshCw className="w-4 h-4" />
               </button>
-              {/* Global annotations toggle — only when brain data has connections and rendering prerequisites are met */}
-              {!isFrameExpanded && manifestoData && personaData && brainData && brainData.pages && brainData.pages.some((p) => p.connections.length > 0) && (
-                <button
-                  onClick={() => {
-                    const pagesWithConnections = brainData.pages
-                      .filter((p) => p.connections.length > 0)
-                      .map((p) => p.pageId);
-                    // Toggle: if any are active, close all; otherwise open all
-                    if (annotationActiveFrames.size > 0) {
-                      closeAllAnnotations();
-                    } else {
-                      openAllAnnotations(pagesWithConnections);
-                    }
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                    annotationActiveFrames.size > 0
-                      ? "text-amber-700 bg-amber-50 border border-amber-300 hover:bg-amber-100"
-                      : "text-neutral-600 hover:text-neutral-900 border border-neutral-300 hover:border-neutral-400"
-                  }`}
-                  title={annotationActiveFrames.size > 0 ? "Hide all annotations" : "Show all annotations"}
-                >
-                  <MessageSquareText className="w-4 h-4" />
-                </button>
-              )}
-              {/* Re-evaluate annotations button */}
-              {!isFrameExpanded && brainData && completedPages.length > 0 && (
-                <button
-                  onClick={handleReEvaluateAnnotations}
-                  disabled={isReEvaluating}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                    strategyUpdatedAfterBuild
-                      ? "text-blue-700 bg-blue-50 border border-blue-300 hover:bg-blue-100 animate-pulse"
-                      : isReEvaluating
-                        ? "text-neutral-400 border border-neutral-200 cursor-not-allowed"
-                        : "text-neutral-600 hover:text-neutral-900 border border-neutral-300 hover:border-neutral-400"
-                  }`}
-                  title={strategyUpdatedAfterBuild ? "Strategy changed — re-evaluate annotations" : "Re-evaluate annotations"}
-                >
-                  <RotateCw className={`w-4 h-4 ${isReEvaluating ? "animate-spin" : ""}`} />
-                </button>
-              )}
+              {/* Annotations split button — toggle + retry/re-evaluate */}
+              {!isFrameExpanded && manifestoData && personaData && brainData && completedPages.length > 0 && (() => {
+                const hasConnections = brainData.pages && brainData.pages.some((p) => p.connections.length > 0);
+                const annotationsActive = annotationActiveFrames.size > 0;
+                return (
+                  <div className={`flex items-stretch rounded-md overflow-hidden border transition-colors ${
+                    annotationsActive
+                      ? "border-amber-300"
+                      : strategyUpdatedAfterBuild
+                        ? "border-blue-300 animate-pulse"
+                        : "border-neutral-300"
+                  }`}>
+                    <button
+                      onClick={() => {
+                        if (!hasConnections) return;
+                        const pagesWithConnections = brainData.pages
+                          .filter((p) => p.connections.length > 0)
+                          .map((p) => p.pageId);
+                        if (annotationsActive) {
+                          closeAllAnnotations();
+                        } else {
+                          openAllAnnotations(pagesWithConnections);
+                        }
+                      }}
+                      className={`flex items-center px-3 py-1.5 text-sm font-medium transition-colors ${
+                        !hasConnections
+                          ? "text-neutral-400 cursor-default"
+                          : annotationsActive
+                            ? "text-amber-700 bg-amber-50 hover:bg-amber-100"
+                            : "text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50"
+                      }`}
+                      title={!hasConnections ? "No annotations available" : annotationsActive ? "Hide all annotations" : "Show all annotations"}
+                    >
+                      Annotations
+                    </button>
+                    <div className={`w-px ${annotationsActive ? "bg-amber-300" : strategyUpdatedAfterBuild ? "bg-blue-300" : "bg-neutral-300"}`} />
+                    <button
+                      onClick={handleReEvaluateAnnotations}
+                      disabled={isReEvaluating}
+                      className={`flex items-center px-2 py-1.5 transition-colors ${
+                        strategyUpdatedAfterBuild
+                          ? "text-blue-700 bg-blue-50 hover:bg-blue-100"
+                          : isReEvaluating
+                            ? "text-neutral-400 cursor-not-allowed"
+                            : "text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50"
+                      }`}
+                      title={strategyUpdatedAfterBuild ? "Strategy changed — re-evaluate annotations" : isReEvaluating ? "Evaluating annotations…" : "Retry / re-evaluate annotations"}
+                    >
+                      <RotateCw className={`w-4 h-4 ${isReEvaluating ? "animate-spin" : ""}`} />
+                    </button>
+                  </div>
+                );
+              })()}
               <button
                 onClick={handlePrototypeToggle}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
