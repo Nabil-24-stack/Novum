@@ -63,6 +63,9 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
 
       const key = e.key.toLowerCase();
 
+      // Skip if Cmd/Ctrl is held (allow native shortcuts like Cmd+C, Cmd+V, Cmd+F)
+      if (e.metaKey || e.ctrlKey) return;
+
       switch (key) {
         case "v":
           e.preventDefault();
@@ -77,6 +80,7 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
           onToolChange("text");
           break;
         case "c":
+          if (!e.shiftKey) break;
           e.preventDefault();
           onToolChange("component");
           break;

@@ -214,7 +214,7 @@ export function runGatekeeper(
 
   // ── Phase -1: Import Fixing ──
   try {
-    const { code: importFixed, fixes } = fixImports(currentCode, filePath);
+    const { code: importFixed, fixes } = fixImports(currentCode, filePath, files);
     currentCode = importFixed;
     allImportFixes = fixes;
   } catch (err) {

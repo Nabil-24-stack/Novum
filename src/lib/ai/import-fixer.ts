@@ -525,10 +525,50 @@ function removeNonExistentSpecifiers(code: string): { code: string; fixes: Impor
 }
 
 // ============================================================================
-// Step D: Add Missing Imports for Known Components
+// Step D: VFS Export Discovery + Add Missing Imports
 // ============================================================================
 
-function addMissingImports(code: string, filePath: string): { code: string; fixes: ImportFix[] } {
+/**
+ * Scan VFS files for exported components/functions and return a map of
+ * component name → import path. Skips `/components/ui/*` (covered by
+ * COMPONENT_REGISTRY) and the current file being processed.
+ */
+function discoverVfsExports(
+  files: Record<string, string>,
+  currentFilePath: string,
+): Record<string, string> {
+  const discovered: Record<string, string> = {};
+  const exportRegex = /export\s+(?:function|const|class)\s+([A-Z][A-Za-z0-9]*)/g;
+
+  for (const [filePath, content] of Object.entries(files)) {
+    // Skip non-component files
+    if (!/\.[jt]sx?$/.test(filePath)) continue;
+    // Skip the file being processed (no self-imports)
+    if (filePath === currentFilePath) continue;
+    // Skip built-in UI components (already in COMPONENT_REGISTRY)
+    if (filePath.startsWith("/components/ui/")) continue;
+    // Skip utility/config files
+    if (filePath === "/index.tsx" || filePath === "/globals.css" || filePath === "/lib/utils.ts") continue;
+
+    let match: RegExpExecArray | null;
+    while ((match = exportRegex.exec(content)) !== null) {
+      const name = match[1];
+      // Don't overwrite static registry entries
+      if (COMPONENT_REGISTRY[name]) continue;
+      // Convert absolute VFS path to relative import path (strip extension)
+      const importPath = "." + filePath.replace(/\.[jt]sx?$/, "");
+      discovered[name] = importPath;
+    }
+  }
+
+  return discovered;
+}
+
+function addMissingImports(
+  code: string,
+  filePath: string,
+  files?: Record<string, string>,
+): { code: string; fixes: ImportFix[] } {
   const fixes: ImportFix[] = [];
   let result = code;
 
@@ -552,9 +592,14 @@ function addMissingImports(code: string, filePath: string): { code: string; fixe
     usedComponents.add("cn");
   }
 
+  // Merge static registry with VFS-discovered exports (static wins on conflict)
+  const mergedRegistry = files
+    ? { ...discoverVfsExports(files, filePath), ...COMPONENT_REGISTRY }
+    : COMPONENT_REGISTRY;
+
   // Check each used component against existing imports
   for (const componentName of usedComponents) {
-    const importPath = COMPONENT_REGISTRY[componentName];
+    const importPath = mergedRegistry[componentName];
     if (!importPath) continue;
 
     // Quick regex check: is this already imported?
@@ -607,6 +652,7 @@ function addMissingImports(code: string, filePath: string): { code: string; fixe
 export function fixImports(
   code: string,
   filePath: string,
+  files?: Record<string, string>,
 ): { code: string; fixes: ImportFix[] } {
   const allFixes: ImportFix[] = [];
   let currentCode = code;
@@ -658,7 +704,7 @@ export function fixImports(
 
   // Step D: Add missing imports
   try {
-    const { code: importedCode, fixes } = addMissingImports(currentCode, filePath);
+    const { code: importedCode, fixes } = addMissingImports(currentCode, filePath, files);
     currentCode = importedCode;
     allFixes.push(...fixes);
   } catch (err) {

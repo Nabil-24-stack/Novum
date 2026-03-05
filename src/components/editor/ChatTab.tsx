@@ -15,6 +15,7 @@ import { toPascalCase } from "@/lib/vfs/app-generator";
 import { ConfidenceBar } from "./ConfidenceBar";
 import { BuildProgressCards } from "./BuildProgressCards";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
+import { checkRouteConsistency } from "@/lib/ai/route-consistency";
 import { parseStreamingContent } from "@/lib/streaming-parser";
 import type { FileUIPart } from "ai";
 
@@ -229,6 +230,7 @@ interface OptionBlock {
 const processedBlocksSet = new Set<string>();
 const processedStrategyBlocksSet = new Set<string>();
 const flowJsonSyncedMessages = new Set<string>();
+const routeConsistencySyncedMessages = new Set<string>();
 
 function extractCodeBlocks(text: string): Array<{ path: string; content: string }> {
   const blocks: Array<{ path: string; content: string }> = [];
@@ -1034,17 +1036,33 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
         processedBlocksSet.add(`${msg.id}-${path}-${content.length}`);
       }
       CODE_BLOCK_REGEX.lastIndex = 0;
-      // Mark strategy blocks as already processed
-      const strategyRegexes = [MANIFESTO_REGEX, PERSONA_REGEX, FLOW_REGEX, OPTIONS_REGEX, PAGE_BUILT_REGEX, CONFIDENCE_REGEX, JOURNEY_MAPS_REGEX, IDEAS_REGEX, DECISION_CONNECTIONS_REGEX, USER_FLOWS_REGEX, FEATURES_REGEX, INSIGHTS_REGEX];
-      for (const re of strategyRegexes) {
-        while (re.exec(text) !== null) {
-          processedStrategyBlocksSet.add(`${msg.id}-${re.source}-${RegExp.lastMatch.length}`);
+      // Mark strategy blocks as already processed (keys must match processing format: `${prefix}-${msgId}-${matchIndex}`)
+      const strategyRegexWithPrefix: [RegExp, string][] = [
+        [INSIGHTS_REGEX, "insights"],
+        [MANIFESTO_REGEX, "manifesto"],
+        [PERSONA_REGEX, "personas"],
+        [JOURNEY_MAPS_REGEX, "journey-maps"],
+        [IDEAS_REGEX, "ideas"],
+        [FLOW_REGEX, "flow"],
+        [FEATURES_REGEX, "features"],
+        [USER_FLOWS_REGEX, "user-flows"],
+        [PAGE_BUILT_REGEX, "page-built"],
+        [DECISION_CONNECTIONS_REGEX, "decision-connections"],
+        [ALIGNMENT_CHECK_REGEX, "alignment-check"],
+        [CONFIDENCE_REGEX, "confidence"],
+        [OPTIONS_REGEX, "options"],
+      ];
+      for (const [re, prefix] of strategyRegexWithPrefix) {
+        let sm;
+        while ((sm = re.exec(text)) !== null) {
+          processedStrategyBlocksSet.add(`${prefix}-${msg.id}-${sm.index}`);
         }
         re.lastIndex = 0;
       }
-      // Mark flow.json synced
+      // Mark flow.json and route consistency synced
       if (hasFileCodeBlocks(text)) {
         flowJsonSyncedMessages.add(msg.id);
+        routeConsistencySyncedMessages.add(msg.id);
       }
     }
   }, [initialMessages]);
@@ -1725,6 +1743,45 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
         }
       } catch {
         // Fail-safe: don't break on bad flow.json
+      }
+    });
+  }, [messages, isLoading, writeFile, files]);
+
+  // Route consistency: ensure App.tsx + flow.json include all page files
+  useEffect(() => {
+    if (isLoading) return;
+    messages.forEach((message) => {
+      if (message.role !== "assistant") return;
+      if (routeConsistencySyncedMessages.has(message.id)) return;
+
+      let textContent = "";
+      if (message.parts && Array.isArray(message.parts)) {
+        textContent = message.parts
+          .filter((part): part is { type: "text"; text: string } => part.type === "text")
+          .map((part) => part.text)
+          .join("");
+      }
+      if (!textContent && "content" in message && typeof message.content === "string") {
+        textContent = message.content;
+      }
+
+      const blocks = extractCodeBlocks(textContent);
+      if (blocks.length === 0) return;
+
+      routeConsistencySyncedMessages.add(message.id);
+
+      try {
+        const result = checkRouteConsistency(files);
+        if (result.fixes.length > 0) {
+          for (const fix of result.fixes) {
+            writeFile(fix.path, fix.content);
+          }
+          const reasons = result.fixes.map((f) => f.reason).join("; ");
+          toast.info(`Route consistency: ${reasons}`);
+          console.log("[RouteConsistency] Applied fixes:", result.fixes.map((f) => f.path));
+        }
+      } catch {
+        // Fail-safe
       }
     });
   }, [messages, isLoading, writeFile, files]);

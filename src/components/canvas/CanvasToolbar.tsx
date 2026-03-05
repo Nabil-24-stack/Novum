@@ -43,7 +43,7 @@ export function CanvasToolbar({ activeTool, onToolChange }: CanvasToolbarProps) 
     { tool: "cursor", icon: <MousePointer2 className="w-4 h-4" />, label: "Select", shortcut: "V" },
     { tool: "frame", icon: <Square className="w-4 h-4" />, label: "Frame", shortcut: "F" },
     { tool: "text", icon: <Type className="w-4 h-4" />, label: "Text", shortcut: "T" },
-    { tool: "component", icon: <Component className="w-4 h-4" />, label: "Component", shortcut: "C" },
+    { tool: "component", icon: <Component className="w-4 h-4" />, label: "Component", shortcut: "⇧C" },
   ];
 
   return (
