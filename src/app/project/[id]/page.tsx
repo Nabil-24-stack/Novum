@@ -659,7 +659,7 @@ export default function ProjectEditor() {
 
     const oldBrain = useProductBrainStore.getState().brainData;
 
-    const result = await evaluateAnnotationsStandalone(files, mCtx, pCtx, insCtx, "gemini-2.5-pro");
+    const result = await evaluateAnnotationsStandalone(files, mCtx, pCtx, insCtx, "gemini-2.5-pro", flowManifest.pages);
 
     if (result?.pages && Array.isArray(result.pages)) {
       let totalNew = 0;
@@ -1805,8 +1805,8 @@ export default function ProjectEditor() {
               >
                 <RefreshCw className="w-4 h-4" />
               </button>
-              {/* Global annotations toggle — only when brain data has connections */}
-              {brainData && brainData.pages && brainData.pages.some((p) => p.connections.length > 0) && (
+              {/* Global annotations toggle — only when brain data has connections and rendering prerequisites are met */}
+              {!isFrameExpanded && manifestoData && personaData && brainData && brainData.pages && brainData.pages.some((p) => p.connections.length > 0) && (
                 <button
                   onClick={() => {
                     const pagesWithConnections = brainData.pages
@@ -1830,7 +1830,7 @@ export default function ProjectEditor() {
                 </button>
               )}
               {/* Re-evaluate annotations button */}
-              {brainData && completedPages.length > 0 && (
+              {!isFrameExpanded && brainData && completedPages.length > 0 && (
                 <button
                   onClick={handleReEvaluateAnnotations}
                   disabled={isReEvaluating}
