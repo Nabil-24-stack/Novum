@@ -168,6 +168,14 @@ export default function ProjectEditor() {
     if (didHydrateRef.current) return;
     didHydrateRef.current = true;
 
+    // Reset all global stores to prevent stale data from a previous project
+    useStrategyStore.getState().reset();
+    useProductBrainStore.getState().clearBrain();
+    useDocumentStore.getState().reset();
+    useCanvasStore.getState().clearNodes();
+    useChatContextStore.getState().clearPinnedElements();
+    useAnnotationStore.getState().closeAll();
+
     (async () => {
       try {
         const res = await fetch(`/api/projects/${projectId}`);
