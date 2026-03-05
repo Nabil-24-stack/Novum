@@ -110,7 +110,11 @@ export async function POST(req: Request) {
     }
   } catch (err) {
     console.error("[evaluate-annotations] Error:", err);
-    // Fail-safe: return empty pages so the app works without annotations
-    return Response.json({ pages: [] });
+    const message = err instanceof Error ? err.message : "Unknown error";
+    // Return 502 so the client can distinguish model failure from empty annotations
+    return Response.json(
+      { error: "Annotation evaluation failed", detail: message, pages: [] },
+      { status: 502 }
+    );
   }
 }
