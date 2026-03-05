@@ -476,7 +476,17 @@ export function useParallelBuild({
         }
       }
 
-      // Stream ended — flush App.tsx and check completion
+      // Stream ended — flush any incomplete final block (output truncation)
+      const finalParsed = parseStreamingContent(fullText);
+      if (finalParsed.currentFile) {
+        const dedupKey = finalParsed.currentFile.path + "|" + finalParsed.currentFile.content.length;
+        if (!writtenPaths.has(dedupKey)) {
+          writtenPaths.add(dedupKey);
+          processCompletedBlock(finalParsed.currentFile);
+        }
+      }
+
+      // Flush App.tsx and check completion
       flushRebuildAppTsx();
       checkAllPagesComplete();
 

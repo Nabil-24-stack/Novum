@@ -1064,22 +1064,17 @@ export default function ProjectEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [centerOnPageId, nodePositions.size]);
 
-  // --- Auto-center on newly completed pages during building phase ---
+  // --- Track completed pages during building phase (no auto-centering) ---
   const prevCompletedPagesRef = useRef<string[]>([]);
   useEffect(() => {
     if (strategyPhase !== "building") {
       prevCompletedPagesRef.current = [];
       return;
     }
-    const prev = prevCompletedPagesRef.current;
-    const current = completedPages;
-    const newlyCompleted = current.filter(id => !prev.includes(id));
-    prevCompletedPagesRef.current = current;
-
-    if (newlyCompleted.length > 0) {
-      // Center on the most recently completed page
-      setCenterOnPageId(newlyCompleted[newlyCompleted.length - 1]);
-    }
+    // Track completed pages but don't auto-center — the fit-all viewport
+    // from approve-solution-design already shows all frames, and viewport
+    // jumps during active building are disorienting.
+    prevCompletedPagesRef.current = completedPages;
   }, [strategyPhase, completedPages]);
 
   // --- Node drag handler (updates position in real-time) ---
