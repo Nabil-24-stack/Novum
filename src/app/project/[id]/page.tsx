@@ -57,6 +57,7 @@ import type { CanvasTool, CanvasNode } from "@/lib/canvas/types";
 import type { ContextMenuPayload } from "@/lib/inspection/types";
 import type { FlowNodePosition } from "@/lib/flow/types";
 import type { PreviewMode } from "@/lib/tokens";
+import { serializeCanvasLayout, deserializeCanvasLayout } from "@/lib/canvas/canvas-layout-types";
 
 type ViewMode = "app" | "design-system";
 
@@ -157,12 +158,6 @@ export default function ProjectEditor() {
   // Active route for prototype view (navigating from flow view)
   const [activeRoute, setActiveRoute] = useState("/");
 
-  // Auto-save hook
-  const { saveStatus } = useProjectPersistence(projectId, {
-    files,
-    chatMessages,
-  });
-
   // Project hydration on mount
   useEffect(() => {
     if (didHydrateRef.current) return;
@@ -220,6 +215,24 @@ export default function ProjectEditor() {
         // Hydrate chat messages
         if (project.chat_messages && project.chat_messages.length > 0) {
           setInitialMessages(project.chat_messages);
+        }
+
+        // Hydrate canvas layout (positions)
+        if (project.canvas_layout) {
+          try {
+            const layout = deserializeCanvasLayout(project.canvas_layout);
+            setNodePositions(layout.nodePositions);
+            nodePositionsRef.current = layout.nodePositions;
+            setGroupPositions(layout.groupPositions);
+            setFlowLayoutOffset(layout.flowLayoutOffset);
+            setPersonaPositions(layout.personaPositions);
+            setJourneyMapPositions(layout.journeyMapPositions);
+            setIdeaPositions(layout.ideaPositions);
+            setUserFlowPositions(layout.userFlowPositions);
+            setKeyFeaturesPosition(layout.keyFeaturesPosition);
+          } catch (err) {
+            console.error("Failed to restore canvas layout:", err);
+          }
         }
 
         // Check for initial message from dashboard (new project flow)
@@ -432,6 +445,7 @@ export default function ProjectEditor() {
 
   // --- Layout effect: compute horizontal group origins when groups appear ---
   useEffect(() => {
+    if (isProjectLoading) return;
     const configs = buildGroupConfigs();
     const origins = calculateHorizontalLayout(configs, STRATEGY_ORIGIN);
     if (origins.length === 0) return;
@@ -454,7 +468,7 @@ export default function ProjectEditor() {
       }
       return changed ? next : prev;
     });
-  }, [buildGroupConfigs]);
+  }, [isProjectLoading, buildGroupConfigs]);
 
   // Helper: get effective position for a group (user-dragged or computed)
   const getGroupOrigin = useCallback((id: GroupId) => {
@@ -509,6 +523,7 @@ export default function ProjectEditor() {
 
   // Initialize persona positions from group origin when persona count changes
   useEffect(() => {
+    if (isProjectLoading) return;
     if (personaCount === 0) return;
     const g = getGroupOrigin("personas");
     if (!g) return;
@@ -519,10 +534,11 @@ export default function ProjectEditor() {
         prev[i] ?? { x: g.x + i * (PERSONA_CARD_WIDTH + 20), y: g.y }
       );
     });
-  }, [personaCount, getGroupOrigin]);
+  }, [isProjectLoading, personaCount, getGroupOrigin]);
 
   // Initialize journey map positions from group origin when count changes
   useEffect(() => {
+    if (isProjectLoading) return;
     if (journeyMapCount === 0) return;
     const g = getGroupOrigin("journey-maps");
     if (!g) return;
@@ -533,10 +549,11 @@ export default function ProjectEditor() {
         prev[i] ?? { x: g.x, y: g.y + i * (JOURNEY_CARD_ESTIMATED_HEIGHT + JOURNEY_CARD_GAP) }
       );
     });
-  }, [journeyMapCount, getGroupOrigin]);
+  }, [isProjectLoading, journeyMapCount, getGroupOrigin]);
 
   // Initialize idea positions from group origin when count changes (2x4 grid layout)
   useEffect(() => {
+    if (isProjectLoading) return;
     if (ideaCount === 0) return;
     const g = getGroupOrigin("ideas");
     if (!g) return;
@@ -551,7 +568,7 @@ export default function ProjectEditor() {
         }
       );
     });
-  }, [ideaCount, getGroupOrigin, getIdeaRowY]);
+  }, [isProjectLoading, ideaCount, getGroupOrigin, getIdeaRowY]);
 
   // Correct row 2+ positions when measured heights differ from estimates
   useEffect(() => {
@@ -580,6 +597,7 @@ export default function ProjectEditor() {
   // Initialize user flow positions from group origin when count changes (vertical stack)
   const USER_FLOW_CARD_GAP = 40;
   useEffect(() => {
+    if (isProjectLoading) return;
     const count = activeUserFlows?.length ?? 0;
     if (count === 0) return;
     const g = getGroupOrigin("user-flows");
@@ -594,7 +612,7 @@ export default function ProjectEditor() {
         }
       );
     });
-  }, [activeUserFlows?.length, getGroupOrigin]);
+  }, [isProjectLoading, activeUserFlows?.length, getGroupOrigin]);
 
   // Initialize product brain from VFS on mount
   useEffect(() => {
@@ -763,6 +781,39 @@ export default function ProjectEditor() {
 
   // Canvas dimensions for SVG connections
   const [canvasDimensions, setCanvasDimensions] = useState({ width: 800, height: 600 });
+
+  // Compute canvas layout for persistence (all position state serialized)
+  const canvasLayout = useMemo(() => {
+    if (isProjectLoading) return null;
+    if (nodePositions.size === 0 && groupPositions.size === 0) return null;
+    return serializeCanvasLayout(
+      nodePositions,
+      groupPositions,
+      flowLayoutOffset,
+      personaPositions,
+      journeyMapPositions,
+      ideaPositions,
+      userFlowPositions,
+      keyFeaturesPosition
+    );
+  }, [
+    isProjectLoading,
+    nodePositions,
+    groupPositions,
+    flowLayoutOffset,
+    personaPositions,
+    journeyMapPositions,
+    ideaPositions,
+    userFlowPositions,
+    keyFeaturesPosition,
+  ]);
+
+  // Auto-save hook
+  const { saveStatus } = useProjectPersistence(projectId, {
+    files,
+    chatMessages,
+    canvasLayout,
+  });
 
   // Container dimensions for viewport centering calculations
   const [containerDimensions, setContainerDimensions] = useState({ width: 800, height: 600 });
@@ -963,9 +1014,10 @@ export default function ProjectEditor() {
   });
 
   // --- Recompute flowLayoutOffset on project restore ---
-  // flowLayoutOffset is not persisted; recompute it from strategy card positions
-  // so FlowFrames appear below strategy content (same math as approve-solution-design).
+  // If flowLayoutOffset was restored from canvas_layout persistence, this is a no-op
+  // (the guard checks flowLayoutOffset !== 0). Otherwise recomputes from strategy card positions.
   useEffect(() => {
+    if (isProjectLoading) return;
     const needsOffset = strategyPhase === "building" || strategyPhase === "complete";
     if (!needsOffset) return;
     if (flowLayoutOffset.x !== 0 || flowLayoutOffset.y !== 0) return;
@@ -985,12 +1037,13 @@ export default function ProjectEditor() {
     setFlowLayoutOffset({ x: overviewPosForOffset.x - 50, y: flowYOffset - 50 });
     setNodePositions(new Map());
     architecturePositionsRef.current = null;
-  }, [strategyPhase, flowLayoutOffset, groupPositions, groupRects, flowManifest.pages.length, setNodePositions]);
+  }, [isProjectLoading, strategyPhase, flowLayoutOffset, groupPositions, groupRects, flowManifest.pages.length, setNodePositions]);
 
   // --- Calculate flow layout when manifest changes ---
   // Preserve existing positions for nodes the user may have dragged;
   // only auto-layout newly added nodes.
   useEffect(() => {
+    if (isProjectLoading) return;
     const layout = calculateFlowLayout(flowManifest.pages, flowManifest.connections);
 
     setNodePositions((prev) => {
@@ -1026,7 +1079,7 @@ export default function ProjectEditor() {
       return changed ? newMap : prev;
     });
     setCanvasDimensions({ width: layout.width, height: layout.height });
-  }, [flowManifest, flowLayoutOffset, strategyPhase, setNodePositions]);
+  }, [isProjectLoading, flowManifest, flowLayoutOffset, strategyPhase, setNodePositions]);
 
   // Snapshot architecture positions when entering building phase so that
   // partial flow.json rewrites don't cause position recalculation.

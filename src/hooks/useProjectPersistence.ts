@@ -4,10 +4,12 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { useStrategyStore } from "./useStrategyStore";
 import { useProductBrainStore } from "./useProductBrainStore";
 import { useDocumentStore } from "./useDocumentStore";
+import type { CanvasLayout } from "@/lib/canvas/canvas-layout-types";
 
 interface PersistenceConfig {
   files: Record<string, string>;
   chatMessages: unknown[] | null;
+  canvasLayout: CanvasLayout | null;
 }
 
 const DEBOUNCE_MS = 5000;
@@ -37,7 +39,7 @@ export function useProjectPersistence(
   projectId: string | null,
   config: PersistenceConfig
 ) {
-  const { files, chatMessages } = config;
+  const { files, chatMessages, canvasLayout } = config;
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<Record<string, unknown> | null>(null);
@@ -96,6 +98,12 @@ export function useProjectPersistence(
     if (!projectId || chatMessages === null) return;
     scheduleSave({ chat_messages: chatMessages });
   }, [chatMessages, projectId, scheduleSave]);
+
+  // Watch canvas layout
+  useEffect(() => {
+    if (!projectId || canvasLayout === null) return;
+    scheduleSave({ canvas_layout: canvasLayout });
+  }, [canvasLayout, projectId, scheduleSave]);
 
   // Watch strategy store
   useEffect(() => {

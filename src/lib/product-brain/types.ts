@@ -9,6 +9,7 @@ export interface DecisionConnection {
   journeyStages?: { personaName: string; stageIndex: number }[];
   rationale: string;
   insightIndices?: number[]; // 0-based into InsightsCardData.insights[]
+  isUntracked?: boolean; // true when built via "Build Anyway" override
 }
 
 /** All connections for a single page */

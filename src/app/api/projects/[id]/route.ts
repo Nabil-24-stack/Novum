@@ -31,6 +31,7 @@ const ALLOWED_FIELDS = new Set([
   "product_brain",
   "documents",
   "phase",
+  "canvas_layout",
 ]);
 
 export async function PATCH(

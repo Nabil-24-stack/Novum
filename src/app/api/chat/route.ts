@@ -493,7 +493,7 @@ export async function POST(req: Request) {
   const auth = await requireAuth();
   if (auth.response) return auth.response;
 
-  const { messages, vfsContext, modelId, strategyPhase, currentPageId, currentPageName, isDeepDive, documentContext } = await req.json();
+  const { messages, vfsContext, modelId, strategyPhase, currentPageId, currentPageName, isDeepDive, documentContext, buildAnyway, isSubsequentEdit } = await req.json();
 
   // Convert UIMessage[] to ModelMessage[] format
   const modelMessages = await convertToModelMessages(messages);
@@ -522,6 +522,8 @@ export async function POST(req: Request) {
         vfsContext?.personaContext || "",
         currentPageId,
         currentPageName,
+        undefined,
+        { isSubsequentEdit, buildAnyway },
       ) + "\n\n" + SYSTEM_PROMPT;
       break;
     default:

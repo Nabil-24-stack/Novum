@@ -26,9 +26,9 @@ function hasFileCodeBlocks(content: string): boolean {
 /** Strip strategy JSON blocks from text (manifesto, flow, options, page-built, confidence, personas, etc.) */
 function stripStrategyBlocks(text: string): string {
   // Strip closed strategy blocks
-  let cleaned = text.replace(/```json\s+type="(?:options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-flows|features|decision-connections|insights)"[\s\S]*?```/g, "");
+  let cleaned = text.replace(/```json\s+type="(?:options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-flows|features|decision-connections|insights|alignment-check)"[\s\S]*?```/g, "");
   // Strip open (still-streaming) strategy blocks
-  cleaned = cleaned.replace(/```json\s+type="(?:options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-flows|features|decision-connections|insights)"[\s\S]*$/, "");
+  cleaned = cleaned.replace(/```json\s+type="(?:options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-flows|features|decision-connections|insights|alignment-check)"[\s\S]*$/, "");
   return cleaned.trim();
 }
 
@@ -82,6 +82,7 @@ const DECISION_CONNECTIONS_REGEX = /```json\s+type="decision-connections"\n([\s\
 const USER_FLOWS_REGEX = /```json\s+type="user-flows"\n([\s\S]*?)```/g;
 const FEATURES_REGEX = /```json\s+type="features"\n([\s\S]*?)```/g;
 const INSIGHTS_REGEX = /```json\s+type="insights"\n([\s\S]*?)```/g;
+const ALIGNMENT_CHECK_REGEX = /```json\s+type="alignment-check"\n([\s\S]*?)```/g;
 
 
 /**
@@ -996,6 +997,10 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   const foundationPageId = useStreamingStore((s) => s.foundationPageId);
   const annotationEvaluation = useStreamingStore((s) => s.annotationEvaluation);
 
+  // Strategy alignment check state
+  const [alignmentCheckPending, setAlignmentCheckPending] = useState(false);
+  const alignmentCheckOriginalRequest = useRef<string | null>(null);
+
   // Parallel build orchestrator
   const parallelBuild = useParallelBuild({ writeFile, files, getLatestFile });
   const parallelBuildConfigRef = useRef<{
@@ -1049,6 +1054,13 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   const didAutoSubmitRef = useRef(false);
 
   const isLoading = status === "submitted" || status === "streaming";
+
+  // Clear alignment check state when a new message is being sent
+  useEffect(() => {
+    if (isLoading) {
+      setAlignmentCheckPending(false);
+    }
+  }, [isLoading]);
 
   // Notify parent of message changes for persistence.
   // Only fires when NOT streaming, to avoid excessive parent re-renders during AI
@@ -1926,6 +1938,23 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
       }
       DECISION_CONNECTIONS_REGEX.lastIndex = 0;
 
+      // Extract alignment-check blocks (strategy alignment validation)
+      while ((match = ALIGNMENT_CHECK_REGEX.exec(textContent)) !== null) {
+        const blockKey = `alignment-check-${message.id}-${match.index}`;
+        if (!processedStrategyBlocksSet.has(blockKey)) {
+          processedStrategyBlocksSet.add(blockKey);
+          try {
+            const parsed = JSON.parse(match[1]);
+            if (parsed.aligned === false) {
+              setAlignmentCheckPending(true);
+            }
+          } catch (e) {
+            console.warn("[Strategy] Failed to parse alignment-check JSON:", e);
+          }
+        }
+      }
+      ALIGNMENT_CHECK_REGEX.lastIndex = 0;
+
       // Extract confidence blocks (always use the latest one)
       while ((match = CONFIDENCE_REGEX.exec(textContent)) !== null) {
         const blockKey = `confidence-${message.id}-${match.index}`;
@@ -2261,6 +2290,51 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     );
   }, [isLoading, sendMessage, selectedModel]);
 
+  // --- "Build Anyway" handler (strategy alignment override) ---
+
+  const handleBuildAnyway = useCallback(() => {
+    if (isLoading) return;
+
+    const originalRequest = alignmentCheckOriginalRequest.current;
+    if (!originalRequest) return;
+
+    // Clear alignment check state
+    setAlignmentCheckPending(false);
+    alignmentCheckOriginalRequest.current = null;
+
+    // Build VFS context (same as building phase)
+    const vfsContext = buildBuildingPhaseVfsContext(files);
+
+    // Include current building page info
+    const buildingStore = useStrategyStore.getState();
+    const buildingPageId = buildingStore.currentBuildingPage;
+    const buildingPageName = buildingPageId
+      ? buildingStore.flowData?.nodes.find((n) => n.id === buildingPageId)?.label
+      : undefined;
+
+    // Build document context if documents are uploaded
+    const docStore = useDocumentStore.getState();
+    const hasUploadedDocuments = docStore.documents.length > 0;
+    const documentContext = hasUploadedDocuments ? buildInsightsContext(docStore.documents) : undefined;
+
+    sendMessage(
+      { text: `Build it anyway, mark as untracked. Original request: ${originalRequest}` },
+      {
+        body: {
+          vfsContext,
+          modelId: selectedModel,
+          strategyPhase: "building",
+          currentPageId: buildingPageId,
+          currentPageName: buildingPageName,
+          documentContext,
+          hasUploadedDocuments,
+          buildAnyway: true,
+          isSubsequentEdit: true,
+        },
+      }
+    );
+  }, [isLoading, files, sendMessage, selectedModel]);
+
   // --- "Finish discussion" handler ---
 
   const handleFinishDiscussion = useCallback(() => {
@@ -2472,11 +2546,19 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
       (vfsContext as Record<string, string>).insightsContext = `## Research Insights\n\n${JSON.stringify(docStore.insightsData, null, 2)}`;
     }
 
+    // Determine if this is a subsequent edit (for strategy alignment check)
+    const isSubsequentEdit = effectivePhase === "building" && completedPages.length > 0;
+
+    // Store original request for potential "Build Anyway" re-send
+    if (isSubsequentEdit) {
+      alignmentCheckOriginalRequest.current = messageText;
+    }
+
     // Send user's clean message for display
     // Pass context via request-level body option (hidden from UI, sent to API)
     await sendMessage(
       messagePayload as { text: string; files?: FileUIPart[] },
-      { body: { vfsContext, modelId: selectedModel, strategyPhase: effectivePhase, currentPageId: buildingPageId, currentPageName: buildingPageName, documentContext, hasUploadedDocuments } }
+      { body: { vfsContext, modelId: selectedModel, strategyPhase: effectivePhase, currentPageId: buildingPageId, currentPageName: buildingPageName, documentContext, hasUploadedDocuments, isSubsequentEdit } }
     );
 
     // Clear pinned elements after sending
@@ -2718,6 +2800,18 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
             >
               <Check className="w-4 h-4" />
               Finish discussion
+            </button>
+          </div>
+        )}
+
+        {/* Strategy alignment check: "Build Anyway" override */}
+        {strategyPhase === "building" && alignmentCheckPending && !isLoading && (
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={handleBuildAnyway}
+              className="inline-flex items-center gap-2 px-4 py-2 text-neutral-600 text-sm font-medium rounded-lg border border-neutral-200 hover:bg-neutral-100 transition-colors"
+            >
+              Build Anyway
             </button>
           </div>
         )}
@@ -3316,7 +3410,7 @@ function MessageContent({ content }: { content: string }) {
 
 // Detect which strategy block type is currently streaming (open, not yet closed)
 function getStreamingBlockType(text: string): string | null {
-  const blockPattern = /```json\s+type="(options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-flows|features|insights|decision-connections)"/g;
+  const blockPattern = /```json\s+type="(options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-flows|features|insights|decision-connections|alignment-check)"/g;
   let lastMatch: RegExpExecArray | null = null;
   let match: RegExpExecArray | null;
   while ((match = blockPattern.exec(text)) !== null) {
@@ -3376,6 +3470,8 @@ function getStreamingBlockLabel(
       return opts.currentBuildingPage ? `Mapping strategy for ${opts.currentBuildingPage}...` : "Mapping strategy connections...";
     case "page-built":
       return opts.currentBuildingPage ? `Building ${opts.currentBuildingPage}...` : "Building page...";
+    case "alignment-check":
+      return "Checking strategy alignment...";
     default:
       return null;
   }

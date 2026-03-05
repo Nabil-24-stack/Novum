@@ -846,13 +846,58 @@ ${sectionTaggingExamples}
 \`\`\``;
 }
 
-export function buildBuildSystemPrompt(overviewContext: string, flowContext: string, personaContext: string, currentPageId?: string, currentPageName?: string, userFlowContext?: string): string {
+export function buildBuildSystemPrompt(overviewContext: string, flowContext: string, personaContext: string, currentPageId?: string, currentPageName?: string, userFlowContext?: string, options?: { isSubsequentEdit?: boolean; buildAnyway?: boolean }): string {
   const pageInstruction = currentPageId && currentPageName
     ? `You are now building the **${currentPageName}** page (id: "${currentPageId}").`
     : `You are now building the first page (the "/" main app route).`;
 
   const userFlowSection = userFlowContext
     ? `\n\n## USER FLOW REFERENCE\n\nThese user flows show what users do on this page. Use the actions listed for this page's node to guide which UI components and interactions to build.\n\n${userFlowContext}`
+    : "";
+
+  const alignmentCheckSection = options?.isSubsequentEdit && !options?.buildAnyway
+    ? `
+
+## STRATEGY ALIGNMENT CHECK (REQUIRED FOR EDITS)
+
+The user is requesting a change to an already-built page. Before writing any code, you MUST evaluate this request against the product strategy artifacts provided above.
+
+1. Check if the request aligns with ANY of the following:
+   - A persona's goals or pain points
+   - A Job To Be Done (JTBD) from the product overview
+   - A How Might We question
+   - A step in the user flows
+   - A research insight
+
+2. If the request ALIGNS with at least one artifact:
+   - In your first sentence, briefly state which artifact(s) it aligns with (e.g., "This aligns with [Persona]'s goal of [goal]" or "This supports JTBD #N: [jtbd text]")
+   - Then proceed to build the code normally following all the rules below
+
+3. If the request DOES NOT clearly ALIGN with any artifact:
+   - Do NOT generate any code blocks
+   - Explain which strategy artifacts you evaluated and why the request doesn't clearly map to them
+   - Ask the user to clarify how this addition fits the product strategy, or suggest they provide additional research/insights that support this feature
+   - At the END of your response, output this block:
+
+\`\`\`json type="alignment-check"
+{ "aligned": false, "concerns": ["Brief description of why this doesn't align with the strategy"] }
+\`\`\`
+`
+    : "";
+
+  const untrackedBuildSection = options?.buildAnyway
+    ? `
+
+## UNTRACKED BUILD MODE
+
+The user has chosen to build this feature despite it not aligning with the defined product strategy. Proceed with the build, but annotate it as untracked:
+
+- Use \`data-strategy-id="untracked-${currentPageId || "home"}-N"\` (where N starts at 0 and increments) for any new sections you create
+- In the decision-connections block, set \`"isUntracked": true\` on EACH connection
+- Set \`personaNames\` to an empty array \`[]\` since this is untracked
+- Set \`jtbdIndices\` to an empty array \`[]\` since this is untracked
+- Set \`rationale\` to explain this was an untracked addition built outside the defined product strategy
+`
     : "";
 
   return `You are an expert Product Designer and Senior Frontend Architect building a web application based on an approved product strategy.
@@ -868,7 +913,7 @@ ${flowContext}${userFlowSection}
 ## BUILD INSTRUCTIONS
 
 ${pageInstruction}
-
+${alignmentCheckSection}${untrackedBuildSection}
 Build ONLY this one page. Follow these rules:
 
 1. For this page, output:
