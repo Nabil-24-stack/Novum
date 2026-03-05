@@ -219,6 +219,10 @@ export function useParallelBuild({
       useStrategyStore.getState().setPhase("complete");
       useStreamingStore.getState().endParallelStreaming();
       useStrategyStore.getState().setBuildingPages([]);
+      // Auto-dismiss annotation status after user has time to read it
+      setTimeout(() => {
+        useStreamingStore.getState().resetAnnotationEvaluation();
+      }, 6000);
     }
   }, [getLatestFile]);
 

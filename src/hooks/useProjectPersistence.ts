@@ -111,7 +111,9 @@ export function useProjectPersistence(
   useEffect(() => {
     if (!projectId) return;
     const unsub = useProductBrainStore.subscribe(() => {
-      scheduleSave({ product_brain: useProductBrainStore.getState().brainData });
+      const brain = useProductBrainStore.getState().brainData;
+      const insightsData = useDocumentStore.getState().insightsData;
+      scheduleSave({ product_brain: { ...brain, insightsData: insightsData ?? undefined } });
     });
     return unsub;
   }, [projectId, scheduleSave]);
@@ -122,9 +124,9 @@ export function useProjectPersistence(
     const unsub = useDocumentStore.subscribe(() => {
       const { documents, insightsData } = useDocumentStore.getState();
       scheduleSave({ documents: documents.map(({ id, name, text, uploadedAt }) => ({ id, name, text, uploadedAt })) });
-      if (insightsData) {
-        scheduleSave({ product_brain: { ...useProductBrainStore.getState().brainData, insightsData } });
-      }
+      // Always save merged product_brain so insightsData and pages are never lost
+      const brain = useProductBrainStore.getState().brainData;
+      scheduleSave({ product_brain: { ...brain, insightsData: insightsData ?? undefined } });
     });
     return unsub;
   }, [projectId, scheduleSave]);

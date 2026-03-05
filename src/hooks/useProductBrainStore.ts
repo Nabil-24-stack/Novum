@@ -21,7 +21,8 @@ export const useProductBrainStore = create<ProductBrainState>((set, get) => ({
   },
 
   addPageDecisions: (page) => {
-    const current = get().brainData ?? { version: 1 as const, pages: [] };
+    const raw = get().brainData;
+    const current = raw ? { ...raw, pages: raw.pages ?? [] } : { version: 1 as const, pages: [] };
     const existingIdx = current.pages.findIndex((p) => p.pageId === page.pageId);
     const updatedPages =
       existingIdx >= 0
@@ -32,7 +33,7 @@ export const useProductBrainStore = create<ProductBrainState>((set, get) => ({
 
   removeConnection: (connectionId) => {
     const current = get().brainData;
-    if (!current) return;
+    if (!current || !current.pages) return;
     set({
       brainData: {
         ...current,
@@ -46,7 +47,7 @@ export const useProductBrainStore = create<ProductBrainState>((set, get) => ({
 
   removePageConnections: (pageId) => {
     const current = get().brainData;
-    if (!current) return;
+    if (!current || !current.pages) return;
     set({
       brainData: {
         ...current,
@@ -57,7 +58,7 @@ export const useProductBrainStore = create<ProductBrainState>((set, get) => ({
 
   removeOrphanedConnections: (validPageIds, validJtbdCount, validPersonaNames) => {
     const current = get().brainData;
-    if (!current) return 0;
+    if (!current || !current.pages) return 0;
 
     const validPageSet = new Set(validPageIds);
     const validNameSet = new Set(validPersonaNames);

@@ -129,7 +129,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
     flowContext: storeState.flowData
       ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`
       : "",
-    existingConnections: brainData
+    existingConnections: brainData?.pages?.length
       ? `## Existing Product Brain Connections\n\n${JSON.stringify(brainData.pages.map((p) => ({ pageId: p.pageId, connections: p.connections })), null, 2)}`
       : "",
   };
@@ -2875,18 +2875,13 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           </div>
         )}
 
-        {/* Annotation evaluation status — shown as assistant-style message after builds */}
-        {strategyPhase === "building" && parallelMode && annotationEvaluation.status !== "idle" && (
-          <div className="flex items-start gap-3 px-4 py-3">
-            <div className="w-7 h-7 rounded-full bg-neutral-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-neutral-500">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
-            </div>
-            <div className="flex-1 min-w-0">
+        {/* Annotation evaluation status — shown as assistant-style chat bubble */}
+        {annotationEvaluation.status !== "idle" && (
+          <div className="flex justify-start">
+            <div className="max-w-[85%] rounded-lg px-3 py-2 text-base bg-neutral-100 text-neutral-800">
               {annotationEvaluation.status === "evaluating" && (
                 <div className="space-y-2">
-                  <p className="text-sm text-neutral-800">
+                  <p>
                     Now I&apos;m evaluating strategy annotations across all pages. I&apos;m reviewing each UI section to identify which ones represent deliberate product decisions tied to your personas and jobs-to-be-done...
                   </p>
                   <div className="flex items-center gap-2 text-xs text-neutral-500">
@@ -2897,10 +2892,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
               )}
               {annotationEvaluation.status === "done" && (
                 <div className="space-y-1">
-                  <p className="text-sm text-neutral-800">
+                  <p>
                     {annotationEvaluation.connectionCount > 0
                       ? <>Strategy evaluation complete — I mapped <strong>{annotationEvaluation.connectionCount}</strong> annotation{annotationEvaluation.connectionCount > 1 ? "s" : ""} across your pages. Each one connects a UI section to a specific persona need or job-to-be-done. Toggle the annotation button on any frame header to see them.</>
-
                       : "Strategy evaluation complete — no sections warranted annotations. The pages are utility-focused without strong strategic connections to flag."}
                   </p>
                   <div className="flex items-center gap-2 text-xs text-emerald-600">
@@ -2911,7 +2905,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
               )}
               {annotationEvaluation.status === "error" && (
                 <div className="space-y-1">
-                  <p className="text-sm text-neutral-800">
+                  <p>
                     I couldn&apos;t complete the strategy annotation evaluation, but your pages are fully built and working. You can still use the app — annotations just won&apos;t be available.
                   </p>
                   <div className="flex items-center gap-2 text-xs text-amber-600">

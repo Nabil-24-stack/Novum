@@ -107,7 +107,7 @@ export function KeyFeaturesCard({ data, x, y, onMove }: KeyFeaturesCardProps) {
               );
             })}
             {/* Fallback for features without priority (streaming/legacy) */}
-            {data.features.some((f) => !f.priority) && (
+            {data.features && data.features.some((f) => !f.priority) && (
               <div className="space-y-2">
                 {data.features.filter((f) => !f.priority).map((feature, i) => (
                   <div key={i} className="flex gap-3">

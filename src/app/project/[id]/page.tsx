@@ -16,6 +16,7 @@ import { useChatContextStore, type PinnedElement } from "@/hooks/useChatContextS
 import { useStrategyStore } from "@/hooks/useStrategyStore";
 import { useProductBrainStore } from "@/hooks/useProductBrainStore";
 import { computeCoverage } from "@/lib/product-brain/coverage";
+import type { ProductBrainData } from "@/lib/product-brain/types";
 import { useFlowNavigation } from "@/hooks/useFlowNavigation";
 import { SandpackWrapper } from "@/components/providers/SandpackWrapper";
 import { InfiniteCanvas, type ViewportState } from "@/components/canvas/InfiniteCanvas";
@@ -190,10 +191,16 @@ export default function ProjectEditor() {
 
         // Hydrate product brain
         if (project.product_brain) {
-          useProductBrainStore.getState().setBrainData(project.product_brain);
+          const brain = project.product_brain;
+          // Normalize: ensure version + pages exist (DB may only have { insightsData })
+          const normalized = {
+            version: brain.version ?? 1,
+            pages: Array.isArray(brain.pages) ? brain.pages : [],
+          } as ProductBrainData;
+          useProductBrainStore.getState().setBrainData(normalized);
           // Restore insightsData into document store (persisted under product_brain)
-          if (project.product_brain.insightsData) {
-            useDocumentStore.getState().setInsightsData(project.product_brain.insightsData);
+          if (brain.insightsData) {
+            useDocumentStore.getState().setInsightsData(brain.insightsData);
           }
         }
 
@@ -688,6 +695,10 @@ export default function ProjectEditor() {
     }
 
     setIsReEvaluating(false);
+    // Auto-dismiss annotation status in chat after a delay
+    setTimeout(() => {
+      useStreamingStore.getState().resetAnnotationEvaluation();
+    }, 6000);
   }, [isReEvaluating, manifestoData, personaData, files, flowManifest]);
 
   // --- Auto re-evaluate annotations after AI writes code ---
@@ -1787,7 +1798,7 @@ export default function ProjectEditor() {
                 <RefreshCw className="w-4 h-4" />
               </button>
               {/* Global annotations toggle — only when brain data has connections */}
-              {brainData && brainData.pages.some((p) => p.connections.length > 0) && (
+              {brainData && brainData.pages && brainData.pages.some((p) => p.connections.length > 0) && (
                 <button
                   onClick={() => {
                     const pagesWithConnections = brainData.pages
@@ -2102,7 +2113,7 @@ export default function ProjectEditor() {
                 : basePosition;
 
               const framePreviewMode = framePreviewModes.get(page.id) ?? tokenState.previewMode;
-              const pageDec = brainData?.pages.find((p) => p.pageId === page.id);
+              const pageDec = brainData?.pages?.find((p) => p.pageId === page.id);
 
               return (
                 <FlowFrame
@@ -2139,7 +2150,7 @@ export default function ProjectEditor() {
               if (!annotationActiveFrames.has(page.id)) return null;
               const pos = nodePositions.get(page.id);
               if (!pos) return null;
-              const pageDec = brainData?.pages.find((p) => p.pageId === page.id);
+              const pageDec = brainData?.pages?.find((p) => p.pageId === page.id);
               if (!pageDec || pageDec.connections.length === 0) return null;
               return (
                 <StrategyAnnotations

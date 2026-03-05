@@ -24,6 +24,12 @@ export function useAnnotationResolution({ brainData }: UseAnnotationResolutionCo
     brainDataRef.current = brainData;
   });
 
+  // Keep a ref of activeFrames for the inspector-ready handler (can't access state in event listener)
+  const activeFramesRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    activeFramesRef.current = new Set(activeFrames);
+  });
+
   // Collect strategyIds for a page from brainData
   function getStrategyIdsForPage(pageId: string, bd: ProductBrainData | null): string[] {
     if (!bd) return [];
@@ -116,11 +122,13 @@ export function useAnnotationResolution({ brainData }: UseAnnotationResolutionCo
       }
 
       // Inspector ready: re-send tracking for reloaded iframes
+      // Also handles first-time tracking for active frames whose iframes weren't mounted initially
       if (e.data?.type === "novum:inspector-ready") {
         const pageId = getPageIdFromMessageSource(e);
         if (!pageId) return;
         const tracked = trackedFramesRef.current;
-        if (!tracked.has(pageId)) return;
+        // Allow tracking if the frame is already tracked OR if it's an active frame that wasn't trackable initially
+        if (!tracked.has(pageId) && !activeFramesRef.current.has(pageId)) return;
 
         // Update iframe reference (may have changed after reload)
         const iframe = getIframeForPage(pageId);
