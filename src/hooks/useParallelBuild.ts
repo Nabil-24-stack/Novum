@@ -7,7 +7,7 @@ import { useProductBrainStore } from "./useProductBrainStore";
 import { useDocumentStore } from "./useDocumentStore";
 import { parseStreamingContent } from "@/lib/streaming-parser";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
-import { generateAppTsx } from "@/lib/vfs/app-generator";
+import { generateAppTsx, toPascalCase } from "@/lib/vfs/app-generator";
 import { runVerificationLoop, type VerificationStateCallbacks } from "@/lib/verification/verify-loop";
 import { toast } from "sonner";
 
@@ -50,14 +50,20 @@ export async function evaluateAnnotationsStandalone(
   personaContext: string,
   insightsContext: string | undefined,
   modelId: string,
+  flowManifestPages?: { id: string; name: string; route: string }[],
 ): Promise<{ pages: Array<{ pageId: string; pageName: string; connections: import("@/lib/product-brain/types").DecisionConnection[] }> } | null> {
   // Collect code for all page files in VFS
   const pagesCode: { pageId: string; pageName: string; code: string }[] = [];
   for (const [path, content] of Object.entries(files)) {
     if (path.startsWith("/pages/") && path.endsWith(".tsx") && content?.trim()) {
       const fileName = path.replace("/pages/", "").replace(".tsx", "");
-      const pageId = fileName.charAt(0).toLowerCase() + fileName.slice(1);
-      pagesCode.push({ pageId, pageName: fileName, code: content });
+      // Match against flow manifest to get the canonical pageId (avoids camelCase vs kebab-case mismatch)
+      const manifestPage = flowManifestPages?.find(
+        (p) => toPascalCase(p.name) === fileName
+      );
+      const pageId = manifestPage?.id ?? fileName.charAt(0).toLowerCase() + fileName.slice(1);
+      const pageName = manifestPage?.name ?? fileName;
+      pagesCode.push({ pageId, pageName, code: content });
     }
   }
 
