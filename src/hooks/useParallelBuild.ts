@@ -43,6 +43,7 @@ function ensureReactImport(code: string): string {
 /**
  * Standalone annotation evaluation function — can be called independently of the build pipeline.
  * Used by the "Re-evaluate Annotations" button after strategy changes.
+ * Includes retry with exponential backoff for transient model/API failures.
  */
 export async function evaluateAnnotationsStandalone(
   files: Record<string, string>,
@@ -69,29 +70,44 @@ export async function evaluateAnnotationsStandalone(
 
   if (pagesCode.length === 0) return null;
 
-  try {
-    const response = await fetch("/api/evaluate-annotations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        pages: pagesCode,
-        manifestoContext,
-        personaContext,
-        insightsContext,
-        modelId,
-      }),
-    });
+  const MAX_RETRIES = 2;
+  const RETRY_DELAYS = [3000, 8000]; // 3s, 8s backoff
 
-    if (!response.ok) {
-      console.warn("[evaluateAnnotationsStandalone] Failed:", response.status);
-      return null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = RETRY_DELAYS[attempt - 1] ?? 8000;
+      console.log(`[evaluateAnnotationsStandalone] Retry ${attempt}/${MAX_RETRIES} in ${delay}ms...`);
+      await new Promise((r) => setTimeout(r, delay));
     }
 
-    return await response.json();
-  } catch (err) {
-    console.warn("[evaluateAnnotationsStandalone] Error:", err);
-    return null;
+    try {
+      const response = await fetch("/api/evaluate-annotations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pages: pagesCode,
+          manifestoContext,
+          personaContext,
+          insightsContext,
+          modelId,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        console.warn(`[evaluateAnnotationsStandalone] Attempt ${attempt + 1} failed:`, body?.detail || response.status);
+        continue; // Retry
+      }
+
+      return await response.json();
+    } catch (err) {
+      console.warn(`[evaluateAnnotationsStandalone] Attempt ${attempt + 1} error:`, err);
+      continue; // Retry
+    }
   }
+
+  console.warn("[evaluateAnnotationsStandalone] Failed after all retries");
+  return null;
 }
 
 export function useParallelBuild({
@@ -148,7 +164,8 @@ export function useParallelBuild({
     }
   }, [doRebuildAppTsx]);
 
-  // After ALL pages are built, run a single evaluation pass to generate annotations
+  // After ALL pages are built, run a single evaluation pass to generate annotations.
+  // Retries with exponential backoff on model/API failures.
   const evaluateAnnotations = useCallback(async () => {
     const context = sharedContextRef.current;
     if (!context) return;
@@ -181,55 +198,84 @@ export function useParallelBuild({
         }).join("\n")
       : undefined;
 
-    try {
-      const response = await fetch("/api/evaluate-annotations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pages: pagesCode,
-          manifestoContext: context.manifestoContext,
-          personaContext: context.personaContext,
-          insightsContext,
-          modelId: modelIdRef.current,
-        }),
-      });
+    const MAX_RETRIES = 3;
+    const RETRY_DELAYS = [3000, 8000, 15000]; // 3s, 8s, 15s backoff
 
-      if (!response.ok) {
-        console.warn("[Build] Annotation evaluation failed:", response.status);
-        useStreamingStore.getState().setAnnotationError("Evaluation request failed");
-        return;
+    let lastError: unknown = null;
+    let success = false;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      // Brief delay before first attempt to let the model API cool down after the build
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 2000));
+      } else {
+        // Exponential backoff for retries
+        const delay = RETRY_DELAYS[attempt - 1] ?? 15000;
+        console.log(`[Build] Annotation evaluation retry ${attempt}/${MAX_RETRIES} in ${delay}ms...`);
+        await new Promise((r) => setTimeout(r, delay));
       }
 
-      const result = await response.json();
-      const evaluatedPages = result?.pages;
+      try {
+        const response = await fetch("/api/evaluate-annotations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pages: pagesCode,
+            manifestoContext: context.manifestoContext,
+            personaContext: context.personaContext,
+            insightsContext,
+            modelId: modelIdRef.current,
+          }),
+        });
 
-      if (Array.isArray(evaluatedPages)) {
-        let totalConnections = 0;
-        for (const page of evaluatedPages) {
-          if (page.pageId && Array.isArray(page.connections)) {
-            useProductBrainStore.getState().addPageDecisions({
-              pageId: page.pageId,
-              pageName: page.pageName || page.pageId,
-              connections: page.connections,
-            });
-            totalConnections += page.connections.length;
-          }
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          const detail = body?.detail || `HTTP ${response.status}`;
+          console.warn(`[Build] Annotation evaluation attempt ${attempt + 1} failed:`, detail);
+          lastError = new Error(detail);
+          continue; // Retry
         }
-        useStreamingStore.getState().setAnnotationDone(totalConnections);
+
+        const result = await response.json();
+        const evaluatedPages = result?.pages;
+
+        if (Array.isArray(evaluatedPages)) {
+          let totalConnections = 0;
+          for (const page of evaluatedPages) {
+            if (page.pageId && Array.isArray(page.connections)) {
+              useProductBrainStore.getState().addPageDecisions({
+                pageId: page.pageId,
+                pageName: page.pageName || page.pageId,
+                connections: page.connections,
+              });
+              totalConnections += page.connections.length;
+            }
+          }
+          useStreamingStore.getState().setAnnotationDone(totalConnections);
+          success = true;
+          break; // Success — exit retry loop
+        }
+      } catch (err) {
+        console.warn(`[Build] Annotation evaluation attempt ${attempt + 1} error:`, err);
+        lastError = err;
+        continue; // Retry
       }
-    } catch (err) {
-      console.warn("[Build] Annotation evaluation error:", err);
-      useStreamingStore.getState().setAnnotationError("Could not evaluate annotations");
-    } finally {
-      // Auto-complete: transition to "complete" phase after evaluation finishes (or errors)
-      useStrategyStore.getState().setPhase("complete");
-      useStreamingStore.getState().endParallelStreaming();
-      useStrategyStore.getState().setBuildingPages([]);
-      // Auto-dismiss annotation status after user has time to read it
-      setTimeout(() => {
-        useStreamingStore.getState().resetAnnotationEvaluation();
-      }, 6000);
     }
+
+    if (!success) {
+      console.warn("[Build] Annotation evaluation failed after all retries:", lastError);
+      useStreamingStore.getState().setAnnotationError("Annotation evaluation failed — use the retry button to try again");
+      toast.error("Annotations could not be generated. Click the retry button to try again.");
+    }
+
+    // Always transition to complete, even on failure
+    useStrategyStore.getState().setPhase("complete");
+    useStreamingStore.getState().endParallelStreaming();
+    useStrategyStore.getState().setBuildingPages([]);
+    // Auto-dismiss annotation status after user has time to read it
+    setTimeout(() => {
+      useStreamingStore.getState().resetAnnotationEvaluation();
+    }, 6000);
   }, [getLatestFile]);
 
   // Check if all pages are done and trigger evaluation

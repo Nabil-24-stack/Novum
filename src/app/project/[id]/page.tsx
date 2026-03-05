@@ -639,7 +639,7 @@ export default function ProjectEditor() {
 
   // Re-evaluate annotations handler (placed after flowManifest is available)
   const handleReEvaluateAnnotations = useCallback(async () => {
-    if (isReEvaluating || !manifestoData || !personaData) return;
+    if (isReEvaluating || !manifestoData || !personaData || !flowManifest) return;
 
     setIsReEvaluating(true);
     useStreamingStore.getState().setAnnotationEvaluating();
@@ -1806,8 +1806,8 @@ export default function ProjectEditor() {
                 <RefreshCw className="w-4 h-4" />
               </button>
               {/* Annotations split button — toggle + retry/re-evaluate */}
-              {!isFrameExpanded && manifestoData && personaData && brainData && completedPages.length > 0 && (() => {
-                const hasConnections = brainData.pages && brainData.pages.some((p) => p.connections.length > 0);
+              {!isFrameExpanded && manifestoData && personaData && completedPages.length > 0 && (() => {
+                const hasConnections = brainData?.pages?.some((p) => p.connections.length > 0) ?? false;
                 const annotationsActive = annotationActiveFrames.size > 0;
                 return (
                   <div className={`flex items-stretch rounded-md overflow-hidden border transition-colors ${
@@ -1819,7 +1819,7 @@ export default function ProjectEditor() {
                   }`}>
                     <button
                       onClick={() => {
-                        if (!hasConnections) return;
+                        if (!hasConnections || !brainData) return;
                         const pagesWithConnections = brainData.pages
                           .filter((p) => p.connections.length > 0)
                           .map((p) => p.pageId);
@@ -1836,7 +1836,7 @@ export default function ProjectEditor() {
                             ? "text-amber-700 bg-amber-50 hover:bg-amber-100"
                             : "text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50"
                       }`}
-                      title={!hasConnections ? "No annotations available" : annotationsActive ? "Hide all annotations" : "Show all annotations"}
+                      title={!hasConnections ? "No annotations available — click retry to generate" : annotationsActive ? "Hide all annotations" : "Show all annotations"}
                     >
                       Annotations
                     </button>
@@ -1845,13 +1845,13 @@ export default function ProjectEditor() {
                       onClick={handleReEvaluateAnnotations}
                       disabled={isReEvaluating}
                       className={`flex items-center px-2 py-1.5 transition-colors ${
-                        strategyUpdatedAfterBuild
+                        strategyUpdatedAfterBuild || (!hasConnections && !isReEvaluating)
                           ? "text-blue-700 bg-blue-50 hover:bg-blue-100"
                           : isReEvaluating
                             ? "text-neutral-400 cursor-not-allowed"
                             : "text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50"
                       }`}
-                      title={strategyUpdatedAfterBuild ? "Strategy changed — re-evaluate annotations" : isReEvaluating ? "Evaluating annotations…" : "Retry / re-evaluate annotations"}
+                      title={!hasConnections ? "Generate annotations" : strategyUpdatedAfterBuild ? "Strategy changed — re-evaluate annotations" : isReEvaluating ? "Evaluating annotations…" : "Retry / re-evaluate annotations"}
                     >
                       <RotateCw className={`w-4 h-4 ${isReEvaluating ? "animate-spin" : ""}`} />
                     </button>
