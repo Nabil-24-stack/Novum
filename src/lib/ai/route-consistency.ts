@@ -9,7 +9,7 @@
  * Fail-safe: wrapped in try/catch — returns empty fixes on any error.
  */
 
-import { generateAppTsx, toPascalCase } from "@/lib/vfs/app-generator";
+import { generateAppTsx } from "@/lib/vfs/app-generator";
 
 // ============================================================================
 // Types

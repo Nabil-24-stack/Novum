@@ -100,6 +100,7 @@ export async function POST(req: Request) {
     flowContext,
     userFlowContext,
     modelId,
+    previousErrors,
   } = await req.json();
 
   const systemPrompt =
@@ -115,13 +116,24 @@ export async function POST(req: Request) {
     "\n\n" +
     DESIGN_SYSTEM_RULES;
 
+  // Build user message with optional error context from previous pages
+  let userContent = `Build the "${pageName}" page (route: ${pageRoute}). Write it to \`/pages/${componentName || pageName}.tsx\` with \`export function ${componentName || pageName}()\`. Make it polished and production-ready using the component library.`;
+
+  if (Array.isArray(previousErrors) && previousErrors.length > 0) {
+    const errorLines = previousErrors.map(
+      (e: { pageName: string; error: string; fix?: string }) =>
+        `- ${e.pageName}: "${e.error}"${e.fix ? ` (Fixed by: ${e.fix})` : ""}`
+    );
+    userContent += `\n\n## ERRORS FROM PREVIOUS PAGES — AVOID THESE MISTAKES:\n${errorLines.join("\n")}`;
+  }
+
   const result = streamText({
     model: getModel(modelId || "gemini-2.5-pro"),
     system: systemPrompt,
     messages: [
       {
         role: "user",
-        content: `Build the "${pageName}" page (route: ${pageRoute}). Write it to \`/pages/${componentName || pageName}.tsx\` with \`export function ${componentName || pageName}()\`. Make it polished and production-ready using the component library.`,
+        content: userContent,
       },
     ],
     providerOptions: {

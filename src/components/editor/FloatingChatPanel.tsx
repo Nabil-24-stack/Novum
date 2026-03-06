@@ -56,8 +56,10 @@ export function FloatingChatPanel({
   // Stable refs for callbacks to avoid re-running the clamping effect on every render
   const onMoveRef = useRef(onMove);
   const onResizeRef = useRef(onResize);
-  onMoveRef.current = onMove;
-  onResizeRef.current = onResize;
+  useEffect(() => {
+    onMoveRef.current = onMove;
+    onResizeRef.current = onResize;
+  });
 
   // Clamp panel to stay fully within the viewport on any position/size change and window resize
   useEffect(() => {

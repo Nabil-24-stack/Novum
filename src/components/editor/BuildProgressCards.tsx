@@ -40,7 +40,7 @@ export function BuildProgressCards({
         <div className="text-xs text-neutral-500 px-1 flex items-center gap-2">
           <span className="inline-flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-            Building pages sequentially...
+            Building &amp; verifying pages...
           </span>
         </div>
       )}

@@ -76,25 +76,53 @@ export async function POST(req: Request) {
         "/flow.json",
         "/package.json",
       ];
-      const extraFiles: [string, string][] = [];
 
-      for (const [path, content] of Object.entries(contextFiles)) {
-        // Skip files already in primary context
-        if (files[path]) continue;
-        // Include structural files, UI components, and page files
-        const isStructural = STRUCTURAL_PATTERNS.includes(path);
-        const isComponent = path.startsWith("/components/ui/");
-        const isPage = path.startsWith("/pages/");
-        if (isStructural || isComponent || isPage) {
-          extraFiles.push([path, content]);
+      // Parse error text for referenced module paths to prioritize them
+      const referencedPaths = new Set<string>();
+      if (errorText) {
+        // Match patterns like: Cannot find module '../shared/Sidebar', './components/Nav', '/pages/Home'
+        const moduleRefs = errorText.matchAll(/['"]([./][^'"]+)['"]/g);
+        for (const m of moduleRefs) {
+          let ref = m[1];
+          // Normalize relative paths: "../shared/Sidebar" → "/shared/Sidebar"
+          ref = ref.replace(/^\.\.?\/?/, "/");
+          if (!ref.endsWith(".tsx") && !ref.endsWith(".ts")) {
+            referencedPaths.add(ref + ".tsx");
+            referencedPaths.add(ref + ".ts");
+          }
+          referencedPaths.add(ref);
         }
       }
 
-      // Cap at 15 extra files to avoid token bloat
-      const capped = extraFiles.slice(0, 15);
-      if (capped.length > 0) {
+      const structuralFiles: [string, string][] = [];
+      const pageFiles: [string, string][] = [];
+      const referencedFiles: [string, string][] = [];
+      const componentFiles: [string, string][] = [];
+
+      for (const [path, content] of Object.entries(contextFiles)) {
+        if (files[path]) continue; // Skip files already in primary context
+        const isStructural = STRUCTURAL_PATTERNS.includes(path);
+        const isPage = path.startsWith("/pages/");
+        const isComponent = path.startsWith("/components/ui/");
+        const isReferenced = referencedPaths.has(path) || [...referencedPaths].some((rp) => path.endsWith(rp));
+
+        if (isReferenced) referencedFiles.push([path, content]);
+        else if (isStructural) structuralFiles.push([path, content]);
+        else if (isPage) pageFiles.push([path, content]);
+        else if (isComponent) componentFiles.push([path, content]);
+      }
+
+      // Prioritize: referenced files first, then structural, then ALL pages, then components (capped at 10)
+      const extraFiles = [
+        ...referencedFiles,
+        ...structuralFiles,
+        ...pageFiles,
+        ...componentFiles.slice(0, 10),
+      ];
+
+      if (extraFiles.length > 0) {
         additionalContext = "\n\nAdditional project files (for context):\n" +
-          capped.map(([path, content]) => `File: ${path}\n\`\`\`tsx\n${content}\n\`\`\``).join("\n\n");
+          extraFiles.map(([path, content]) => `File: ${path}\n\`\`\`tsx\n${content}\n\`\`\``).join("\n\n");
       }
     }
 

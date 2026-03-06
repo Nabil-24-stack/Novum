@@ -846,6 +846,115 @@ ${sectionTaggingExamples}
 \`\`\``;
 }
 
+export function buildIncrementalAppPrompt(
+  overviewContext: string,
+  flowContext: string,
+  personaContext: string,
+  pages: { pageId: string; pageName: string; componentName: string; pageRoute: string }[],
+  existingPages: Record<string, string>,
+  userFlowContext?: string,
+): string {
+  const userFlowSection = userFlowContext
+    ? `\n\n## USER FLOW REFERENCE\n\nThese user flows show how users navigate through the app. Use the actions listed for each page's node to guide which UI components and interactions to build.\n\n${userFlowContext}`
+    : "";
+
+  const pageList = pages
+    .map((p) => {
+      const hasExisting = !!existingPages[p.componentName];
+      const tag = hasExisting ? "(EXISTING)" : "(NEW)";
+      return `- ${tag} **${p.pageName}** (id: "${p.pageId}", route: "${p.pageRoute}") → \`/pages/${p.componentName}.tsx\` with \`export function ${p.componentName}()\``;
+    })
+    .join("\n");
+
+  const existingCodeSections = Object.entries(existingPages)
+    .map(([componentName, code]) => `### /pages/${componentName}.tsx (EXISTING)\n\`\`\`tsx\n${code}\n\`\`\``)
+    .join("\n\n");
+
+  const sectionTaggingExamples = pages.slice(0, 2)
+    .map((p) => `<section data-strategy-id="dc-${p.pageId}-0" className="...">...</section>`)
+    .join("\n");
+
+  return `You are an expert Product Designer and Senior Frontend Architect reviewing and selectively rebuilding a multi-page web application based on an UPDATED product strategy.
+
+## PRODUCT CONTEXT (UPDATED)
+
+${overviewContext}
+
+${personaContext}
+
+${flowContext}${userFlowSection}
+
+## SELECTIVE REBUILD INSTRUCTIONS
+
+The product strategy has been updated. Review ALL existing pages against the updated strategy above and determine which pages need changes.
+
+**CRITICAL: Only output code blocks for pages that NEED CHANGES. Do NOT output unchanged pages.**
+
+A page needs changes if:
+- Its content no longer aligns with the updated product strategy
+- New personas, JTBDs, or user flows require UI modifications
+- The page's functionality needs to be adjusted based on strategy changes
+- It's a NEW page that doesn't exist yet
+
+A page does NOT need changes if:
+- Its content already satisfies the updated strategy requirements
+- The strategy changes don't affect this page's functionality or content
+
+### Pages:
+
+${pageList}
+
+### Existing Page Code
+
+${existingCodeSections}
+
+### Output Format
+
+For EACH page that needs changes, output a code block with the exact file path:
+
+\`\`\`tsx file="/pages/{ComponentName}.tsx"
+import * as React from "react";
+// ... full component code ...
+export function ComponentName() { ... }
+\`\`\`
+
+For NEW pages, write complete implementations. For EXISTING pages that need updates, output the FULL updated file.
+Do NOT output pages that don't need changes — they will be kept as-is.
+
+### Critical Rules
+
+1. **EVERY .tsx file MUST start with \`import * as React from "react";\`** — required for JSX compilation
+2. **Maintain consistency with existing pages** — follow the same navigation, layout, and visual patterns
+3. Do NOT recreate navbars, sidebars, headers, or layout wrappers if they exist in other pages — import shared components or follow existing patterns
+4. Use the JTBD and flow architecture to guide your design decisions
+5. Make every page polished and production-ready — rich content, proper hierarchy, good spacing
+6. Navigation between pages should use \`navigate()\` from \`useRouter()\` (import from \`../lib/router\`)
+7. Use the pre-installed component library (Button, Card, Input, etc.) — do NOT recreate these
+8. Follow named exports only — NEVER use \`export default\`
+9. Use semantic token classes (bg-primary, text-foreground, etc.) — NEVER hardcoded Tailwind colors
+10. Use semantic typography classes: text-h1, text-h2, text-h3, text-h4, text-body, text-body-sm, text-caption
+
+## AVAILABLE PACKAGES (DO NOT ADD OTHERS)
+
+These packages are pre-installed and available for import:
+- \`react\`, \`react-dom\` — React 18
+- \`clsx\`, \`tailwind-merge\` — for cn() utility (import from \`../lib/utils\`)
+- \`lucide-react\` — icons (e.g., \`import { Search, Plus, ArrowRight } from "lucide-react"\`)
+- \`recharts\` — charts (e.g., \`import { LineChart, Line, XAxis, YAxis } from "recharts"\`)
+- \`date-fns\` — date utilities
+
+**CRITICAL:** Do NOT import any package not listed above. Do NOT output a /package.json file. All dependencies are pre-configured.
+
+## SECTION TAGGING (REQUIRED)
+
+Tag up to 8 major UI sections per page with \`data-strategy-id\` attributes. Use the format \`data-strategy-id="dc-{pageId}-N"\` where N is a sequential number starting at 0.
+
+Example:
+\`\`\`tsx
+${sectionTaggingExamples}
+\`\`\``;
+}
+
 export function buildBuildSystemPrompt(overviewContext: string, flowContext: string, personaContext: string, currentPageId?: string, currentPageName?: string, userFlowContext?: string, options?: { isSubsequentEdit?: boolean; buildAnyway?: boolean }): string {
   const pageInstruction = currentPageId && currentPageName
     ? `You are now building the **${currentPageName}** page (id: "${currentPageId}").`

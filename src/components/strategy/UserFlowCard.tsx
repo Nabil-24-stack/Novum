@@ -71,6 +71,7 @@ export function UserFlowCard({ flow, flowData, personas, x, y, onMove }: UserFlo
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset for progressive reveal animation
     setVisibleCount(0);
 
     if (steps.length === 0) return;

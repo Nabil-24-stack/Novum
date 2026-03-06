@@ -215,7 +215,7 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
       }
       if (!sourceIframe) return;
 
-      const { deltaX, deltaY, clientX, clientY, ctrlKey } = event.data;
+      const { deltaY, clientX, clientY, ctrlKey } = event.data;
 
       // Convert iframe-local coordinates to container-local coordinates
       const containerRect = container.getBoundingClientRect();

@@ -2086,10 +2086,17 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   // --- Self-healing verification loop ---
   const prevStatusRef = useRef(status);
   const verifyAbortRef = useRef<AbortController | null>(null);
+  const autoRetryCountRef = useRef(0);
+  const MAX_CHAT_AUTO_RETRIES = 1;
 
   useEffect(() => {
     const wasActive = prevStatusRef.current !== "ready";
     prevStatusRef.current = status;
+
+    // Reset auto-retry counter when user sends a new message (submitted → streaming transition)
+    if (status === "submitted" || status === "streaming") {
+      autoRetryCountRef.current = 0;
+    }
 
     if (wasActive && status === "ready") {
       const store = useStreamingStore.getState();
@@ -2118,7 +2125,19 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
           if (result.status === "fixed") {
             toast.success(`Auto-fixed ${result.fixCount} issue${result.fixCount > 1 ? "s" : ""}`);
           } else if (result.status === "failed") {
-            toast.warning("Could not auto-fix all issues");
+            // Auto-retry: send the error back to the AI as a follow-up message
+            if (autoRetryCountRef.current < MAX_CHAT_AUTO_RETRIES && result.lastError) {
+              autoRetryCountRef.current++;
+              toast.info("Sending error to AI for a fix...");
+
+              const errorContext = buildBuildingPhaseVfsContext(files);
+              sendMessage(
+                { text: `The code you just wrote has this runtime error:\n\n"${result.lastError}"\n\nPlease fix the error. Write the corrected file(s) with full content.` },
+                { body: { vfsContext: Object.values(errorContext).filter(Boolean).join("\n\n"), modelId: selectedModel, strategyPhase: "building" } }
+              );
+            } else {
+              toast.warning("Could not auto-fix all issues");
+            }
           }
           // "passed" → silent (no toast)
         });
@@ -2959,27 +2978,38 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                   userFlowContext,
                 };
 
-                // Build per-page configs
+                // Detect rebuild: if we already have completed pages, this is a subsequent build
+                const isRebuild = storeState.completedPages.length > 0;
+
+                // Build per-page configs, collecting existing code for rebuilds
                 const pages = pageNodes.map((node, index) => {
                   const route = index === 0 ? "/" : `/${node.id}`;
+                  const componentName = toPascalCase(node.label);
+                  const existingCode = isRebuild
+                    ? (getLatestFile(`/pages/${componentName}.tsx`) || files[`/pages/${componentName}.tsx`] || undefined)
+                    : undefined;
                   return {
                     pageId: node.id,
                     pageName: node.label,
-                    componentName: toPascalCase(node.label),
+                    componentName,
                     pageRoute: route,
+                    existingCode,
                   };
                 });
 
+                // Add isRebuild flag to shared context
+                const enrichedSharedContext = { ...sharedContext, isRebuild };
+
                 // Store config for retry
-                parallelBuildConfigRef.current = { pages, sharedContext };
+                parallelBuildConfigRef.current = { pages, sharedContext: enrichedSharedContext };
                 const nameMap: Record<string, { name: string; route: string }> = {};
                 for (const p of pages) {
                   nameMap[p.pageId] = { name: p.pageName, route: p.pageRoute };
                 }
                 parallelPageNamesRef.current = nameMap;
 
-                // Fire all builds in parallel
-                parallelBuild.startBuild(pages, sharedContext, selectedModel);
+                // Fire build
+                parallelBuild.startBuild(pages, enrichedSharedContext, selectedModel);
               }}
               className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
             >

@@ -49,7 +49,7 @@ import { evaluateAnnotationsStandalone } from "@/hooks/useParallelBuild";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
 import { useProjectPersistence } from "@/hooks/useProjectPersistence";
 import { useParams, useRouter } from "next/navigation";
-import { Smartphone, GitBranch, Share, RefreshCw, MessageSquareText, RotateCw, ChevronLeft, Loader2 as LoaderIcon } from "lucide-react";
+import { Smartphone, GitBranch, Share, RefreshCw, RotateCw, ChevronLeft, Loader2 as LoaderIcon } from "lucide-react";
 import { toast } from "sonner";
 import { animateViewport, calculateCenteredViewport, calculateFitAllViewport } from "@/lib/canvas/viewport-animation";
 import { calculateFlowLayout } from "@/lib/flow/auto-layout";
@@ -259,7 +259,7 @@ export default function ProjectEditor() {
         setIsProjectLoading(false);
       }
     })();
-  }, [projectId, resetFiles, router]);
+  }, [projectId, resetFiles, router, setNodePositions]);
 
   // Handle messages change from ChatTab
   const handleMessagesChange = useCallback((msgs: unknown[]) => {

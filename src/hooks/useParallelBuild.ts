@@ -9,6 +9,7 @@ import { parseStreamingContent } from "@/lib/streaming-parser";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
 import { generateAppTsx, toPascalCase } from "@/lib/vfs/app-generator";
 import { runVerificationLoop, type VerificationStateCallbacks } from "@/lib/verification/verify-loop";
+import { isIframeAvailable, queryIframeErrors } from "@/lib/verification/screenshot-capture";
 import { toast } from "sonner";
 
 export interface PageBuildConfig {
@@ -16,6 +17,7 @@ export interface PageBuildConfig {
   pageName: string;
   componentName: string;
   pageRoute: string;
+  existingCode?: string;
 }
 
 interface SharedContext {
@@ -23,6 +25,7 @@ interface SharedContext {
   personaContext: string;
   flowContext: string;
   userFlowContext?: string;
+  isRebuild?: boolean;
 }
 
 // Ensure every .tsx file has `import * as React from "react"` so JSX works in Sandpack's classic transform
@@ -324,8 +327,8 @@ export function useParallelBuild({
       useStreamingStore.getState().addPageVerificationLog(pageId, message),
   }), []);
 
-  // Run verification for a single page
-  const verifyPage = async (page: PageBuildConfig, signal: AbortSignal) => {
+  // Run verification for a single page — returns result for error history tracking
+  const verifyPage = async (page: PageBuildConfig, signal: AbortSignal): Promise<import("@/lib/verification/verify-loop").VerificationResult | null> => {
     const completedFilePaths = useStreamingStore.getState().pageBuilds[page.pageId]?.completedFilePaths || [];
 
     // Build latest files map — `files` is a stale React closure, so
@@ -352,8 +355,11 @@ export function useParallelBuild({
       } else if (result.status === "failed") {
         toast.warning(`${page.pageName}: could not auto-fix all issues`);
       }
+
+      return result;
     } catch {
       // Verification failed — page is still usable, just not verified
+      return null;
     }
   };
 
@@ -402,6 +408,219 @@ export function useParallelBuild({
     }
   };
 
+  // Smart polling: wait for Sandpack to settle after file writes.
+  // 1.5s initial wait, then poll iframe every 500ms for up to 8s.
+  // Falls back to proceeding after 10s total.
+  const waitForSandpackSettle = async (pageId: string, signal: AbortSignal): Promise<void> => {
+    const INITIAL_WAIT = 1500;
+    const POLL_INTERVAL = 500;
+    const MAX_TOTAL = 10000;
+    const start = Date.now();
+
+    // Initial wait for HMR to kick in
+    await new Promise<void>((resolve, reject) => {
+      if (signal.aborted) { reject(new DOMException("Aborted", "AbortError")); return; }
+      const t = setTimeout(resolve, INITIAL_WAIT);
+      signal.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+    });
+
+    // Poll until iframe responds or timeout
+    while (Date.now() - start < MAX_TOTAL) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      if (!isIframeAvailable(pageId)) {
+        // Iframe not in DOM yet — wait and retry
+        await new Promise<void>((resolve, reject) => {
+          const t = setTimeout(resolve, POLL_INTERVAL);
+          signal.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+        });
+        continue;
+      }
+      // Try querying — if we get a response (even null = no error), Sandpack is ready
+      try {
+        await queryIframeErrors(pageId, 2000);
+        return; // Got a response — Sandpack is settled
+      } catch {
+        // Query timed out — iframe not ready yet, keep polling
+      }
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, POLL_INTERVAL);
+        signal.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+      });
+    }
+    // Timeout — proceed anyway
+  };
+
+  // Build pages one at a time, verifying each before proceeding.
+  // Error context from earlier pages is forwarded to subsequent builds.
+  const buildPagesSequentially = async (
+    pages: PageBuildConfig[],
+    sharedContext: SharedContext,
+    signal: AbortSignal,
+    modelId: string,
+  ) => {
+    const errorHistory: Array<{ pageName: string; error: string; fix?: string }> = [];
+
+    try {
+      for (const page of pages) {
+        if (signal.aborted) break;
+
+        const { updatePageBuild, completePageBuild, failPageBuild } =
+          useStreamingStore.getState();
+
+        updatePageBuild(page.pageId, { status: "streaming" });
+
+        try {
+          // Build single page via /api/build-page with error context
+          const response = await fetch("/api/build-page", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              pageId: page.pageId,
+              pageName: page.pageName,
+              componentName: page.componentName,
+              pageRoute: page.pageRoute,
+              manifestoContext: sharedContext.manifestoContext,
+              personaContext: sharedContext.personaContext,
+              flowContext: sharedContext.flowContext,
+              userFlowContext: sharedContext.userFlowContext || "",
+              modelId,
+              previousErrors: errorHistory.length > 0 ? errorHistory : undefined,
+            }),
+            signal,
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          const reader = response.body?.getReader();
+          if (!reader) throw new Error("No response body");
+
+          const decoder = new TextDecoder();
+          let fullText = "";
+          const writtenPaths = new Set<string>();
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            fullText += chunk;
+
+            const parsed = parseStreamingContent(fullText);
+
+            if (parsed.currentFile) {
+              updatePageBuild(page.pageId, { currentFile: parsed.currentFile });
+            }
+
+            for (const block of parsed.completedBlocks) {
+              const dedupKey = block.path + "|" + block.content.length;
+              if (!writtenPaths.has(dedupKey)) {
+                writtenPaths.add(dedupKey);
+
+                const ext = block.path.split(".").pop() || "";
+                let finalContent = block.content;
+                if (["tsx", "ts", "jsx", "js"].includes(ext)) {
+                  const gated = runGatekeeper(block.content, files, block.path);
+                  finalContent = gated.code;
+                  if (gated.report.hadChanges) {
+                    const total =
+                      (gated.report.importFixes?.length || 0) +
+                      gated.report.colorViolations.length +
+                      gated.report.spacingViolations.length +
+                      gated.report.layoutViolations.length +
+                      gated.report.componentPromotions.length +
+                      gated.report.layoutDeclarationAdditions.length;
+                    toast.info(
+                      `Gatekeeper (${page.pageName}): ${total} design system fix${total > 1 ? "es" : ""} applied`
+                    );
+                  }
+                  if (ext === "tsx" || ext === "jsx") {
+                    finalContent = ensureReactImport(finalContent);
+                  }
+                }
+
+                writeFile(block.path, finalContent);
+
+                const current = useStreamingStore.getState().pageBuilds[page.pageId];
+                if (current) {
+                  updatePageBuild(page.pageId, {
+                    completedFilePaths: [...current.completedFilePaths, block.path],
+                  });
+                }
+              }
+            }
+          }
+
+          // Flush final streaming block if incomplete
+          const finalParsed = parseStreamingContent(fullText);
+          if (finalParsed.currentFile) {
+            const dedupKey = finalParsed.currentFile.path + "|" + finalParsed.currentFile.content.length;
+            if (!writtenPaths.has(dedupKey)) {
+              writtenPaths.add(dedupKey);
+
+              const ext = finalParsed.currentFile.path.split(".").pop() || "";
+              let finalContent = finalParsed.currentFile.content;
+              if (["tsx", "ts", "jsx", "js"].includes(ext)) {
+                const gated = runGatekeeper(finalContent, files, finalParsed.currentFile.path);
+                finalContent = gated.code;
+                if (ext === "tsx" || ext === "jsx") {
+                  finalContent = ensureReactImport(finalContent);
+                }
+              }
+
+              writeFile(finalParsed.currentFile.path, finalContent);
+
+              const current = useStreamingStore.getState().pageBuilds[page.pageId];
+              if (current) {
+                updatePageBuild(page.pageId, {
+                  completedFilePaths: [...current.completedFilePaths, finalParsed.currentFile.path],
+                });
+              }
+            }
+          }
+
+          completePageBuild(page.pageId);
+          useStrategyStore.getState().addCompletedPage(page.pageId);
+          rebuildAppTsx();
+          flushRebuildAppTsx();
+
+          // Wait for Sandpack to settle before verifying
+          if (!signal.aborted) {
+            await waitForSandpackSettle(page.pageId, signal);
+
+            const result = await verifyPage(page, signal);
+
+            // Track errors for subsequent pages
+            if (result && (result.status === "fixed" || result.status === "failed") && result.lastError) {
+              errorHistory.push({
+                pageName: page.pageName,
+                error: result.lastError.slice(0, 200),
+                fix: result.fixSummary,
+              });
+            }
+          }
+        } catch (err: unknown) {
+          if (signal.aborted) break;
+          const message = err instanceof Error ? err.message : "Unknown error";
+          failPageBuild(page.pageId, message);
+          console.error(`[Build] Failed to build ${page.pageName}:`, err);
+
+          // Track build failures in error history too
+          errorHistory.push({
+            pageName: page.pageName,
+            error: message.slice(0, 200),
+          });
+        }
+      }
+
+      // All pages processed — trigger annotation evaluation
+      checkAllPagesComplete();
+    } finally {
+      abortControllersRef.current.delete("__build__");
+    }
+  };
+
   // Single-call sequential build: one API call generates all pages
   const buildAllPages = async (
     pages: PageBuildConfig[],
@@ -409,7 +628,18 @@ export function useParallelBuild({
     signal: AbortSignal,
     modelId: string,
   ) => {
+    const isRebuild = sharedContext.isRebuild || false;
+
     try {
+      // Build existingPages map for rebuild context
+      const existingPages: Record<string, string> | undefined = isRebuild
+        ? Object.fromEntries(
+            pages
+              .filter((p) => p.existingCode)
+              .map((p) => [p.componentName, p.existingCode!])
+          )
+        : undefined;
+
       const response = await fetch("/api/build-app", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -425,6 +655,7 @@ export function useParallelBuild({
           flowContext: sharedContext.flowContext,
           userFlowContext: sharedContext.userFlowContext || "",
           modelId,
+          ...(isRebuild ? { isRebuild: true, existingPages } : {}),
         }),
         signal,
       });
@@ -457,7 +688,8 @@ export function useParallelBuild({
             const { updatePageBuild } = useStreamingStore.getState();
             const build = useStreamingStore.getState().pageBuilds[currentPage.pageId];
             // Only set to streaming if not already completed
-            if (build && build.status !== "completed") {
+            // During rebuild, allow pre-completed pages to transition back to streaming
+            if (build && (build.status !== "completed" || isRebuild)) {
               updatePageBuild(currentPage.pageId, {
                 status: "streaming",
                 currentFile: parsed.currentFile,
@@ -490,22 +722,41 @@ export function useParallelBuild({
       flushRebuildAppTsx();
       checkAllPagesComplete();
 
-      // Mark any pages that never got a code block as errors
+      // Track which pages actually received new code blocks during rebuild
+      const rebuiltPageIds = new Set(
+        Array.from(writtenPaths).map((key) => {
+          const path = key.split("|")[0];
+          return findPageForPath(path)?.pageId;
+        }).filter(Boolean) as string[]
+      );
+
+      // Mark any pages that never got a code block
       for (const page of pages) {
         const build = useStreamingStore.getState().pageBuilds[page.pageId];
         if (build && build.status !== "completed") {
-          useStreamingStore.getState().failPageBuild(
-            page.pageId,
-            "Page was not generated (possible output truncation)"
-          );
+          if (isRebuild && page.existingCode) {
+            // During rebuild, pages without code blocks are unchanged — mark as completed
+            useStreamingStore.getState().completePageBuild(page.pageId);
+            useStrategyStore.getState().addCompletedPage(page.pageId);
+            rebuildAppTsx();
+          } else {
+            // New pages or initial build — missing code block is an error
+            useStreamingStore.getState().failPageBuild(
+              page.pageId,
+              "Page was not generated (possible output truncation)"
+            );
+          }
         }
       }
 
-      // Run verification on each completed page
+      // Run verification only on pages that received new code blocks
       if (!signal.aborted) {
         const completedPages = pages.filter((p) => {
           const build = useStreamingStore.getState().pageBuilds[p.pageId];
-          return build?.status === "completed";
+          if (build?.status !== "completed") return false;
+          // During rebuild, only verify pages that were actually rebuilt
+          if (isRebuild && !rebuiltPageIds.has(p.pageId)) return false;
+          return true;
         });
 
         for (const page of completedPages) {
@@ -680,10 +931,28 @@ export function useParallelBuild({
       useStreamingStore.getState().startParallelStreaming(pageIds);
       useStrategyStore.getState().setBuildingPages(pageIds);
 
-      // Single API call to build all pages sequentially
+      // During rebuild, immediately pre-complete pages that have existing code
+      // This prevents the StreamingOverlay from showing the black terminal for unchanged pages
+      if (sharedContext.isRebuild) {
+        for (const page of pages) {
+          if (page.existingCode) {
+            useStreamingStore.getState().completePageBuild(page.pageId);
+            useStrategyStore.getState().addCompletedPage(page.pageId);
+          }
+        }
+        rebuildAppTsx();
+      }
+
       const controller = new AbortController();
       abortControllersRef.current.set("__build__", controller);
-      buildAllPages(pages, sharedContext, controller.signal, modelId);
+
+      if (sharedContext.isRebuild) {
+        // Rebuilds use single API call (buildAllPages) since pages may be unchanged
+        buildAllPages(pages, sharedContext, controller.signal, modelId);
+      } else {
+        // Fresh builds: build each page sequentially with inline verification
+        buildPagesSequentially(pages, sharedContext, controller.signal, modelId);
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [writeFile, files]

@@ -216,16 +216,9 @@ function FlowModeSync({ flowModeActive }: { flowModeActive: boolean }) {
 export function SandpackWrapper({ files, children, previewMode = "light", inspectionMode = false, flowModeActive = false }: SandpackWrapperProps) {
   // Parse dependencies from VFS package.json, with fallback to defaults.
   // Stabilize reference: only return a new object when the JSON content actually changes.
-  const prevDepsJsonRef = useRef("");
-  const prevDepsRef = useRef<Record<string, string>>(defaultPackageJson.dependencies);
-  const dependencies = useMemo(() => {
-    const parsed = parseDependencies(files);
-    const json = JSON.stringify(parsed);
-    if (json === prevDepsJsonRef.current) return prevDepsRef.current;
-    prevDepsJsonRef.current = json;
-    prevDepsRef.current = parsed;
-    return parsed;
-  }, [files]);
+  // Two-step memo: first compute JSON string (changes with files), then parse only when JSON changes.
+  const depsJson = useMemo(() => JSON.stringify(parseDependencies(files)), [files]);
+  const dependencies = useMemo(() => JSON.parse(depsJson) as Record<string, string>, [depsJson]);
 
   // Filter out package.json and tokens.json from files passed to Sandpack
   // (Sandpack manages dependencies separately via customSetup)

@@ -6,6 +6,24 @@
 const DEFAULT_TIMEOUT = 5000;
 
 /**
+ * Check if a Sandpack iframe exists in the DOM and has a contentWindow.
+ * Used by waitForSandpackSettle to poll for iframe readiness.
+ */
+export function isIframeAvailable(pageId?: string): boolean {
+  let iframe: HTMLIFrameElement | null;
+  if (pageId) {
+    iframe = document.querySelector(
+      `[data-flow-page-id="${pageId}"] iframe`
+    ) as HTMLIFrameElement | null;
+  } else {
+    iframe = document.querySelector(
+      'iframe[title="Sandpack Preview"]'
+    ) as HTMLIFrameElement | null;
+  }
+  return !!(iframe?.contentWindow);
+}
+
+/**
  * Query a Sandpack iframe for runtime errors by checking document.body text.
  * Returns the error text if found, or null if the page looks clean.
  */

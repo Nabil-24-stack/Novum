@@ -55,6 +55,8 @@ export interface VerificationResult {
   status: "passed" | "fixed" | "failed";
   attempts: number;
   fixCount: number;
+  lastError?: string;
+  fixSummary?: string;
 }
 
 /** Callbacks for updating verification state. Allows page-scoped state in parallel mode. */
@@ -128,6 +130,8 @@ export async function runVerificationLoop(
   }
 
   let totalFixes = 0;
+  let lastDetectedError: string | undefined;
+  let lastFixSummary: string | undefined;
 
   cb.startVerification();
 
@@ -160,10 +164,13 @@ export async function runVerificationLoop(
           status: totalFixes > 0 ? "fixed" : "passed",
           attempts: attempt,
           fixCount: totalFixes,
+          lastError: lastDetectedError,
+          fixSummary: lastFixSummary,
         };
       }
 
       // 4. Error detected — send to AI for fix
+      lastDetectedError = detectedError;
       cb.addLog(`Error detected: ${detectedError.slice(0, 100)}`);
       cb.setReviewing();
       cb.addLog("Sending error to AI for fix...");
@@ -187,7 +194,7 @@ export async function runVerificationLoop(
         console.warn("[verify] API call failed:", err);
         if (attempt === MAX_ATTEMPTS) {
           cb.setFailed([`Verify API error: ${(err as Error).message || "unknown"}`]);
-          return { status: "failed", attempts: attempt, fixCount: totalFixes };
+          return { status: "failed", attempts: attempt, fixCount: totalFixes, lastError: lastDetectedError, fixSummary: lastFixSummary };
         }
         cb.addLog(`API call failed (attempt ${attempt}/${MAX_ATTEMPTS}), retrying...`);
         continue;
@@ -202,7 +209,7 @@ export async function runVerificationLoop(
         if (attempt === MAX_ATTEMPTS) {
           cb.addLog("Could not fix all issues");
           cb.setFailed(issues);
-          return { status: "failed", attempts: attempt, fixCount: totalFixes };
+          return { status: "failed", attempts: attempt, fixCount: totalFixes, lastError: lastDetectedError, fixSummary: lastFixSummary };
         }
         cb.setFixing(issues);
         continue;
@@ -214,11 +221,12 @@ export async function runVerificationLoop(
       if (fixBlocks.length === 0) {
         if (attempt === MAX_ATTEMPTS) {
           cb.setFailed(issues);
-          return { status: "failed", attempts: attempt, fixCount: totalFixes };
+          return { status: "failed", attempts: attempt, fixCount: totalFixes, lastError: lastDetectedError, fixSummary: lastFixSummary };
         }
         continue;
       }
 
+      const fixedPaths: string[] = [];
       for (const block of fixBlocks) {
         // Run through gatekeeper (same as ChatTab)
         const gated = runGatekeeper(block.content, allFiles, block.path);
@@ -236,8 +244,10 @@ export async function runVerificationLoop(
         writtenFiles[block.path] = finalContent;
         allFiles[block.path] = finalContent;
         totalFixes++;
+        fixedPaths.push(block.path);
       }
 
+      lastFixSummary = `Fixed ${fixedPaths.join(", ")} (${issues[0] || "unknown issue"})`;
       cb.addLog(`Fix applied (attempt ${attempt}/${MAX_ATTEMPTS}), re-checking...`);
 
       // Loop continues — next iteration will re-check for errors after fix
@@ -246,7 +256,7 @@ export async function runVerificationLoop(
     // Exhausted all attempts
     cb.addLog("Could not fix all issues");
     cb.setFailed(["Exhausted all verification attempts"]);
-    return { status: "failed", attempts: MAX_ATTEMPTS, fixCount: totalFixes };
+    return { status: "failed", attempts: MAX_ATTEMPTS, fixCount: totalFixes, lastError: lastDetectedError, fixSummary: lastFixSummary };
   } catch (err) {
     if ((err as Error).name === "AbortError") {
       cb.reset();
@@ -255,6 +265,6 @@ export async function runVerificationLoop(
     // Unexpected error — mark as failed so the UI doesn't show a green checkmark
     console.error("[verify] Unexpected error:", err);
     cb.setFailed([`Unexpected error: ${(err as Error).message || "unknown"}`]);
-    return { status: "failed", attempts: 0, fixCount: 0 };
+    return { status: "failed", attempts: 0, fixCount: 0, lastError: lastDetectedError };
   }
 }

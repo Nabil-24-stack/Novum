@@ -2,7 +2,7 @@ import { streamText } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
-import { buildSequentialAppPrompt } from "@/lib/ai/strategy-prompts";
+import { buildSequentialAppPrompt, buildIncrementalAppPrompt } from "@/lib/ai/strategy-prompts";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 
 type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6" | "gpt-5.2";
@@ -97,20 +97,32 @@ export async function POST(req: Request) {
     flowContext,
     userFlowContext,
     modelId,
+    existingPages,
+    isRebuild,
   } = await req.json();
 
-  const systemPrompt =
-    buildSequentialAppPrompt(
-      manifestoContext || "",
-      flowContext || "",
-      personaContext || "",
-      pages || [],
-      userFlowContext || undefined,
-    ) +
-    "\n\n" +
-    DESIGN_SYSTEM_RULES;
+  const systemPrompt = isRebuild && existingPages
+    ? buildIncrementalAppPrompt(
+        manifestoContext || "",
+        flowContext || "",
+        personaContext || "",
+        pages || [],
+        existingPages,
+        userFlowContext || undefined,
+      ) + "\n\n" + DESIGN_SYSTEM_RULES
+    : buildSequentialAppPrompt(
+        manifestoContext || "",
+        flowContext || "",
+        personaContext || "",
+        pages || [],
+        userFlowContext || undefined,
+      ) + "\n\n" + DESIGN_SYSTEM_RULES;
 
   const pageNames = (pages || []).map((p: { pageName: string }) => p.pageName).join(", ");
+
+  const userMessage = isRebuild
+    ? `Review all pages against the updated product strategy and rebuild ONLY the ones that need changes: ${pageNames}. Do NOT output code blocks for unchanged pages.`
+    : `Build all pages of the application sequentially: ${pageNames}. Output each page as a separate code block. Make every page polished and production-ready using the component library.`;
 
   const result = streamText({
     model: getModel(modelId || "gemini-2.5-pro"),
@@ -119,7 +131,7 @@ export async function POST(req: Request) {
     messages: [
       {
         role: "user",
-        content: `Build all pages of the application sequentially: ${pageNames}. Output each page as a separate code block. Make every page polished and production-ready using the component library.`,
+        content: userMessage,
       },
     ],
     providerOptions: {
