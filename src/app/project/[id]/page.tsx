@@ -259,7 +259,8 @@ export default function ProjectEditor() {
         setIsProjectLoading(false);
       }
     })();
-  }, [projectId, resetFiles, router, setNodePositions]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- setNodePositions is stable (useCallback with [] deps) and defined later in the file
+  }, [projectId, resetFiles, router]);
 
   // Handle messages change from ChatTab
   const handleMessagesChange = useCallback((msgs: unknown[]) => {
