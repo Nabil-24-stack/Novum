@@ -43,6 +43,7 @@ export interface GatekeeperResult {
 
 export interface GatekeeperReport {
   hadChanges: boolean;
+  smartQuotesSanitized: boolean;
   importFixes: ImportFix[];
   colorViolations: ColorViolation[];
   spacingViolations: SpacingViolation[];
@@ -188,6 +189,7 @@ export function runGatekeeper(
 ): GatekeeperResult {
   const emptyReport: GatekeeperReport = {
     hadChanges: false,
+    smartQuotesSanitized: false,
     importFixes: [],
     colorViolations: [],
     spacingViolations: [],
@@ -211,6 +213,21 @@ export function runGatekeeper(
   const allTypographyViolations: TypographyViolation[] = [];
   let allPromotions: ComponentPromotion[] = [];
   let allLayoutDeclarationAdditions: LayoutDeclarationAddition[] = [];
+  let smartQuotesSanitized = false;
+
+  // ── Phase -2: Smart Quote Sanitization ──
+  // AI models sometimes generate Unicode curly/smart quotes that break JSX parsing
+  {
+    const sanitized = currentCode
+      .replace(/[\u201C\u201D]/g, '"')   // " " → "
+      .replace(/[\u2018\u2019]/g, "'")   // ' ' → '
+      .replace(/\u2014/g, "--")          // em dash → double hyphen
+      .replace(/\u2013/g, "-");          // en dash → hyphen
+    if (sanitized !== currentCode) {
+      currentCode = sanitized;
+      smartQuotesSanitized = true;
+    }
+  }
 
   // ── Phase -1: Import Fixing ──
   try {
@@ -306,6 +323,7 @@ export function runGatekeeper(
   }
 
   const hadChanges =
+    smartQuotesSanitized ||
     allImportFixes.length > 0 ||
     allColorViolations.length > 0 ||
     allSpacingViolations.length > 0 ||
@@ -318,6 +336,7 @@ export function runGatekeeper(
     code: currentCode,
     report: {
       hadChanges,
+      smartQuotesSanitized,
       importFixes: allImportFixes,
       colorViolations: allColorViolations,
       spacingViolations: allSpacingViolations,

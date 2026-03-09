@@ -88,7 +88,8 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * This means Sandpack just needs more time to install it — not a code fix issue.
  */
 function isDependencyError(error: string, allFiles: Record<string, string>): boolean {
-  const depMatch = error.match(/Could not find dependency:\s*'([^']+)'/);
+  // Match both: 'dep-name' and `dep-name` (Sandpack uses varying quote styles)
+  const depMatch = error.match(/Could not find dependency:\s*['`"]([^'`"]+)['`"]/);
   if (!depMatch) return false;
   const depName = depMatch[1];
 
@@ -197,6 +198,9 @@ async function detectErrors(
 function parseSyntaxErrorLocation(
   error: string
 ): { filePath: string; line: number } | null {
+  // Only match actual SyntaxErrors, not dependency/runtime errors
+  if (!error.includes("SyntaxError")) return null;
+
   const fileMatch = error.match(/(\/[^\s:|]+\.(?:tsx?|jsx?|js))/);
   const locMatch = error.match(/\((\d+):(\d+)\)/);
   if (!fileMatch || !locMatch) return null;
