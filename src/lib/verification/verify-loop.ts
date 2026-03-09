@@ -191,6 +191,26 @@ async function detectErrors(
 }
 
 /**
+ * Parse a syntax error to extract file path and line number.
+ * Returns null if the error doesn't match known syntax error patterns.
+ */
+function parseSyntaxErrorLocation(
+  error: string
+): { filePath: string; line: number } | null {
+  const fileMatch = error.match(/(\/[^\s:|]+\.(?:tsx?|jsx?|js))/);
+  const locMatch = error.match(/\((\d+):(\d+)\)/);
+  if (!fileMatch || !locMatch) return null;
+  return { filePath: fileMatch[1], line: parseInt(locMatch[1]) };
+}
+
+/** Min file size (lines) to trigger focused section mode */
+const FOCUSED_MODE_THRESHOLD = 200;
+/** Lines to include before the error in focused section */
+const FOCUSED_LINES_BEFORE = 60;
+/** Lines to include after the error in focused section */
+const FOCUSED_LINES_AFTER = 40;
+
+/**
  * Enrich a syntax error message with the relevant source lines.
  * Helps the AI immediately see the broken code.
  */
@@ -358,7 +378,43 @@ export async function runVerificationLoop(
       cb.addLog(`Sending error to AI for fix (attempt ${attempt}/${MAX_ATTEMPTS})...`);
 
       // Enrich syntax errors with source context lines
-      const enrichedError = enrichSyntaxError(detectedError, allFiles);
+      let enrichedError = enrichSyntaxError(detectedError, allFiles);
+
+      // --- Focused section mode for syntax errors in large files ---
+      // Instead of sending a 1000-line file to the AI (causing 504 timeouts),
+      // send only ~100 lines around the error. The AI fixes the section,
+      // and we splice it back into the original file.
+      let focusedSection: {
+        filePath: string;
+        startLine: number;
+        endLine: number;
+      } | null = null;
+      let apiFiles = writtenFiles;
+
+      const syntaxLoc = parseSyntaxErrorLocation(detectedError);
+      if (syntaxLoc && allFiles[syntaxLoc.filePath]) {
+        const fileLines = allFiles[syntaxLoc.filePath].split("\n");
+        if (fileLines.length > FOCUSED_MODE_THRESHOLD) {
+          const startLine = Math.max(0, syntaxLoc.line - FOCUSED_LINES_BEFORE);
+          const endLine = Math.min(
+            fileLines.length,
+            syntaxLoc.line + FOCUSED_LINES_AFTER
+          );
+          const section = fileLines.slice(startLine, endLine).join("\n");
+
+          apiFiles = { ...writtenFiles, [syntaxLoc.filePath]: section };
+          enrichedError += `\n\nIMPORTANT: The code below shows ONLY lines ${startLine + 1}\u2013${endLine} of ${syntaxLoc.filePath} (the full file is ${fileLines.length} lines). Fix the syntax error within this section. Return ONLY the fixed section as the code block \u2014 do NOT add imports or other code outside the shown range.`;
+
+          focusedSection = {
+            filePath: syntaxLoc.filePath,
+            startLine,
+            endLine,
+          };
+          cb.addLog(
+            `Using focused mode: lines ${startLine + 1}\u2013${endLine} of ${syntaxLoc.filePath}`
+          );
+        }
+      }
 
       // Build rich context for the AI
       const vfsFilePaths = Object.keys(allFiles);
@@ -374,7 +430,7 @@ export async function runVerificationLoop(
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            files: writtenFiles,
+            files: apiFiles,
             contextFiles: allFiles,
             modelId,
             errorText: enrichedError,
@@ -486,8 +542,23 @@ export async function runVerificationLoop(
 
       const fixedPaths: string[] = [];
       for (const block of fixBlocks) {
+        let blockContent = block.content;
+
+        // If this was a focused section fix, splice the section back into the full file
+        if (focusedSection && block.path === focusedSection.filePath) {
+          const originalLines = allFiles[block.path].split("\n");
+          const fixedSectionLines = blockContent.split("\n");
+          originalLines.splice(
+            focusedSection.startLine,
+            focusedSection.endLine - focusedSection.startLine,
+            ...fixedSectionLines
+          );
+          blockContent = originalLines.join("\n");
+          cb.addLog("Spliced focused fix back into full file");
+        }
+
         // Run through gatekeeper (same as ChatTab)
-        const gated = runGatekeeper(block.content, allFiles, block.path);
+        const gated = runGatekeeper(blockContent, allFiles, block.path);
         let finalContent = gated.code;
 
         // Ensure React import for .tsx/.jsx files (Sandpack classic transform)
