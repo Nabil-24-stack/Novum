@@ -1,11 +1,13 @@
 /**
  * Deterministic pre-validation pass.
- * Catches structural issues (missing imports, missing deps, unresolvable files)
+ * Catches structural issues (syntax errors, missing imports, missing deps, unresolvable files)
  * BEFORE Sandpack compiles, without needing an AI call.
  *
  * Auto-fixes what it can (missing npm deps, missing React imports).
  * Returns unresolved errors as precise messages for the AI fix loop.
  */
+
+import { parse } from "@babel/parser";
 
 // Built-in modules and packages that don't need to be in package.json
 const BUILTIN_MODULES = new Set([
@@ -215,6 +217,30 @@ export function preValidate(
 ): PreValidationResult {
   const autoFixed: string[] = [];
   const unresolvedErrors: string[] = [];
+
+  // --- Check 0: Syntax validation ---
+  for (const filePath of writtenFilePaths) {
+    const code = allFiles[filePath];
+    if (!code) continue;
+    const ext = filePath.split(".").pop() || "";
+    if (!["tsx", "ts", "jsx", "js"].includes(ext)) continue;
+
+    try {
+      parse(code, {
+        sourceType: "module",
+        plugins: ["typescript", "jsx"],
+        sourceFilename: filePath,
+      });
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        const loc = (err as SyntaxError & { loc?: { line: number; column: number } }).loc;
+        const lineInfo = loc ? ` (line ${loc.line}, col ${loc.column})` : "";
+        unresolvedErrors.push(
+          `Syntax error in ${filePath}${lineInfo}: ${err.message}`
+        );
+      }
+    }
+  }
 
   // Collect all imports from written files
   const allImports: ImportInfo[] = [];

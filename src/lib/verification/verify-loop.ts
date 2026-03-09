@@ -158,10 +158,20 @@ async function detectErrors(
   // Layer 1: Check Sandpack native error from global store
   const entry = useSandpackErrorStore.getState().entries[storeKey];
   if (entry?.error) {
-    const parts = [entry.error.message];
+    let message = entry.error.message;
+
+    // Sandpack sometimes wraps SyntaxErrors in a TypeError:
+    // "Cannot assign to read only property 'message' of object 'SyntaxError: file.tsx: Unexpected token (10:5)'"
+    // Extract the actual SyntaxError for clearer AI context
+    const syntaxErrorMatch = message.match(/SyntaxError:\s*(.+)/);
+    if (syntaxErrorMatch) {
+      message = `SyntaxError: ${syntaxErrorMatch[1]}`;
+    }
+
+    const parts = [message];
     if (entry.error.path) parts.push(`File: ${entry.error.path}`);
     if (entry.error.line) parts.push(`Line: ${entry.error.line}`);
-    if (entry.error.title) parts.unshift(entry.error.title);
+    if (entry.error.title && !syntaxErrorMatch) parts.unshift(entry.error.title);
     return parts.join(" | ");
   }
 
@@ -174,6 +184,41 @@ async function detectErrors(
   }
 
   return null;
+}
+
+/**
+ * Enrich a syntax error message with the relevant source lines.
+ * Helps the AI immediately see the broken code.
+ */
+function enrichSyntaxError(
+  error: string,
+  files: Record<string, string>
+): string {
+  // Match file path like /path/file.tsx
+  const fileMatch = error.match(/(?:\/[^\s:|]+\.(?:tsx?|jsx?|js))/);
+  // Match line:col patterns like (210:84) or (line 210, col 84)
+  const lineMatch =
+    error.match(/\((\d+):(\d+)\)/) ||
+    error.match(/\(line\s+(\d+),\s*col\s+(\d+)\)/);
+  if (!fileMatch || !lineMatch) return error;
+
+  const filePath = fileMatch[0];
+  const lineNum = parseInt(lineMatch[1], 10);
+  const code = files[filePath];
+  if (!code) return error;
+
+  const lines = code.split("\n");
+  const start = Math.max(0, lineNum - 3);
+  const end = Math.min(lines.length, lineNum + 2);
+  const context = lines
+    .slice(start, end)
+    .map(
+      (l, i) =>
+        `${start + i + 1 === lineNum ? ">" : " "} ${start + i + 1} | ${l}`
+    )
+    .join("\n");
+
+  return `${error}\n\nSource context:\n${context}`;
 }
 
 export async function runVerificationLoop(
@@ -307,6 +352,9 @@ export async function runVerificationLoop(
       cb.setReviewing();
       cb.addLog(`Sending error to AI for fix (attempt ${attempt}/${MAX_ATTEMPTS})...`);
 
+      // Enrich syntax errors with source context lines
+      const enrichedError = enrichSyntaxError(detectedError, allFiles);
+
       // Build rich context for the AI
       const vfsFilePaths = Object.keys(allFiles);
       const availableExports = buildExportsMap(allFiles);
@@ -324,7 +372,7 @@ export async function runVerificationLoop(
             files: writtenFiles,
             contextFiles: allFiles,
             modelId,
-            errorText: detectedError,
+            errorText: enrichedError,
             vfsFilePaths,
             availableExports,
           }),
