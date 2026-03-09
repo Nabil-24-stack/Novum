@@ -28,6 +28,10 @@ const ERROR_QUERY_TIMEOUT_MS = 3000;
 const POST_SETTLE_DELAY_MS = 500;
 /** How long to wait for Sandpack to install a dependency that's already in package.json */
 const DEP_INSTALL_WAIT_MS = 3000;
+/** Max retries for server errors (5xx) that don't consume fix attempts */
+const MAX_SERVER_ERROR_RETRIES = 2;
+/** Cooldown before retrying after a server error */
+const SERVER_ERROR_COOLDOWN_MS = 2000;
 
 // Regex to match code blocks with file attribute (same as ChatTab)
 const CODE_BLOCK_REGEX = /```(\w+)?\s+file="([^"]+)"\n([\s\S]*?)```/g;
@@ -289,6 +293,7 @@ export async function runVerificationLoop(
     }
 
     let depWaitCount = 0;
+    let serverErrorRetries = 0;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -382,6 +387,16 @@ export async function runVerificationLoop(
         if (!response.ok) {
           const errorBody = await response.text().catch(() => "");
           console.warn(`[verify] API returned HTTP ${response.status}:`, errorBody.slice(0, 300));
+
+          // Server errors (5xx) mean the API never returned a fix — don't waste a fix attempt
+          if (response.status >= 500 && serverErrorRetries < MAX_SERVER_ERROR_RETRIES) {
+            serverErrorRetries++;
+            attempt--; // Don't consume an AI fix attempt
+            cb.addLog(`Server error (HTTP ${response.status}) — retrying (${serverErrorRetries}/${MAX_SERVER_ERROR_RETRIES})...`);
+            await sleep(SERVER_ERROR_COOLDOWN_MS, signal);
+            continue;
+          }
+
           if (attempt === MAX_ATTEMPTS) {
             cb.setFailed([`API error: HTTP ${response.status}`]);
             return {
@@ -400,6 +415,16 @@ export async function runVerificationLoop(
       } catch (err) {
         if ((err as Error).name === "AbortError") throw err;
         console.warn("[verify] API call failed:", err);
+
+        // Network errors also don't consume fix attempts (same as server errors)
+        if (serverErrorRetries < MAX_SERVER_ERROR_RETRIES) {
+          serverErrorRetries++;
+          attempt--;
+          cb.addLog(`Network error — retrying (${serverErrorRetries}/${MAX_SERVER_ERROR_RETRIES})...`);
+          await sleep(SERVER_ERROR_COOLDOWN_MS, signal);
+          continue;
+        }
+
         if (attempt === MAX_ATTEMPTS) {
           cb.setFailed([
             `Verify API error: ${(err as Error).message || "unknown"}`,

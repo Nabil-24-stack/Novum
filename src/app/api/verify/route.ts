@@ -21,7 +21,7 @@ function getModel(modelId: ModelId) {
   }
 }
 
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const ERROR_FIX_SYSTEM_PROMPT = `You are a code-level QA reviewer for a React web application running in Sandpack.
 The page has an error. Analyze the error text, source code, and available project files, then provide a fix.

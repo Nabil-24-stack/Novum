@@ -293,7 +293,21 @@ export function useParallelBuild({
     const allDone = allPages.every((p) => completed.includes(p.pageId));
     if (allDone) {
       evaluationTriggeredRef.current = true;
-      evaluateAnnotations();
+
+      // Check if any page failed verification — broken bundle makes annotations useless
+      const pageBuilds = useStreamingStore.getState().pageBuilds;
+      const hasFailedVerification = allPages.some(
+        (p) => pageBuilds[p.pageId]?.verificationStatus === "failed"
+      );
+
+      if (hasFailedVerification) {
+        // Skip annotations, transition to complete
+        useStrategyStore.getState().setPhase("complete");
+        useStreamingStore.getState().endParallelStreaming();
+        useStrategyStore.getState().setBuildingPages([]);
+      } else {
+        evaluateAnnotations();
+      }
     }
   }, [evaluateAnnotations]);
 
