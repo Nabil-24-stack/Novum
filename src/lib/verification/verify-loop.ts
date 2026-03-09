@@ -20,10 +20,14 @@ import { useStreamingStore } from "@/hooks/useStreamingStore";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
 
 const MAX_ATTEMPTS = 3;
+/** Max number of times to wait for a dependency that's already in package.json */
+const MAX_DEP_WAITS = 3;
 /** Timeout for iframe error query postMessage round-trip */
 const ERROR_QUERY_TIMEOUT_MS = 3000;
 /** Extra delay after Sandpack settles before checking errors (lets DOM render) */
 const POST_SETTLE_DELAY_MS = 500;
+/** How long to wait for Sandpack to install a dependency that's already in package.json */
+const DEP_INSTALL_WAIT_MS = 3000;
 
 // Regex to match code blocks with file attribute (same as ChatTab)
 const CODE_BLOCK_REGEX = /```(\w+)?\s+file="([^"]+)"\n([\s\S]*?)```/g;
@@ -73,6 +77,23 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       { once: true }
     );
   });
+}
+
+/**
+ * Check if an error is a missing dependency that's already in package.json.
+ * This means Sandpack just needs more time to install it — not a code fix issue.
+ */
+function isDependencyError(error: string, allFiles: Record<string, string>): boolean {
+  const depMatch = error.match(/Could not find dependency:\s*'([^']+)'/);
+  if (!depMatch) return false;
+  const depName = depMatch[1];
+
+  try {
+    const pkg = JSON.parse(allFiles["/package.json"] || "{}");
+    return !!(pkg.dependencies?.[depName]);
+  } catch {
+    return false;
+  }
 }
 
 export interface VerificationResult {
@@ -208,9 +229,21 @@ export async function runVerificationLoop(
         // Store for later use in AI context
         lastDetectedError = preResult.unresolvedErrors.join("\n");
       }
+      // If pre-validation auto-fixed anything (especially deps), wait for Sandpack to re-settle
+      if (preResult.autoFixed.length > 0) {
+        cb.addLog("Waiting for auto-fixes to take effect...");
+        try {
+          await waitForSandpackSettle(pageId, 15000, signal);
+          await sleep(1000, signal);
+        } catch (err) {
+          if ((err as Error).name === "AbortError") throw err;
+        }
+      }
     } catch (err) {
       console.warn("[verify] Pre-validation failed, continuing:", err);
     }
+
+    let depWaitCount = 0;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -257,9 +290,20 @@ export async function runVerificationLoop(
         };
       }
 
-      // --- Phase 4: Error detected — send to AI for fix ---
+      // --- Phase 4: Error detected — check if dependency timing issue first ---
       lastDetectedError = detectedError;
       cb.addLog(`Error detected: ${detectedError.slice(0, 150)}`);
+
+      // If this is a dependency error and the dep is already in package.json,
+      // Sandpack just needs more time to install it — don't waste an AI attempt
+      if (isDependencyError(detectedError, allFiles) && depWaitCount < MAX_DEP_WAITS) {
+        depWaitCount++;
+        cb.addLog(`Dependency still installing — waiting (${depWaitCount}/${MAX_DEP_WAITS})...`);
+        await sleep(DEP_INSTALL_WAIT_MS, signal);
+        attempt--; // Don't consume an AI fix attempt for dep timing issues
+        continue;
+      }
+
       cb.setReviewing();
       cb.addLog(`Sending error to AI for fix (attempt ${attempt}/${MAX_ATTEMPTS})...`);
 
@@ -286,6 +330,24 @@ export async function runVerificationLoop(
           }),
           signal,
         });
+
+        if (!response.ok) {
+          const errorBody = await response.text().catch(() => "");
+          console.warn(`[verify] API returned HTTP ${response.status}:`, errorBody.slice(0, 300));
+          if (attempt === MAX_ATTEMPTS) {
+            cb.setFailed([`API error: HTTP ${response.status}`]);
+            return {
+              status: "failed",
+              attempts: attempt,
+              fixCount: totalFixes,
+              lastError: lastDetectedError,
+              fixSummary: lastFixSummary,
+            };
+          }
+          cb.addLog(`API error (HTTP ${response.status}), attempt ${attempt}/${MAX_ATTEMPTS}`);
+          continue;
+        }
+
         verifyResult = await response.json();
       } catch (err) {
         if ((err as Error).name === "AbortError") throw err;

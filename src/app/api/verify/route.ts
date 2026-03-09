@@ -53,10 +53,10 @@ Common issues:
 Keep fixes minimal — only fix the specific error. When creating a missing file, include all necessary imports and exports.`;
 
 export async function POST(req: Request) {
-  const auth = await requireAuth();
-  if (auth.response) return auth.response;
-
   try {
+    const auth = await requireAuth();
+    if (auth.response) return auth.response;
+
     const body = await req.json();
     const {
       files,
