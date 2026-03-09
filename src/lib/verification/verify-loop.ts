@@ -10,6 +10,7 @@
  * Max 3 attempts. Supports both global and page-scoped state.
  */
 
+import { parse } from "@babel/parser";
 import { queryIframeErrors } from "./screenshot-capture";
 import { preValidate, buildExportsMap } from "./pre-validator";
 import {
@@ -99,6 +100,157 @@ function isDependencyError(error: string, allFiles: Record<string, string>): boo
   } catch {
     return false;
   }
+}
+
+/** Max deterministic fix attempts per verification run (prevents infinite loops) */
+const MAX_DETERMINISTIC_ATTEMPTS = 2;
+
+/**
+ * Attempt to fix a nested-quote JSX attribute on a single line.
+ * Pattern: attr="text "inner" text" → attr={`text "inner" text`}
+ *
+ * Finds the attribute whose value spans the error column, then wraps
+ * the value in a JSX expression with a template literal.
+ */
+function tryFixNestedQuotesInJSXAttr(
+  line: string,
+  errorCol: number
+): string | null {
+  // Find the `="` that opens the attribute containing the error
+  const beforeError = line.substring(0, errorCol);
+  const attrStart = beforeError.lastIndexOf('="');
+  if (attrStart === -1) return null;
+
+  // Find the attribute name before `="`
+  const nameMatch = line.substring(0, attrStart).match(/(\w[\w-]*)$/);
+  if (!nameMatch) return null;
+
+  const attrNameStart = attrStart - nameMatch[1].length;
+  const valueStart = attrStart + 2; // position after `="`
+
+  // Find the true closing quote: the last `"` before `>`, `/>`, or a new attribute
+  const rest = line.substring(valueStart);
+  const closingPattern = /"(?=\s+[\w-]+=|\s*\/?>|\s*$)/g;
+  let lastClosing: RegExpExecArray | null = null;
+  let closingMatch: RegExpExecArray | null;
+  while ((closingMatch = closingPattern.exec(rest)) !== null) {
+    lastClosing = closingMatch;
+  }
+  if (!lastClosing) return null;
+
+  const valueEnd = valueStart + lastClosing.index;
+  const rawValue = line.substring(valueStart, valueEnd);
+
+  // Only proceed if the raw value contains double quotes (confirms nested quote issue)
+  if (!rawValue.includes('"')) return null;
+
+  // Escape backticks in the value if any, then wrap in template literal
+  const escaped = rawValue.replace(/`/g, "\\`").replace(/\$/g, "\\$");
+  const attrName = nameMatch[1];
+  const replacement = `${attrName}={\`${escaped}\`}`;
+
+  return (
+    line.substring(0, attrNameStart) +
+    replacement +
+    line.substring(valueEnd + 1) // +1 to skip the closing `"`
+  );
+}
+
+/**
+ * Attempt to fix common syntax errors deterministically, without an AI call.
+ * Returns the fixed code if successful, or null if the error can't be fixed.
+ *
+ * Every fix is verified by re-parsing with Babel — if the fix doesn't
+ * resolve the parse error, null is returned and the AI path is used.
+ */
+function tryDeterministicSyntaxFix(
+  error: string,
+  allFiles: Record<string, string>
+): { filePath: string; fixedCode: string; description: string } | null {
+  if (!error.includes("SyntaxError")) return null;
+
+  const loc = parseSyntaxErrorLocation(error);
+  if (!loc) return null;
+
+  const code = allFiles[loc.filePath];
+  if (!code) return null;
+
+  // Parse with Babel to get precise error info
+  interface ParseErrorLoc {
+    message: string;
+    loc?: { line: number; column: number };
+  }
+  let parseError: ParseErrorLoc | null = null;
+  try {
+    parse(code, {
+      sourceType: "module",
+      plugins: ["typescript", "jsx"],
+    });
+    return null; // No parse error — Sandpack may have a different parser
+  } catch (err) {
+    parseError = err as ParseErrorLoc;
+  }
+
+  if (!parseError?.loc) return null;
+
+  const lines = code.split("\n");
+  const errLine = parseError.loc.line - 1; // 0-indexed
+  const errCol = parseError.loc.column; // 0-indexed
+
+  // --- Fix 1: Nested quotes in JSX attribute ---
+  // e.g. placeholder="text "quoted" text" → placeholder={`text "quoted" text`}
+  if (parseError.message.includes("Unexpected token")) {
+    const line = lines[errLine];
+    if (line) {
+      const fixedLine = tryFixNestedQuotesInJSXAttr(line, errCol);
+      if (fixedLine && fixedLine !== line) {
+        const fixedLines = [...lines];
+        fixedLines[errLine] = fixedLine;
+        const fixedCode = fixedLines.join("\n");
+        try {
+          parse(fixedCode, {
+            sourceType: "module",
+            plugins: ["typescript", "jsx"],
+          });
+          return {
+            filePath: loc.filePath,
+            fixedCode,
+            description: "Fixed nested quotes in JSX attribute",
+          };
+        } catch {
+          // Fix didn't resolve the error
+        }
+      }
+    }
+  }
+
+  // --- Fix 2: Unterminated string literal ---
+  if (parseError.message.includes("Unterminated string")) {
+    const line = lines[errLine];
+    if (line) {
+      const doubleQuotes = (line.match(/(?<!\\)"/g) || []).length;
+      if (doubleQuotes % 2 !== 0) {
+        const fixedLines = [...lines];
+        fixedLines[errLine] = line + '"';
+        const fixedCode = fixedLines.join("\n");
+        try {
+          parse(fixedCode, {
+            sourceType: "module",
+            plugins: ["typescript", "jsx"],
+          });
+          return {
+            filePath: loc.filePath,
+            fixedCode,
+            description: "Added missing closing quote",
+          };
+        } catch {
+          // Fix didn't resolve the error
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 export interface VerificationResult {
@@ -318,6 +470,7 @@ export async function runVerificationLoop(
 
     let depWaitCount = 0;
     let serverErrorRetries = 0;
+    let deterministicAttempts = 0;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -376,6 +529,33 @@ export async function runVerificationLoop(
         await sleep(DEP_INSTALL_WAIT_MS, signal);
         attempt--; // Don't consume an AI fix attempt for dep timing issues
         continue;
+      }
+
+      // --- Phase 3.5: Deterministic syntax fix attempt ---
+      // Try to fix syntax errors without a slow AI API call
+      if (
+        detectedError.includes("SyntaxError") &&
+        deterministicAttempts < MAX_DETERMINISTIC_ATTEMPTS
+      ) {
+        const deterministicFix = tryDeterministicSyntaxFix(
+          detectedError,
+          allFiles
+        );
+        if (deterministicFix) {
+          deterministicAttempts++;
+          cb.addLog(
+            `Deterministic fix: ${deterministicFix.description}`
+          );
+          writeFile(deterministicFix.filePath, deterministicFix.fixedCode);
+          allFiles[deterministicFix.filePath] =
+            deterministicFix.fixedCode;
+          writtenFiles[deterministicFix.filePath] =
+            deterministicFix.fixedCode;
+          totalFixes++;
+          lastFixSummary = `Deterministic fix: ${deterministicFix.description} in ${deterministicFix.filePath}`;
+          attempt--; // Don't consume an AI fix attempt
+          continue; // Re-check for errors
+        }
       }
 
       cb.setReviewing();

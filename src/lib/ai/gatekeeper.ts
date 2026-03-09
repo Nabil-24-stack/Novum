@@ -43,7 +43,6 @@ export interface GatekeeperResult {
 
 export interface GatekeeperReport {
   hadChanges: boolean;
-  smartQuotesSanitized: boolean;
   importFixes: ImportFix[];
   colorViolations: ColorViolation[];
   spacingViolations: SpacingViolation[];
@@ -189,7 +188,6 @@ export function runGatekeeper(
 ): GatekeeperResult {
   const emptyReport: GatekeeperReport = {
     hadChanges: false,
-    smartQuotesSanitized: false,
     importFixes: [],
     colorViolations: [],
     spacingViolations: [],
@@ -213,21 +211,6 @@ export function runGatekeeper(
   const allTypographyViolations: TypographyViolation[] = [];
   let allPromotions: ComponentPromotion[] = [];
   let allLayoutDeclarationAdditions: LayoutDeclarationAddition[] = [];
-  let smartQuotesSanitized = false;
-
-  // ── Phase -2: Smart Quote Sanitization ──
-  // AI models sometimes generate Unicode curly/smart quotes that break JSX parsing
-  {
-    const sanitized = currentCode
-      .replace(/[\u201C\u201D]/g, '"')   // " " → "
-      .replace(/[\u2018\u2019]/g, "'")   // ' ' → '
-      .replace(/\u2014/g, "--")          // em dash → double hyphen
-      .replace(/\u2013/g, "-");          // en dash → hyphen
-    if (sanitized !== currentCode) {
-      currentCode = sanitized;
-      smartQuotesSanitized = true;
-    }
-  }
 
   // ── Phase -1: Import Fixing ──
   try {
@@ -322,8 +305,35 @@ export function runGatekeeper(
     console.warn("[Gatekeeper] Color/spacing enforcement failed, skipping:", err);
   }
 
+  // ── Final Safety Net: Babel Parse Validation ──
+  // If gatekeeper output doesn't parse but input did, revert to original.
+  // Prevents any gatekeeper phase from silently introducing syntax errors.
+  if (currentCode !== code) {
+    try {
+      parse(currentCode, { sourceType: "module", plugins: ["jsx", "typescript"] });
+    } catch {
+      let originalValid = false;
+      try {
+        parse(code, { sourceType: "module", plugins: ["jsx", "typescript"] });
+        originalValid = true;
+      } catch { /* original also broken — pass through */ }
+
+      if (originalValid) {
+        console.warn("[Gatekeeper] Output failed to parse but input was valid — reverting to original code");
+        currentCode = code;
+        // Clear all violation reports since we're reverting
+        allImportFixes = [];
+        allColorViolations.length = 0;
+        allSpacingViolations.length = 0;
+        allLayoutViolations.length = 0;
+        allTypographyViolations.length = 0;
+        allPromotions = [];
+        allLayoutDeclarationAdditions = [];
+      }
+    }
+  }
+
   const hadChanges =
-    smartQuotesSanitized ||
     allImportFixes.length > 0 ||
     allColorViolations.length > 0 ||
     allSpacingViolations.length > 0 ||
@@ -336,7 +346,6 @@ export function runGatekeeper(
     code: currentCode,
     report: {
       hadChanges,
-      smartQuotesSanitized,
       importFixes: allImportFixes,
       colorViolations: allColorViolations,
       spacingViolations: allSpacingViolations,
