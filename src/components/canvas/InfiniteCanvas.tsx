@@ -145,11 +145,22 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
 
     // Middle-mouse drag pan
     const handlePointerDown = (e: PointerEvent) => {
-      if (e.button !== 1 || hideChrome) return; // Middle mouse button only, skip when expanded
-      e.preventDefault();
-      middleMousePan.current = { active: true, lastX: e.clientX, lastY: e.clientY };
-      container.setPointerCapture(e.pointerId);
-      container.style.cursor = "grabbing";
+      if (hideChrome) return;
+
+      if (e.button === 1) {
+        // Middle mouse pan
+        e.preventDefault();
+        middleMousePan.current = { active: true, lastX: e.clientX, lastY: e.clientY };
+        container.setPointerCapture(e.pointerId);
+        container.style.cursor = "grabbing";
+      } else if (e.button === 0 && activeTool === "cursor") {
+        // Left-click pan when cursor tool active (only on canvas background)
+        if (e.target !== container) return;
+        e.preventDefault();
+        middleMousePan.current = { active: true, lastX: e.clientX, lastY: e.clientY };
+        container.setPointerCapture(e.pointerId);
+        container.style.cursor = "grabbing";
+      }
     };
 
     const handlePointerMove = (e: PointerEvent) => {
@@ -162,7 +173,8 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
     };
 
     const handlePointerUp = (e: PointerEvent) => {
-      if (e.button !== 1) return;
+      if (e.button !== 1 && e.button !== 0) return;
+      if (!middleMousePan.current.active) return;
       middleMousePan.current.active = false;
       container.releasePointerCapture(e.pointerId);
       container.style.cursor = "";
@@ -189,7 +201,7 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
       container.removeEventListener("auxclick", handleAuxClick);
       container.removeEventListener("mousedown", handleMouseDown);
     };
-  }, [onViewportChange, isDrawingActive, hideChrome]);
+  }, [onViewportChange, isDrawingActive, hideChrome, activeTool]);
 
   // Listen for wheel events forwarded from Sandpack iframes via postMessage.
   // Iframes capture wheel events (they don't bubble to parent document),
@@ -272,7 +284,7 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
       <div
         ref={containerRef}
         className="w-full h-full min-h-0 overflow-hidden bg-neutral-100 relative isolate"
-        style={{ contain: "strict" }}
+        style={{ contain: "strict", cursor: activeTool === "cursor" ? "grab" : undefined }}
         onClick={handleCanvasClick}
         onScroll={handleScroll}
       >
