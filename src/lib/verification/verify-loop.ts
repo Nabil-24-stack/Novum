@@ -1,31 +1,36 @@
 /**
  * Self-healing verification loop.
- * After AI writes code to VFS, waits for Sandpack HMR to settle,
- * then programmatically checks the iframe for runtime errors.
- * If an error is found, sends it to an AI for a fix. Max 3 attempts.
+ * After AI writes code to VFS, detects errors and auto-fixes them.
  *
- * No screenshots or vision models — purely text-based detection + fix.
+ * Error detection strategy (layered):
+ * 1. Deterministic pre-validation (missing imports, missing deps)
+ * 2. Sandpack native error API (compilation/bundler errors via global store)
+ * 3. Iframe DOM scanning (runtime errors via postMessage)
  *
- * Supports both global state (single-build mode) and page-scoped state
- * (parallel mode) via optional `stateCallbacks`.
+ * Max 3 attempts. Supports both global and page-scoped state.
  */
 
 import { queryIframeErrors } from "./screenshot-capture";
+import { preValidate, buildExportsMap } from "./pre-validator";
+import {
+  useSandpackErrorStore,
+  waitForSandpackSettle,
+} from "@/hooks/useSandpackErrorStore";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
 
 const MAX_ATTEMPTS = 3;
-/** Settle time for Sandpack HMR after file writes */
-const SETTLE_DELAY_MS = 3000;
-/** Delay between re-checks after applying a fix */
-const RECHECK_DELAY_MS = 2000;
-/** Timeout for error query postMessage round-trip */
+/** Timeout for iframe error query postMessage round-trip */
 const ERROR_QUERY_TIMEOUT_MS = 3000;
+/** Extra delay after Sandpack settles before checking errors (lets DOM render) */
+const POST_SETTLE_DELAY_MS = 500;
 
 // Regex to match code blocks with file attribute (same as ChatTab)
 const CODE_BLOCK_REGEX = /```(\w+)?\s+file="([^"]+)"\n([\s\S]*?)```/g;
 
-function extractCodeBlocks(text: string): Array<{ path: string; content: string }> {
+function extractCodeBlocks(
+  text: string
+): Array<{ path: string; content: string }> {
   const blocks: Array<{ path: string; content: string }> = [];
   let match;
 
@@ -41,7 +46,8 @@ function extractCodeBlocks(text: string): Array<{ path: string; content: string 
 
 // Ensure React star import for Sandpack's classic JSX transform
 function ensureReactImport(code: string): string {
-  if (/import\s+\*\s+as\s+React\s+from\s+["']react["']/.test(code)) return code;
+  if (/import\s+\*\s+as\s+React\s+from\s+["']react["']/.test(code))
+    return code;
   if (/import\s+\{[^}]*\}\s+from\s+["']react["']/.test(code)) {
     return code.replace(
       /import\s+\{([^}]*)\}\s+from\s+["']react["']/,
@@ -49,6 +55,24 @@ function ensureReactImport(code: string): string {
     );
   }
   return 'import * as React from "react";\n' + code;
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true }
+    );
+  });
 }
 
 export interface VerificationResult {
@@ -82,20 +106,6 @@ export interface VerificationParams {
   stateCallbacks?: VerificationStateCallbacks;
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new DOMException("Aborted", "AbortError"));
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => {
-      clearTimeout(timer);
-      reject(new DOMException("Aborted", "AbortError"));
-    }, { once: true });
-  });
-}
-
 /** Build default state callbacks that update the global streaming store. */
 function globalCallbacks(): VerificationStateCallbacks {
   const store = useStreamingStore.getState();
@@ -111,10 +121,52 @@ function globalCallbacks(): VerificationStateCallbacks {
   };
 }
 
+/**
+ * Detect errors using a layered approach:
+ * 1. Sandpack native error (compilation/bundler) — most reliable
+ * 2. Iframe DOM scanning (runtime errors) — catches what Sandpack misses
+ */
+async function detectErrors(
+  pageId?: string,
+  signal?: AbortSignal
+): Promise<string | null> {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+  const storeKey = pageId || "prototype";
+
+  // Layer 1: Check Sandpack native error from global store
+  const entry = useSandpackErrorStore.getState().entries[storeKey];
+  if (entry?.error) {
+    const parts = [entry.error.message];
+    if (entry.error.path) parts.push(`File: ${entry.error.path}`);
+    if (entry.error.line) parts.push(`Line: ${entry.error.line}`);
+    if (entry.error.title) parts.unshift(entry.error.title);
+    return parts.join(" | ");
+  }
+
+  // Layer 2: Query iframe for runtime errors (DOM text scanning)
+  try {
+    const runtimeError = await queryIframeErrors(pageId, ERROR_QUERY_TIMEOUT_MS);
+    if (runtimeError) return runtimeError;
+  } catch {
+    // Query failed — assume no runtime errors
+  }
+
+  return null;
+}
+
 export async function runVerificationLoop(
   params: VerificationParams
 ): Promise<VerificationResult> {
-  const { completedFiles, allFiles, writeFile, modelId, pageId, signal, stateCallbacks } = params;
+  const {
+    completedFiles,
+    allFiles,
+    writeFile,
+    modelId,
+    pageId,
+    signal,
+    stateCallbacks,
+  } = params;
   const cb = stateCallbacks ?? globalCallbacks();
 
   // Build the files map of what was written (for context to the AI)
@@ -136,29 +188,65 @@ export async function runVerificationLoop(
   cb.startVerification();
 
   try {
+    // --- Phase 0: Deterministic pre-validation ---
+    cb.addLog("Running pre-validation checks...");
+    try {
+      const preResult = preValidate(completedFiles, allFiles, writeFile);
+
+      for (const fix of preResult.autoFixed) {
+        cb.addLog(`Auto-fixed: ${fix}`);
+        totalFixes++;
+      }
+
+      // If there are unresolved errors from pre-validation, include them
+      // as context for the AI fix loop (they'll be detected as Sandpack errors too,
+      // but having precise messages helps the AI)
+      if (preResult.unresolvedErrors.length > 0) {
+        cb.addLog(
+          `Pre-validation found ${preResult.unresolvedErrors.length} issue(s)`
+        );
+        // Store for later use in AI context
+        lastDetectedError = preResult.unresolvedErrors.join("\n");
+      }
+    } catch (err) {
+      console.warn("[verify] Pre-validation failed, continuing:", err);
+    }
+
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-      // 1. Wait for Sandpack HMR to settle
+      // --- Phase 1: Wait for Sandpack to settle ---
       cb.setCapturing();
-      cb.addLog("Waiting for page to render...");
+      cb.addLog(
+        attempt === 1
+          ? "Waiting for Sandpack to compile..."
+          : "Re-checking after fix..."
+      );
 
-      const delayMs = attempt === 1 ? SETTLE_DELAY_MS : RECHECK_DELAY_MS;
-      await sleep(delayMs, signal);
+      // Use status-based waiting instead of fixed timer
+      try {
+        await waitForSandpackSettle(pageId, 15000, signal);
+      } catch (err) {
+        if ((err as Error).name === "AbortError") throw err;
+        cb.addLog("Sandpack settle timeout — checking anyway");
+      }
+
+      // Small extra delay for DOM to render after bundle completes
+      await sleep(POST_SETTLE_DELAY_MS, signal);
 
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-      // 2. Check for runtime errors programmatically
-      let detectedError: string | null = null;
-      try {
-        detectedError = await queryIframeErrors(pageId, ERROR_QUERY_TIMEOUT_MS);
-      } catch {
-        // Query failed — assume no errors
-      }
+      // --- Phase 2: Detect errors (layered) ---
+      cb.addLog("Checking for errors...");
+      const detectedError = await detectErrors(pageId, signal);
 
-      // 3. No error detected — page is good
+      // --- Phase 3: No error — success ---
       if (!detectedError) {
-        cb.addLog(totalFixes > 0 ? `Verified after ${totalFixes} fix(es)` : "No errors detected");
+        cb.addLog(
+          totalFixes > 0
+            ? `Verified after ${totalFixes} fix(es)`
+            : "No errors detected"
+        );
         cb.setPassed();
         return {
           status: totalFixes > 0 ? "fixed" : "passed",
@@ -169,13 +257,21 @@ export async function runVerificationLoop(
         };
       }
 
-      // 4. Error detected — send to AI for fix
+      // --- Phase 4: Error detected — send to AI for fix ---
       lastDetectedError = detectedError;
-      cb.addLog(`Error detected: ${detectedError.slice(0, 100)}`);
+      cb.addLog(`Error detected: ${detectedError.slice(0, 150)}`);
       cb.setReviewing();
-      cb.addLog("Sending error to AI for fix...");
+      cb.addLog(`Sending error to AI for fix (attempt ${attempt}/${MAX_ATTEMPTS})...`);
 
-      let verifyResult: { status: string; issues?: string[]; fixCode?: string };
+      // Build rich context for the AI
+      const vfsFilePaths = Object.keys(allFiles);
+      const availableExports = buildExportsMap(allFiles);
+
+      let verifyResult: {
+        status: string;
+        issues?: string[];
+        fixCode?: string;
+      };
       try {
         const response = await fetch("/api/verify", {
           method: "POST",
@@ -185,6 +281,8 @@ export async function runVerificationLoop(
             contextFiles: allFiles,
             modelId,
             errorText: detectedError,
+            vfsFilePaths,
+            availableExports,
           }),
           signal,
         });
@@ -193,23 +291,42 @@ export async function runVerificationLoop(
         if ((err as Error).name === "AbortError") throw err;
         console.warn("[verify] API call failed:", err);
         if (attempt === MAX_ATTEMPTS) {
-          cb.setFailed([`Verify API error: ${(err as Error).message || "unknown"}`]);
-          return { status: "failed", attempts: attempt, fixCount: totalFixes, lastError: lastDetectedError, fixSummary: lastFixSummary };
+          cb.setFailed([
+            `Verify API error: ${(err as Error).message || "unknown"}`,
+          ]);
+          return {
+            status: "failed",
+            attempts: attempt,
+            fixCount: totalFixes,
+            lastError: lastDetectedError,
+            fixSummary: lastFixSummary,
+          };
         }
-        cb.addLog(`API call failed (attempt ${attempt}/${MAX_ATTEMPTS}), retrying...`);
+        cb.addLog(
+          `API call failed (attempt ${attempt}/${MAX_ATTEMPTS}), retrying...`
+        );
         continue;
       }
 
-      // 5. Extract and apply fix
+      // --- Phase 5: Extract and apply fix ---
       const issues = verifyResult.issues || [detectedError.slice(0, 120)];
-      console.log(`[verify] Attempt ${attempt}/${MAX_ATTEMPTS} — issues:`, issues);
+      console.log(
+        `[verify] Attempt ${attempt}/${MAX_ATTEMPTS} — issues:`,
+        issues
+      );
       cb.addLog(`AI found: ${issues[0]}`);
 
       if (!verifyResult.fixCode) {
         if (attempt === MAX_ATTEMPTS) {
           cb.addLog("Could not fix all issues");
           cb.setFailed(issues);
-          return { status: "failed", attempts: attempt, fixCount: totalFixes, lastError: lastDetectedError, fixSummary: lastFixSummary };
+          return {
+            status: "failed",
+            attempts: attempt,
+            fixCount: totalFixes,
+            lastError: lastDetectedError,
+            fixSummary: lastFixSummary,
+          };
         }
         cb.setFixing(issues);
         continue;
@@ -221,7 +338,13 @@ export async function runVerificationLoop(
       if (fixBlocks.length === 0) {
         if (attempt === MAX_ATTEMPTS) {
           cb.setFailed(issues);
-          return { status: "failed", attempts: attempt, fixCount: totalFixes, lastError: lastDetectedError, fixSummary: lastFixSummary };
+          return {
+            status: "failed",
+            attempts: attempt,
+            fixCount: totalFixes,
+            lastError: lastDetectedError,
+            fixSummary: lastFixSummary,
+          };
         }
         continue;
       }
@@ -248,7 +371,9 @@ export async function runVerificationLoop(
       }
 
       lastFixSummary = `Fixed ${fixedPaths.join(", ")} (${issues[0] || "unknown issue"})`;
-      cb.addLog(`Fix applied (attempt ${attempt}/${MAX_ATTEMPTS}), re-checking...`);
+      cb.addLog(
+        `Fix applied (attempt ${attempt}/${MAX_ATTEMPTS}), re-checking...`
+      );
 
       // Loop continues — next iteration will re-check for errors after fix
     }
@@ -256,7 +381,13 @@ export async function runVerificationLoop(
     // Exhausted all attempts
     cb.addLog("Could not fix all issues");
     cb.setFailed(["Exhausted all verification attempts"]);
-    return { status: "failed", attempts: MAX_ATTEMPTS, fixCount: totalFixes, lastError: lastDetectedError, fixSummary: lastFixSummary };
+    return {
+      status: "failed",
+      attempts: MAX_ATTEMPTS,
+      fixCount: totalFixes,
+      lastError: lastDetectedError,
+      fixSummary: lastFixSummary,
+    };
   } catch (err) {
     if ((err as Error).name === "AbortError") {
       cb.reset();
@@ -265,6 +396,11 @@ export async function runVerificationLoop(
     // Unexpected error — mark as failed so the UI doesn't show a green checkmark
     console.error("[verify] Unexpected error:", err);
     cb.setFailed([`Unexpected error: ${(err as Error).message || "unknown"}`]);
-    return { status: "failed", attempts: 0, fixCount: 0, lastError: lastDetectedError };
+    return {
+      status: "failed",
+      attempts: 0,
+      fixCount: 0,
+      lastError: lastDetectedError,
+    };
   }
 }

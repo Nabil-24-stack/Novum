@@ -9,7 +9,8 @@ import { parseStreamingContent } from "@/lib/streaming-parser";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
 import { generateAppTsx, toPascalCase } from "@/lib/vfs/app-generator";
 import { runVerificationLoop, type VerificationStateCallbacks } from "@/lib/verification/verify-loop";
-import { isIframeAvailable, queryIframeErrors } from "@/lib/verification/screenshot-capture";
+import { isIframeAvailable } from "@/lib/verification/screenshot-capture";
+import { waitForSandpackSettle as waitForSandpackSettleStore } from "@/hooks/useSandpackErrorStore";
 import { toast } from "sonner";
 
 export interface PageBuildConfig {
@@ -408,46 +409,26 @@ export function useParallelBuild({
     }
   };
 
-  // Smart polling: wait for Sandpack to settle after file writes.
-  // 1.5s initial wait, then poll iframe every 500ms for up to 8s.
-  // Falls back to proceeding after 10s total.
+  // Wait for Sandpack to settle after file writes using the global error store.
+  // Falls back to iframe availability polling if the store entry doesn't exist yet.
   const waitForSandpackSettle = async (pageId: string, signal: AbortSignal): Promise<void> => {
-    const INITIAL_WAIT = 1500;
-    const POLL_INTERVAL = 500;
-    const MAX_TOTAL = 10000;
-    const start = Date.now();
-
-    // Initial wait for HMR to kick in
-    await new Promise<void>((resolve, reject) => {
-      if (signal.aborted) { reject(new DOMException("Aborted", "AbortError")); return; }
-      const t = setTimeout(resolve, INITIAL_WAIT);
-      signal.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
-    });
-
-    // Poll until iframe responds or timeout
-    while (Date.now() - start < MAX_TOTAL) {
-      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-      if (!isIframeAvailable(pageId)) {
-        // Iframe not in DOM yet — wait and retry
+    try {
+      await waitForSandpackSettleStore(pageId, 15000, signal);
+    } catch (err) {
+      if ((err as Error).name === "AbortError") throw err;
+      // Store-based settle failed — fall back to iframe availability check
+      const POLL_INTERVAL = 500;
+      const MAX_TOTAL = 10000;
+      const start = Date.now();
+      while (Date.now() - start < MAX_TOTAL) {
+        if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+        if (isIframeAvailable(pageId)) return;
         await new Promise<void>((resolve, reject) => {
           const t = setTimeout(resolve, POLL_INTERVAL);
           signal.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
         });
-        continue;
       }
-      // Try querying — if we get a response (even null = no error), Sandpack is ready
-      try {
-        await queryIframeErrors(pageId, 2000);
-        return; // Got a response — Sandpack is settled
-      } catch {
-        // Query timed out — iframe not ready yet, keep polling
-      }
-      await new Promise<void>((resolve, reject) => {
-        const t = setTimeout(resolve, POLL_INTERVAL);
-        signal.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
-      });
     }
-    // Timeout — proceed anyway
   };
 
   // Build pages one at a time, verifying each before proceeding.

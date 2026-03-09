@@ -17,6 +17,7 @@ import { BuildProgressCards } from "./BuildProgressCards";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
 import { checkRouteConsistency } from "@/lib/ai/route-consistency";
 import { parseStreamingContent } from "@/lib/streaming-parser";
+import { runVerificationLoop } from "@/lib/verification/verify-loop";
 import type { FileUIPart } from "ai";
 
 const FILE_CODE_BLOCK_RE = /```\w*\s+file="[^"]+"/;
@@ -231,6 +232,10 @@ const processedBlocksSet = new Set<string>();
 const processedStrategyBlocksSet = new Set<string>();
 const flowJsonSyncedMessages = new Set<string>();
 const routeConsistencySyncedMessages = new Set<string>();
+/** Track which files were written per assistant message ID — used by verification loop */
+const writtenFilesPerMessage = new Map<string, string[]>();
+/** Track which messages have already been verified */
+const verifiedMessages = new Set<string>();
 
 function extractCodeBlocks(text: string): Array<{ path: string; content: string }> {
   const blocks: Array<{ path: string; content: string }> = [];
@@ -1681,6 +1686,13 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
             }
 
             writeFile(block.path, gated.code);
+
+            // Track written files for verification loop
+            const existing = writtenFilesPerMessage.get(message.id) || [];
+            if (!existing.includes(block.path)) {
+              existing.push(block.path);
+              writtenFilesPerMessage.set(message.id, existing);
+            }
           }
         });
       }
@@ -2196,7 +2208,51 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     CODE_BLOCK_REGEX.lastIndex = 0; // reset stateful regex
 
     onBuildingResponseComplete?.();
-  }, [messages, isLoading, onBuildingResponseComplete]);
+
+    // --- Run verification loop on written files ---
+    const writtenFiles = writtenFilesPerMessage.get(lastAssistant.id);
+    if (writtenFiles && writtenFiles.length > 0 && !verifiedMessages.has(lastAssistant.id)) {
+      verifiedMessages.add(lastAssistant.id);
+
+      // Skip verification if we're in the parallel build pipeline (it has its own verification)
+      const isBuildingPhase = useStrategyStore.getState().currentBuildingPages.length > 0;
+      if (!isBuildingPhase) {
+        // Build latest files map
+        const latestFiles: Record<string, string> = {};
+        for (const [path, content] of Object.entries(files)) {
+          latestFiles[path] = content;
+        }
+        // Also get latest versions of written files via ref
+        for (const fp of writtenFiles) {
+          const latest = getLatestFile(fp);
+          if (latest) latestFiles[fp] = latest;
+        }
+
+        const controller = new AbortController();
+
+        runVerificationLoop({
+          completedFiles: writtenFiles,
+          allFiles: latestFiles,
+          writeFile,
+          modelId: selectedModel,
+          signal: controller.signal,
+        }).then((result) => {
+          if (result.status === "fixed") {
+            toast.success(`Auto-fixed ${result.fixCount} issue${result.fixCount > 1 ? "s" : ""}`);
+          } else if (result.status === "failed" && result.lastError) {
+            toast.warning("Could not auto-fix all issues. Check the preview for errors.");
+          }
+          // Auto-dismiss verification status after a delay
+          setTimeout(() => {
+            useStreamingStore.getState().resetVerification();
+          }, 3000);
+        }).catch(() => {
+          // Verification failed silently
+          useStreamingStore.getState().resetVerification();
+        });
+      }
+    }
+  }, [messages, isLoading, onBuildingResponseComplete, files, getLatestFile, writeFile, selectedModel]);
 
   // --- Image upload helpers ---
 

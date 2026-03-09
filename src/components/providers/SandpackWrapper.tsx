@@ -6,6 +6,7 @@ import { defaultPackageJson } from "@/lib/vfs/templates/package-json";
 import { SandpackFileSync } from "./SandpackFileSync";
 import { getTailwindConfigDataUrl } from "@/lib/tailwind-config";
 import { getInspectorScriptDataUrl } from "@/lib/inspection/inspector-script";
+import { useSandpackErrorStore } from "@/hooks/useSandpackErrorStore";
 import type { PreviewMode } from "@/lib/tokens";
 import type { InspectionMessage } from "@/lib/inspection/types";
 
@@ -213,7 +214,46 @@ function FlowModeSync({ flowModeActive }: { flowModeActive: boolean }) {
   return null;
 }
 
-export function SandpackWrapper({ files, children, previewMode = "light", inspectionMode = false, flowModeActive = false }: SandpackWrapperProps) {
+/**
+ * Sync Sandpack error and status to global store.
+ * Allows verification code (outside SandpackProvider tree) to access error state.
+ */
+function SandpackErrorSync({ pageId }: { pageId?: string }) {
+  const { sandpack } = useSandpack();
+  const key = pageId || "prototype";
+  const lastSettledRef = useRef(0);
+
+  useEffect(() => {
+    if (sandpack.status === "idle") {
+      lastSettledRef.current = Date.now();
+    }
+
+    useSandpackErrorStore.getState().setEntry(key, {
+      error: sandpack.error
+        ? {
+            message: sandpack.error.message,
+            line: sandpack.error.line,
+            column: sandpack.error.column,
+            path: sandpack.error.path,
+            title: sandpack.error.title,
+          }
+        : null,
+      status: sandpack.status,
+      lastSettledAt: lastSettledRef.current,
+    });
+  }, [sandpack.error, sandpack.status, key]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      useSandpackErrorStore.getState().removeEntry(key);
+    };
+  }, [key]);
+
+  return null;
+}
+
+export function SandpackWrapper({ files, children, previewMode = "light", inspectionMode = false, flowModeActive = false, pageId }: SandpackWrapperProps) {
   // Parse dependencies from VFS package.json, with fallback to defaults.
   // Stabilize reference: only return a new object when the JSON content actually changes.
   // Two-step memo: first compute JSON string (changes with files), then parse only when JSON changes.
@@ -262,6 +302,7 @@ export function SandpackWrapper({ files, children, previewMode = "light", inspec
       theme="light"
     >
       <SandpackFileSync files={sandpackFiles} />
+      <SandpackErrorSync pageId={pageId} />
       <InspectionSync inspectionMode={inspectionMode} />
       <DarkModeSync previewMode={previewMode} />
       <FlowModeSync flowModeActive={flowModeActive} />

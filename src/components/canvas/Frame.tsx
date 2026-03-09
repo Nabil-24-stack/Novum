@@ -6,6 +6,7 @@ import { GripHorizontal, Sun, Moon, Pencil, Layers, Eye, Code, RefreshCw, Messag
 import { useCanvasScale } from "./InfiniteCanvas";
 import { LayersPanel } from "./LayersPanel";
 import { StreamingOverlay } from "./StreamingOverlay";
+import { VerificationIndicator } from "./VerificationIndicator";
 import type { PreviewMode } from "@/lib/tokens";
 import type { DOMTreeNode, InspectionMessage } from "@/lib/inspection/types";
 import { DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT } from "@/lib/constants";
@@ -626,6 +627,9 @@ export function Frame({
       >
         {/* Streaming code overlay */}
         <StreamingOverlay pageId={pageId} forceShow={forceStreamingOverlay} />
+
+        {/* Verification status indicator */}
+        <VerificationIndicator />
 
         {/* Preview - always mounted to preserve iframe state */}
         <div

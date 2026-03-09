@@ -23,8 +23,16 @@ function getModel(modelId: ModelId) {
 
 export const maxDuration = 30;
 
-const ERROR_FIX_SYSTEM_PROMPT = `You are a code-level QA reviewer for a web application.
-The page has a runtime error. Analyze the error text and the source code, then provide a fix.
+const ERROR_FIX_SYSTEM_PROMPT = `You are a code-level QA reviewer for a React web application running in Sandpack.
+The page has an error. Analyze the error text, source code, and available project files, then provide a fix.
+
+CRITICAL RULES:
+- ALWAYS use named exports (export function X, export const X). NEVER use export default — it crashes Sandpack.
+- Import paths must be absolute from project root (e.g., "/components/ui/button", "/lib/utils"). NO @/ aliases.
+- All .tsx/.jsx files MUST have: import * as React from "react"
+- If a module is not found, check the available files list — the file may exist at a different path or with a different name.
+- If an import references a file that doesn't exist, either create the missing file OR remove the import and inline the code.
+- Only use npm packages listed in the available dependencies.
 
 Respond with ONLY valid JSON (no markdown fencing):
 - {"status":"fail","issues":["description of the issue"],"fixCode":"<code blocks>"}
@@ -38,10 +46,11 @@ Common issues:
 - "Element type is invalid" — usually a missing or wrong import/export (e.g., using default import for a named export)
 - "is not defined" — missing import statement
 - "Cannot read prop" — accessing property on undefined/null, often from a bad import
-- "Module not found" — importing from a path that doesn't exist
+- "Module not found" / "Cannot find module" — importing from a path that doesn't exist
 - "does not provide an export" — named export doesn't exist in the target module
+- Export mismatch — importing { X } but the file exports { Y }. Check the availableExports map.
 
-Keep fixes minimal — only fix the specific error.`;
+Keep fixes minimal — only fix the specific error. When creating a missing file, include all necessary imports and exports.`;
 
 export async function POST(req: Request) {
   const auth = await requireAuth();
@@ -49,11 +58,20 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const { files, contextFiles, modelId = "gemini-2.5-pro", errorText } = body as {
+    const {
+      files,
+      contextFiles,
+      modelId = "gemini-2.5-pro",
+      errorText,
+      vfsFilePaths,
+      availableExports,
+    } = body as {
       files: Record<string, string>;
       contextFiles?: Record<string, string>;
       modelId?: ModelId;
       errorText?: string;
+      vfsFilePaths?: string[];
+      availableExports?: Record<string, string[]>;
     };
 
     if (!errorText) {
@@ -126,6 +144,36 @@ export async function POST(req: Request) {
       }
     }
 
+    // Build VFS structure context so AI knows what files and exports are available
+    let vfsStructureContext = "";
+    if (vfsFilePaths && vfsFilePaths.length > 0) {
+      vfsStructureContext += "\n\nAll files in VFS:\n" + vfsFilePaths.join("\n");
+    }
+    if (availableExports && Object.keys(availableExports).length > 0) {
+      vfsStructureContext += "\n\nAvailable exports per file:\n";
+      for (const [path, exports] of Object.entries(availableExports)) {
+        // Only include files with exports (skip empty)
+        if (exports.length > 0) {
+          vfsStructureContext += `${path}: ${exports.join(", ")}\n`;
+        }
+      }
+    }
+
+    // Build deps context
+    let depsContext = "";
+    try {
+      const pkgContent = contextFiles?.["/package.json"] || files["/package.json"];
+      if (pkgContent) {
+        const pkg = JSON.parse(pkgContent);
+        if (pkg.dependencies) {
+          depsContext = "\n\nInstalled npm dependencies:\n" +
+            Object.entries(pkg.dependencies).map(([name, ver]) => `- ${name}@${ver}`).join("\n");
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
     const model = getModel(modelId);
 
     const result = await generateText({
@@ -134,7 +182,7 @@ export async function POST(req: Request) {
       messages: [
         {
           role: "user",
-          content: `The page shows this runtime error:\n\n"${errorText}"\n\nFiles that were just written:\n${fileContext}${additionalContext}\n\nDiagnose the error and provide a fix. Respond with JSON only.`,
+          content: `The page shows this error:\n\n"${errorText}"\n\nFiles that were just written:\n${fileContext}${additionalContext}${vfsStructureContext}${depsContext}\n\nDiagnose the error and provide a fix. Respond with JSON only.`,
         },
       ],
       providerOptions: {
