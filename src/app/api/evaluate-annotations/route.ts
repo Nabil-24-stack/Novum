@@ -41,7 +41,7 @@ export async function POST(req: Request) {
       manifestoContext,
       personaContext,
       insightsContext,
-      modelId = "gemini-2.5-pro",
+      modelId = "claude-sonnet-4-6",
     } = body as {
       pages: PageInput[];
       manifestoContext: string;

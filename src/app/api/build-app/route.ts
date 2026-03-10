@@ -125,7 +125,7 @@ export async function POST(req: Request) {
     : `Build all pages of the application sequentially: ${pageNames}. Output each page as a separate code block. Make every page polished and production-ready using the component library.`;
 
   const result = streamText({
-    model: getModel(modelId || "gemini-2.5-pro"),
+    model: getModel(modelId || "claude-sonnet-4-6"),
     system: systemPrompt,
     maxOutputTokens: 65536,
     messages: [

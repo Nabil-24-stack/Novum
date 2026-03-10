@@ -543,7 +543,7 @@ export async function POST(req: Request) {
   }
 
   const result = streamText({
-    model: getModel(modelId || "gemini-2.5-pro"),
+    model: getModel(modelId || "claude-sonnet-4-6"),
     system: dynamicSystemPrompt,
     messages: modelMessages,
     maxOutputTokens: 65536,

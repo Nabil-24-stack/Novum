@@ -61,7 +61,7 @@ export async function POST(req: Request) {
     const {
       files,
       contextFiles,
-      modelId = "gemini-2.5-pro",
+      modelId = "claude-sonnet-4-6",
       errorText,
       vfsFilePaths,
       availableExports,
