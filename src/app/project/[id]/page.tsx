@@ -49,7 +49,7 @@ import { evaluateAnnotationsStandalone } from "@/hooks/useParallelBuild";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
 import { useProjectPersistence } from "@/hooks/useProjectPersistence";
 import { useParams, useRouter } from "next/navigation";
-import { Smartphone, GitBranch, Share, RefreshCw, RotateCw, ChevronLeft, Loader2 as LoaderIcon } from "lucide-react";
+import { Monitor, GitBranch, Share, RefreshCw, RotateCw, ChevronLeft, Loader2 as LoaderIcon } from "lucide-react";
 import { toast } from "sonner";
 import { animateViewport, calculateCenteredViewport, calculateFitAllViewport } from "@/lib/canvas/viewport-animation";
 import { calculateFlowLayout } from "@/lib/flow/auto-layout";
@@ -1907,22 +1907,36 @@ export default function ProjectEditor() {
                   </div>
                 );
               })()}
-              <button
-                onClick={handlePrototypeToggle}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
-              >
-                {isFrameExpanded ? (
-                  <>
-                    <GitBranch className="w-4 h-4" />
-                    Flow
-                  </>
-                ) : (
-                  <>
-                    <Smartphone className="w-4 h-4" />
-                    Prototype
-                  </>
-                )}
-              </button>
+              {/* View mode segmented control */}
+              <div className="relative flex items-center bg-neutral-100 border border-neutral-200 rounded-lg p-0.5">
+                {/* Sliding active indicator */}
+                <div
+                  className="absolute top-0.5 left-0.5 w-8 h-7 bg-white rounded-md shadow-sm transition-transform duration-200 ease-out"
+                  style={{ transform: isFrameExpanded ? "translateX(100%)" : "translateX(0)" }}
+                />
+                <button
+                  onClick={isFrameExpanded ? handlePrototypeToggle : undefined}
+                  className={`relative z-10 flex items-center justify-center w-8 h-7 rounded-md transition-colors duration-200 ${
+                    !isFrameExpanded
+                      ? "text-neutral-900"
+                      : "text-neutral-500 hover:text-neutral-700"
+                  }`}
+                  title="Canvas View"
+                >
+                  <GitBranch className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={!isFrameExpanded ? handlePrototypeToggle : undefined}
+                  className={`relative z-10 flex items-center justify-center w-8 h-7 rounded-md transition-colors duration-200 ${
+                    isFrameExpanded
+                      ? "text-neutral-900"
+                      : "text-neutral-500 hover:text-neutral-700"
+                  }`}
+                  title="Prototype View"
+                >
+                  <Monitor className="w-4 h-4" />
+                </button>
+              </div>
               <button
                 onClick={() => setViewMode("design-system")}
                 className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
@@ -2323,6 +2337,7 @@ export default function ProjectEditor() {
           autoSubmit={autoSubmit}
           onBuildingResponseComplete={handleAutoReEvaluateAnnotations}
           onAnnotatedDeleteRequest={setPendingAnnotatedDelete}
+          projectId={projectId}
         />
 
         {/* Token Studio - only shown in design-system mode */}

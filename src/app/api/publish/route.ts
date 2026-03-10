@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAuth } from "@/lib/supabase/auth-guard";
+import { logServerEvent } from "@/lib/analytics/log-server-event";
 
 export async function POST(request: Request) {
   try {
@@ -40,6 +41,7 @@ export async function POST(request: Request) {
       );
     }
 
+    logServerEvent(auth.user.id, "app_published", null, { slug, name: name.slice(0, 200) });
     return NextResponse.json({ slug, url: `/p/${slug}` });
   } catch (err) {
     console.error("[Publish] Unexpected error:", err);

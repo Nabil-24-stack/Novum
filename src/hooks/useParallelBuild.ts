@@ -7,6 +7,7 @@ import { useProductBrainStore } from "./useProductBrainStore";
 import { useDocumentStore } from "./useDocumentStore";
 import { parseStreamingContent } from "@/lib/streaming-parser";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
+import { trackEvent } from "@/lib/analytics/track-event";
 import { generateAppTsx, toPascalCase } from "@/lib/vfs/app-generator";
 import { runVerificationLoop, type VerificationStateCallbacks } from "@/lib/verification/verify-loop";
 import { isIframeAvailable } from "@/lib/verification/screenshot-capture";
@@ -118,10 +119,12 @@ export function useParallelBuild({
   writeFile,
   files,
   getLatestFile,
+  projectId,
 }: {
   writeFile: (path: string, content: string) => void;
   files: Record<string, string>;
   getLatestFile: (path: string) => string | undefined;
+  projectId?: string;
 }) {
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const modelIdRef = useRef<string>("gemini-2.5-pro");
@@ -365,6 +368,7 @@ export function useParallelBuild({
         stateCallbacks: makeVerificationCallbacks(page.pageId),
       });
 
+      trackEvent("verification_result", projectId, { status: result.status, pageId: page.pageId, attempts: result.attempts, fixCount: result.fixCount });
       if (result.status === "fixed") {
         toast.success(`${page.pageName}: auto-fixed ${result.fixCount} issue${result.fixCount > 1 ? "s" : ""}`);
       } else if (result.status === "failed") {
@@ -1005,6 +1009,7 @@ export function useParallelBuild({
         signal: controller.signal,
         stateCallbacks: makeVerificationCallbacks(pageId),
       }).then((result) => {
+        trackEvent("verification_result", projectId, { status: result.status, pageId, attempts: result.attempts, fixCount: result.fixCount });
         if (result.status === "fixed") {
           toast.success(`Auto-fixed ${result.fixCount} issue${result.fixCount > 1 ? "s" : ""}`);
         } else if (result.status === "failed") {
@@ -1016,7 +1021,7 @@ export function useParallelBuild({
         abortControllersRef.current.delete(`verify-${pageId}`);
       });
     },
-    [writeFile, files, getLatestFile, makeVerificationCallbacks]
+    [writeFile, files, getLatestFile, makeVerificationCallbacks, projectId]
   );
 
   const cancelAll = useCallback(() => {

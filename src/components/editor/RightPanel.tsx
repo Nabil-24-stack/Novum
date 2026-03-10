@@ -127,6 +127,8 @@ interface RightPanelProps {
     connections: import("@/lib/product-brain/types").DecisionConnection[];
     onConfirm: () => void;
   }) => void;
+  /** Project ID for analytics tracking */
+  projectId?: string;
 }
 
 export function RightPanel({
@@ -157,6 +159,7 @@ export function RightPanel({
   autoSubmit,
   onBuildingResponseComplete,
   onAnnotatedDeleteRequest,
+  projectId,
 }: RightPanelProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [internalActiveTab, setInternalActiveTab] = useState<TabType>("chat");
@@ -632,6 +635,7 @@ export function RightPanel({
             initialInput={initialInput}
             autoSubmit={autoSubmit}
             onBuildingResponseComplete={onBuildingResponseComplete}
+            projectId={projectId}
           />
         </FloatingChatPanel>
 

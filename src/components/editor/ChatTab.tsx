@@ -15,6 +15,7 @@ import { toPascalCase } from "@/lib/vfs/app-generator";
 import { ConfidenceBar } from "./ConfidenceBar";
 import { BuildProgressCards } from "./BuildProgressCards";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
+import { trackEvent } from "@/lib/analytics/track-event";
 import { checkRouteConsistency } from "@/lib/ai/route-consistency";
 import { parseStreamingContent } from "@/lib/streaming-parser";
 import { runVerificationLoop } from "@/lib/verification/verify-loop";
@@ -65,6 +66,8 @@ interface ChatTabProps {
   autoSubmit?: boolean;
   /** Called when an AI response that wrote code files completes — used to auto re-evaluate annotations */
   onBuildingResponseComplete?: () => void;
+  /** Project ID for analytics tracking */
+  projectId?: string;
 }
 
 // Regex to match code blocks with file attribute
@@ -973,7 +976,7 @@ function getMessageText(message: any): string {
   return "";
 }
 
-export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhaseAction, onHeroSubmit, initialMessages, onMessagesChange, initialInput, autoSubmit, onBuildingResponseComplete }: ChatTabProps) {
+export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhaseAction, onHeroSubmit, initialMessages, onMessagesChange, initialInput, autoSubmit, onBuildingResponseComplete, projectId }: ChatTabProps) {
   const [input, setInput] = useState(initialInput ?? "");
   const [selectedModel, setSelectedModel] = useState<ModelId>("claude-sonnet-4-6");
   const [stagedImages, setStagedImages] = useState<FileUIPart[]>([]);
@@ -1009,7 +1012,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   const alignmentCheckOriginalRequest = useRef<string | null>(null);
 
   // Parallel build orchestrator
-  const parallelBuild = useParallelBuild({ writeFile, files, getLatestFile });
+  const parallelBuild = useParallelBuild({ writeFile, files, getLatestFile, projectId });
   const parallelBuildConfigRef = useRef<{
     pages: { pageId: string; pageName: string; componentName: string; pageRoute: string }[];
     sharedContext: { manifestoContext: string; personaContext: string; flowContext: string };
@@ -1021,6 +1024,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     onError: (err) => {
       console.error("Chat error:", err);
       toast.error("AI response failed — please try again");
+      trackEvent("ai_response_error", projectId, { error: String(err).slice(0, 500) });
     },
   });
 
@@ -1686,6 +1690,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
             }
 
             writeFile(block.path, gated.code);
+            trackEvent("code_generated", projectId, { filePath: block.path, gatekeeperChanges: gated.report.hadChanges });
 
             // Track written files for verification loop
             const existing = writtenFilesPerMessage.get(message.id) || [];
@@ -2114,6 +2119,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
       const store = useStreamingStore.getState();
       if (store.completedFilePaths.length === 0) return; // No code written
       if (store.parallelMode) return; // Skip during parallel builds
+      trackEvent("ai_response_complete", projectId, { model: selectedModel, filesWritten: store.completedFilePaths.length });
 
       const completedFiles = [...store.completedFilePaths];
       const targetPageId = store.targetPageId ?? undefined;
@@ -2134,6 +2140,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
           signal: controller.signal,
         }).then((result) => {
           if (controller.signal.aborted) return;
+          trackEvent("verification_result", projectId, { status: result.status, attempts: result.attempts, fixCount: result.fixCount });
           if (result.status === "fixed") {
             toast.success(`Auto-fixed ${result.fixCount} issue${result.fixCount > 1 ? "s" : ""}`);
           } else if (result.status === "failed") {
@@ -2692,6 +2699,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
       messagePayload as { text: string; files?: FileUIPart[] },
       { body: { vfsContext, modelId: selectedModel, strategyPhase: effectivePhase, currentPageId: buildingPageId, currentPageName: buildingPageName, documentContext, hasUploadedDocuments, isSubsequentEdit } }
     );
+    trackEvent("chat_message_sent", projectId, { model: selectedModel, phase: effectivePhase });
 
     // Clear pinned elements after sending
     clearPinnedElements();

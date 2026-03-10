@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 import { helloWorldTemplate } from "@/lib/vfs/templates/hello-world";
+import { logServerEvent } from "@/lib/analytics/log-server-event";
 
 export async function GET() {
   const auth = await requireAuth();
@@ -41,5 +42,6 @@ export async function POST(req: Request) {
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+  logServerEvent(auth.user.id, "project_created", data.id, { name });
   return NextResponse.json(data, { status: 201 });
 }
