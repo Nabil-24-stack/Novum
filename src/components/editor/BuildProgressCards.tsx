@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Check, AlertTriangle, RotateCcw, Eye, ShieldCheck, Clock, Layers } from "lucide-react";
+import { Loader2, Check, AlertTriangle, RotateCcw, Eye, ShieldCheck, Clock, Layers, Square } from "lucide-react";
 import type { PageBuildState, FoundationBuild } from "@/hooks/useStreamingStore";
 
 interface BuildProgressCardsProps {
@@ -12,6 +12,7 @@ interface BuildProgressCardsProps {
   onRetry: (pageId: string) => void;
   onRetryVerification: (pageId: string) => void;
   onRetryAllFailed: () => void;
+  onStopVerification?: (pageId: string) => void;
 }
 
 export function BuildProgressCards({
@@ -22,6 +23,7 @@ export function BuildProgressCards({
   onRetry,
   onRetryVerification,
   onRetryAllFailed,
+  onStopVerification,
 }: BuildProgressCardsProps) {
   const entries = Object.entries(pageBuilds);
 
@@ -177,9 +179,9 @@ export function BuildProgressCards({
               )}
               {stage === "verifying" && (
                 <span className="text-xs text-blue-600">
-                  {build.verificationStatus === "capturing" ? "Capturing preview..." :
-                   build.verificationStatus === "reviewing" ? "Reviewing..." :
-                   `Fixing (attempt ${build.verificationAttempt}/3)...`}
+                  {build.verificationStatus === "capturing" ? "Settling & checking..." :
+                   build.verificationStatus === "reviewing" ? "Analyzing with screenshot..." :
+                   "Applying repair..."}
                 </span>
               )}
               {stage === "verified" && (
@@ -209,6 +211,16 @@ export function BuildProgressCards({
               )}
             </div>
 
+            {/* Stop button for verifying pages */}
+            {stage === "verifying" && onStopVerification && (
+              <button
+                onClick={() => onStopVerification(pageId)}
+                className="shrink-0 inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-neutral-700 bg-neutral-100 rounded hover:bg-neutral-200 transition-colors"
+              >
+                <Square className="w-3 h-3" />
+                Stop
+              </button>
+            )}
             {/* Retry button for build-failed pages */}
             {stage === "build_failed" && (
               <button

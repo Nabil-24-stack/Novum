@@ -124,6 +124,11 @@ function EditableTitle({ value, onSave }: { value: string; onSave: (v: string) =
 // Strategy layout defaults (world-space positions)
 const STRATEGY_ORIGIN = { x: 100, y: 100 };
 const PERSONA_CARD_WIDTH = 320;
+const IDEA_CARD_ESTIMATED_HEIGHT = 360;
+const IDEA_CARD_COL_WIDTH = 320;
+const IDEA_CARD_ROW_GAP = 40;
+const JOURNEY_CARD_ESTIMATED_HEIGHT = 520;
+const JOURNEY_CARD_GAP = 30;
 
 export default function ProjectEditor() {
   const params = useParams();
@@ -357,11 +362,11 @@ export default function ProjectEditor() {
   const [groupPositions, setGroupPositions] = useState<Map<GroupId, { x: number; y: number }>>(
     () => new Map()
   );
-  // Cached layout rects (for viewport animations)
-  const [groupRects, setGroupRects] = useState<GroupOrigin[]>([]);
-
   // Y offset to push FlowFrames below strategy content during building
   const [flowLayoutOffset, setFlowLayoutOffset] = useState({ x: 0, y: 0 });
+
+  // Dynamic idea card height tracking (declared before buildGroupConfigs which reads it)
+  const ideaCardHeightsRef = useRef<number[]>([]);
 
   // --- Build group configs from current strategy data ---
   const buildGroupConfigs = useCallback((): GroupConfig[] => {
@@ -444,24 +449,23 @@ export default function ProjectEditor() {
     return configs;
   }, [insightsData, streamingInsights, manifestoData, streamingOverview, personaData, streamingPersonas, journeyMapData, streamingJourneyMaps, ideaData, streamingIdeas, activeKeyFeatures, flowData, activeUserFlows]);
 
-  // --- Layout effect: compute horizontal group origins when groups appear ---
-  useEffect(() => {
-    if (isProjectLoading) return;
+  // Derived layout rects (for viewport animations) — useMemo avoids state-update
+  // render loops that useState+useEffect would cause with cascading effects.
+  const groupRects = useMemo<GroupOrigin[]>(() => {
+    if (isProjectLoading) return [];
     const configs = buildGroupConfigs();
-    const origins = calculateHorizontalLayout(configs, STRATEGY_ORIGIN);
-    if (origins.length === 0) return;
+    return calculateHorizontalLayout(configs, STRATEGY_ORIGIN);
+  }, [isProjectLoading, buildGroupConfigs]);
 
-    setGroupRects((prev) => {
-      // Only update if the layout actually changed
-      if (prev.length === origins.length && prev.every((r, i) => r.id === origins[i].id && r.x === origins[i].x && r.y === origins[i].y && r.width === origins[i].width && r.height === origins[i].height)) {
-        return prev;
-      }
-      return origins;
-    });
+  // --- Seed group positions when new groups appear ---
+  // groupRects is now a useMemo (no state update needed). This effect only
+  // initialises drag-positions for groups that don't have one yet.
+  useEffect(() => {
+    if (groupRects.length === 0) return;
     setGroupPositions((prev) => {
       const next = new Map(prev);
       let changed = false;
-      for (const o of origins) {
+      for (const o of groupRects) {
         if (!next.has(o.id)) {
           next.set(o.id, { x: o.x, y: o.y });
           changed = true;
@@ -469,7 +473,7 @@ export default function ProjectEditor() {
       }
       return changed ? next : prev;
     });
-  }, [isProjectLoading, buildGroupConfigs]);
+  }, [groupRects]);
 
   // Helper: get effective position for a group (user-dragged or computed)
   const getGroupOrigin = useCallback((id: GroupId) => {
@@ -482,17 +486,8 @@ export default function ProjectEditor() {
   const [ideaPositions, setIdeaPositions] = useState<{ x: number; y: number }[]>([]);
   const [userFlowPositions, setUserFlowPositions] = useState<{ x: number; y: number }[]>([]);
   const [keyFeaturesPosition, setKeyFeaturesPosition] = useState<{ x: number; y: number } | null>(null);
-  // Estimated height per journey map card (accounts for table with 5+ rows)
-  const JOURNEY_CARD_ESTIMATED_HEIGHT = 520;
-  const JOURNEY_CARD_GAP = 30;
-
-  // Estimated height per idea card row (cards have illustration + title + description)
-  const IDEA_CARD_ESTIMATED_HEIGHT = 360;
-  const IDEA_CARD_COL_WIDTH = 320;
-  const IDEA_CARD_ROW_GAP = 40;
 
   // Dynamic idea card height tracking — measures actual card heights to position rows accurately
-  const ideaCardHeightsRef = useRef<number[]>([]);
   const ideaDraggedRef = useRef<Set<number>>(new Set());
   const [ideaHeightTick, setIdeaHeightTick] = useState(0);
   const heightTickTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);

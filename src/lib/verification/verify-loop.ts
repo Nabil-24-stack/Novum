@@ -26,9 +26,9 @@ const MAX_DEP_WAITS = 3;
 /** Timeout for iframe error query postMessage round-trip */
 const ERROR_QUERY_TIMEOUT_MS = 3000;
 /** Extra delay after Sandpack settles before checking errors (lets DOM render) */
-const POST_SETTLE_DELAY_MS = 500;
+export const POST_SETTLE_DELAY_MS = 500;
 /** How long to wait for Sandpack to install a dependency that's already in package.json */
-const DEP_INSTALL_WAIT_MS = 3000;
+export const DEP_INSTALL_WAIT_MS = 3000;
 /** Max retries for server errors (5xx) that don't consume fix attempts */
 const MAX_SERVER_ERROR_RETRIES = 2;
 /** Cooldown before retrying after a server error */
@@ -37,7 +37,7 @@ const SERVER_ERROR_COOLDOWN_MS = 2000;
 // Regex to match code blocks with file attribute (same as ChatTab)
 const CODE_BLOCK_REGEX = /```(\w+)?\s+file="([^"]+)"\n([\s\S]*?)```/g;
 
-function extractCodeBlocks(
+export function extractCodeBlocks(
   text: string
 ): Array<{ path: string; content: string }> {
   const blocks: Array<{ path: string; content: string }> = [];
@@ -56,7 +56,7 @@ function extractCodeBlocks(
 }
 
 // Ensure React star import for Sandpack's classic JSX transform
-function ensureReactImport(code: string): string {
+export function ensureReactImport(code: string): string {
   if (/import\s+\*\s+as\s+React\s+from\s+["']react["']/.test(code))
     return code;
   if (/import\s+\{[^}]*\}\s+from\s+["']react["']/.test(code)) {
@@ -69,7 +69,7 @@ function ensureReactImport(code: string): string {
 }
 
 /** Try to Babel-parse code. Returns true if it parses without error. */
-function canBabelParse(code: string): boolean {
+export function canBabelParse(code: string): boolean {
   try {
     parse(code, { sourceType: "module", plugins: ["typescript", "jsx"] });
     return true;
@@ -78,7 +78,7 @@ function canBabelParse(code: string): boolean {
   }
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(new DOMException("Aborted", "AbortError"));
@@ -100,7 +100,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * Check if an error is a missing dependency that's already in package.json.
  * This means Sandpack just needs more time to install it — not a code fix issue.
  */
-function isDependencyError(error: string, allFiles: Record<string, string>): boolean {
+export function isDependencyError(error: string, allFiles: Record<string, string>): boolean {
   // Match both: 'dep-name' and `dep-name` (Sandpack uses varying quote styles)
   const depMatch = error.match(/Could not find dependency:\s*['`"]([^'`"]+)['`"]/);
   if (!depMatch) return false;
@@ -246,7 +246,7 @@ function tryFixNestedQuotesInStringLiteral(
  * Every fix is verified by re-parsing with Babel — if the fix doesn't
  * resolve the parse error, null is returned and the AI path is used.
  */
-function tryDeterministicSyntaxFix(
+export function tryDeterministicSyntaxFix(
   error: string,
   allFiles: Record<string, string>
 ): { filePath: string; fixedCode: string; description: string } | null {
@@ -417,7 +417,7 @@ function formatSandpackError(entry: import("@/hooks/useSandpackErrorStore").Sand
  * 1. Sandpack native error (compilation/bundler) — most reliable
  * 2. Iframe DOM scanning (runtime errors) — catches what Sandpack misses
  */
-async function detectErrors(
+export async function detectErrors(
   pageId?: string,
   signal?: AbortSignal
 ): Promise<string | null> {
@@ -493,7 +493,7 @@ const FOCUSED_LINES_AFTER = 40;
  * Enrich a syntax error message with the relevant source lines.
  * Helps the AI immediately see the broken code.
  */
-function enrichSyntaxError(
+export function enrichSyntaxError(
   error: string,
   files: Record<string, string>
 ): string {

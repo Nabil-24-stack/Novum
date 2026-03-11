@@ -3121,6 +3121,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                   }
                 }
               }}
+              onStopVerification={(pageId) => {
+                parallelBuild.stopVerification(pageId);
+              }}
             />
           </div>
         )}
