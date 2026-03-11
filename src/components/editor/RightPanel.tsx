@@ -16,6 +16,7 @@ import { useMouseMove } from "@/hooks/useMouseMove";
 import { sendToIframe } from "@/lib/inspection/iframe-messaging";
 import type { SelectedElement, OptimisticMovePayload, SourceLocation } from "@/lib/inspection/types";
 import type { StrategyPhase } from "@/hooks/useStrategyStore";
+import type { RepairChatDraft } from "./ChatTab";
 
 // Error boundary to catch PropertiesTab rendering errors
 interface ErrorBoundaryState {
@@ -118,6 +119,8 @@ interface RightPanelProps {
   initialInput?: string;
   /** Auto-submit on mount after initialInput is set */
   autoSubmit?: boolean;
+  /** Non-sent repair draft inserted when the user chooses "Fix in Chat" */
+  pendingRepairDraft?: RepairChatDraft | null;
   /** Called when an AI response that wrote code files completes — used to auto re-evaluate annotations */
   onBuildingResponseComplete?: () => void;
   /** Called when element has strategy annotations — show confirmation modal instead of deleting immediately */
@@ -157,6 +160,7 @@ export function RightPanel({
   onMessagesChange,
   initialInput,
   autoSubmit,
+  pendingRepairDraft,
   onBuildingResponseComplete,
   onAnnotatedDeleteRequest,
   projectId,
@@ -623,20 +627,21 @@ export function RightPanel({
           dockedClassName={`absolute inset-0 ${activeTab !== "chat" ? "hidden" : ""}`}
           animate={floatingAnimate}
         >
-          <ChatTab
-            writeFile={writeFile}
-            files={files}
-            getLatestFile={getLatestFile}
+            <ChatTab
+              writeFile={writeFile}
+              files={files}
+              getLatestFile={getLatestFile}
             strategyPhase={strategyPhase}
             onPhaseAction={onPhaseAction}
             onHeroSubmit={onHeroSubmit}
-            initialMessages={initialMessages}
-            onMessagesChange={onMessagesChange}
-            initialInput={initialInput}
-            autoSubmit={autoSubmit}
-            onBuildingResponseComplete={onBuildingResponseComplete}
-            projectId={projectId}
-          />
+              initialMessages={initialMessages}
+              onMessagesChange={onMessagesChange}
+              initialInput={initialInput}
+              autoSubmit={autoSubmit}
+              pendingRepairDraft={pendingRepairDraft}
+              onBuildingResponseComplete={onBuildingResponseComplete}
+              projectId={projectId}
+            />
         </FloatingChatPanel>
 
         {/* Placeholder shown in docked chat area when chat is floating */}

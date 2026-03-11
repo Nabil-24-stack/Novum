@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Check, AlertTriangle, RotateCcw, Eye, ShieldCheck, Clock, Layers, Square } from "lucide-react";
+import { Loader2, Check, AlertTriangle, RotateCcw, Eye, ShieldCheck, Clock, Layers, Square, MessageSquare } from "lucide-react";
 import type { PageBuildState, FoundationBuild } from "@/hooks/useStreamingStore";
 
 interface BuildProgressCardsProps {
@@ -9,8 +9,10 @@ interface BuildProgressCardsProps {
   buildPhase: "idle" | "building";
   foundationPageId: string | null;
   foundationBuild: FoundationBuild;
+  verificationPaused: boolean;
+  verificationPausedPageId: string | null;
   onRetry: (pageId: string) => void;
-  onRetryVerification: (pageId: string) => void;
+  onFixInChat: (pageId: string) => void;
   onRetryAllFailed: () => void;
   onStopVerification?: (pageId: string) => void;
 }
@@ -20,8 +22,10 @@ export function BuildProgressCards({
   pageNames,
   buildPhase,
   foundationBuild,
+  verificationPaused,
+  verificationPausedPageId,
   onRetry,
-  onRetryVerification,
+  onFixInChat,
   onRetryAllFailed,
   onStopVerification,
 }: BuildProgressCardsProps) {
@@ -148,7 +152,7 @@ export function BuildProgressCards({
                 <AlertTriangle className="w-4 h-4 text-red-500" />
               )}
               {stage === "verify_failed" && (
-                <Check className="w-4 h-4 text-amber-600" />
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
               )}
             </div>
 
@@ -179,9 +183,9 @@ export function BuildProgressCards({
               )}
               {stage === "verifying" && (
                 <span className="text-xs text-blue-600">
-                  {build.verificationStatus === "capturing" ? "Settling & checking..." :
-                   build.verificationStatus === "reviewing" ? "Analyzing with screenshot..." :
-                   "Applying repair..."}
+                  {build.verificationStatus === "capturing"
+                    ? "Checking preview..."
+                    : "Reviewing verification result..."}
                 </span>
               )}
               {stage === "verified" && (
@@ -190,9 +194,14 @@ export function BuildProgressCards({
                 </span>
               )}
               {stage === "verify_failed" && (
-                <span className="text-xs text-amber-600">
-                  Issues detected — {build.verificationIssues[0] || "check preview"}
-                </span>
+                <div className="space-y-1">
+                  <span className="text-xs text-amber-700 block">
+                    Issues detected — take a screenshot of this error and send it in chat.
+                  </span>
+                  <span className="text-xs text-amber-600 block">
+                    {build.verificationIssues[0] || "Check the preview for the failing screen."}
+                  </span>
+                </div>
               )}
               {stage === "build_failed" && (
                 <span className="text-xs text-red-600 truncate block">
@@ -231,19 +240,34 @@ export function BuildProgressCards({
                 Retry
               </button>
             )}
-            {/* Retry verification button */}
+            {/* Fix in Chat button */}
             {stage === "verify_failed" && (
               <button
-                onClick={() => onRetryVerification(pageId)}
-                className="shrink-0 inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-700 bg-amber-100 rounded hover:bg-amber-200 transition-colors"
+                onClick={() => onFixInChat(pageId)}
+                className="shrink-0 inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-900 bg-white border border-amber-300 rounded hover:bg-amber-100 transition-colors"
               >
-                <RotateCcw className="w-3 h-3" />
-                Retry
+                <MessageSquare className="w-3 h-3" />
+                Fix in Chat
               </button>
             )}
           </div>
         );
       })}
+
+      {verificationPaused && verificationPausedPageId && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-center justify-between gap-3">
+          <span>
+            Verification paused until this error is fixed in chat.
+          </span>
+          <button
+            onClick={() => onFixInChat(verificationPausedPageId)}
+            className="inline-flex items-center gap-1 px-2 py-1 font-medium text-amber-900 bg-white border border-amber-300 rounded hover:bg-amber-100 transition-colors"
+          >
+            <MessageSquare className="w-3 h-3" />
+            Fix in Chat
+          </button>
+        </div>
+      )}
 
       {/* Bottom summary / actions */}
       <div className="flex items-center justify-between pt-2 border-t border-neutral-200 mt-1">
@@ -268,13 +292,13 @@ export function BuildProgressCards({
           )}
         </div>
 
-        {allTerminal && failedCount > 0 && (
+        {allTerminal && buildFailedCount > 0 && (
           <button
             onClick={onRetryAllFailed}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-700 bg-neutral-100 rounded-lg hover:bg-neutral-200 transition-colors"
           >
             <RotateCcw className="w-3 h-3" />
-            Retry Failed
+            Retry Failed Builds
           </button>
         )}
       </div>

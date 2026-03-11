@@ -493,7 +493,19 @@ export async function POST(req: Request) {
   const auth = await requireAuth();
   if (auth.response) return auth.response;
 
-  const { messages, vfsContext, modelId, strategyPhase, currentPageId, currentPageName, isDeepDive, documentContext, buildAnyway, isSubsequentEdit } = await req.json();
+  const {
+    messages,
+    vfsContext,
+    modelId,
+    strategyPhase,
+    currentPageId,
+    currentPageName,
+    isDeepDive,
+    documentContext,
+    buildAnyway,
+    isSubsequentEdit,
+    repairContext,
+  } = await req.json();
 
   // Convert UIMessage[] to ModelMessage[] format
   const modelMessages = await convertToModelMessages(messages);
@@ -540,6 +552,10 @@ export async function POST(req: Request) {
   // Inject document context when available
   if (documentContext) {
     dynamicSystemPrompt += `\n\n---\n\n${documentContext}`;
+  }
+
+  if (strategyPhase === "building" && repairContext) {
+    dynamicSystemPrompt += `\n\n---\n\n## Active Repair Context\n\nYou are fixing a preview error the user is attaching as a screenshot.\n- Page ID: ${repairContext.pageId}\n- Page name: ${repairContext.pageName}\n- Route: ${repairContext.route}\n- Error path: ${repairContext.errorPath || "unknown"}\n- Error text:\n${repairContext.errorText}\n\nPrioritize fixing the file/path referenced here. If you change code, return full-file replacements only.`;
   }
 
   const result = streamText({

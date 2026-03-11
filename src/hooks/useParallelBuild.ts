@@ -11,7 +11,6 @@ import { runGatekeeper } from "@/lib/ai/gatekeeper";
 import { trackEvent } from "@/lib/analytics/track-event";
 import { generateAppTsx, toPascalCase } from "@/lib/vfs/app-generator";
 import { runVerificationLoop, detectErrors, sleep, POST_SETTLE_DELAY_MS, type VerificationStateCallbacks } from "@/lib/verification/verify-loop";
-import { runScreenshotRepair, type ScreenshotRepairResult } from "@/lib/verification/screenshot-repair";
 import { isIframeAvailable } from "@/lib/verification/screenshot-capture";
 import { waitForSandpackSettle as waitForSandpackSettleStore } from "@/hooks/useSandpackErrorStore";
 import { toast } from "sonner";
@@ -379,6 +378,8 @@ export function useParallelBuild({
     const allPages = allPagesRef.current;
     if (allPages.length === 0) return;
 
+    if (useStreamingStore.getState().verificationPaused) return;
+
     const pageBuilds = useStreamingStore.getState().pageBuilds;
     const isParallelFreshBuild = useStreamingStore.getState().parallelMode
       && !sharedContextRef.current?.isRebuild;
@@ -522,75 +523,6 @@ export function useParallelBuild({
       return result;
     } catch {
       // Verification failed — page is still usable, just not verified
-      return null;
-    }
-  };
-
-  // Run screenshot-assisted repair for a single page (parallel fresh builds only)
-  const repairPageWithScreenshot = async (
-    page: PageBuildConfig,
-    signal: AbortSignal
-  ): Promise<ScreenshotRepairResult | null> => {
-    const completedFilePaths =
-      useStreamingStore.getState().pageBuilds[page.pageId]?.completedFilePaths || [];
-
-    // Include foundation files in the import closure
-    const foundationBuild = useStreamingStore.getState().foundationBuild;
-    const expandedPaths = [...completedFilePaths];
-    if (foundationBuild.filePaths.length > 0) {
-      const pageFilePath = `/pages/${page.componentName}.tsx`;
-      const pageCode = latestBuildFilesRef.current[pageFilePath];
-      if (pageCode) {
-        const localImports = extractLocalImports(pageCode);
-        for (const imp of localImports) {
-          const resolved = resolveImport(pageFilePath, imp);
-          if (
-            foundationBuild.filePaths.includes(resolved) &&
-            !expandedPaths.includes(resolved)
-          ) {
-            expandedPaths.push(resolved);
-          }
-        }
-      }
-    }
-
-    const latestFiles = { ...latestBuildFilesRef.current };
-
-    const wrappedWriteFile = (path: string, content: string) => {
-      writeFile(path, content);
-      latestBuildFilesRef.current[path] = content;
-    };
-
-    try {
-      const result = await runScreenshotRepair({
-        completedFiles: expandedPaths,
-        allFiles: latestFiles,
-        writeFile: wrappedWriteFile,
-        modelId: modelIdRef.current,
-        pageId: page.pageId,
-        signal,
-        stateCallbacks: makeVerificationCallbacks(page.pageId),
-      });
-
-      trackEvent("verification_result", projectId, {
-        status: result.status,
-        pageId: page.pageId,
-        fixCount: result.fixCount,
-        mode: "screenshot",
-      });
-
-      if (result.status === "fixed") {
-        toast.success(
-          `${page.pageName}: auto-fixed ${result.fixCount} issue${result.fixCount > 1 ? "s" : ""}`
-        );
-      } else if (result.status === "failed") {
-        toast.warning(`${page.pageName}: could not auto-fix all issues`);
-      }
-
-      return result;
-    } catch (err) {
-      // Let AbortError propagate so the queue processor can handle stop correctly
-      if ((err as Error).name === "AbortError") throw err;
       return null;
     }
   };
@@ -1040,6 +972,7 @@ export function useParallelBuild({
 
   // Lock to prevent multiple queue processors from running simultaneously
   const verificationProcessingRef = useRef(false);
+  const processVerificationQueueRef = useRef<(signal: AbortSignal) => Promise<void>>(async () => {});
 
   /**
    * Settle Sandpack, detect errors, and extract the broken file path.
@@ -1076,6 +1009,7 @@ export function useParallelBuild({
     try {
       while (!signal.aborted) {
         const store = useStreamingStore.getState();
+        if (store.verificationPaused) break;
         if (store.verificationActive) break; // Already verifying something
 
         const nextPageId = store.dequeueVerification();
@@ -1093,11 +1027,14 @@ export function useParallelBuild({
         const onBuildAbort = () => verifyController.abort();
         signal.addEventListener("abort", onBuildAbort, { once: true });
 
-        let result: ScreenshotRepairResult | null = null;
-        let aborted = false;
         try {
           // Add to App.tsx for verification
           doRebuildAppTsx();
+
+          useStreamingStore.getState().updatePageVerification(nextPageId, "capturing", {
+            attempt: 1,
+            issues: [],
+          });
 
           // ── Early detection: settle + detect error + extract broken file ──
           const {
@@ -1117,32 +1054,34 @@ export function useParallelBuild({
                 `[parallel-build] Cross-page ownership: error in ${earlyErrorPath} belongs to ${ownerPage.pageName} (not ${page.pageName}) — reassigning`
               );
 
-              // Demote the actually broken page and enqueue it for repair
               if (ownerStage === "verified" || ownerStage === "queued_verification" || ownerStage === "verifying") {
-                useStreamingStore.getState().setPageBuildStage(ownerPage.pageId, "queued_verification");
+                useStreamingStore.getState().setPageBuildStage(ownerPage.pageId, "verify_failed");
               }
-              // Enqueue only if not already in the queue
-              const currentQueue = useStreamingStore.getState().verificationQueue;
-              if (!currentQueue.includes(ownerPage.pageId)) {
-                useStreamingStore.getState().enqueueVerification(ownerPage.pageId);
-              }
+              useStreamingStore.getState().updatePageVerification(ownerPage.pageId, "failed", {
+                attempt: 1,
+                issues: [earlyError],
+              });
+              useStreamingStore.getState().addPageVerificationLog(
+                ownerPage.pageId,
+                `Verification paused — unresolved error belongs to ${ownerPage.pageName}`
+              );
 
-              // Demote the current (innocent) page BEFORE rebuilding App.tsx,
-              // so it transitions from "verifying" → "queued_verification" and
-              // doRebuildAppTsx() won't include it (only "verifying"/"verified"
-              // pages are eligible).
+              // Requeue the innocent page for later verification after the failed page is fixed in chat.
+              useStreamingStore.getState().updatePageVerification(nextPageId, "idle", {
+                attempt: 0,
+                issues: [],
+              });
               useStreamingStore.getState().setPageBuildStage(nextPageId, "queued_verification");
               useStreamingStore.getState().enqueueVerification(nextPageId);
 
-              // Now rebuild App.tsx — neither the broken page nor the innocent
-              // page will be included since both are "queued_verification".
+              useStreamingStore.getState().pauseVerification(ownerPage.pageId, earlyError, earlyErrorPath);
               doRebuildAppTsx();
 
-              // Release the active slot and continue the queue (broken page is next)
+              // Release the active slot and pause the queue until the user fixes the page in chat.
               useStreamingStore.getState().setVerificationActive(null);
               signal.removeEventListener("abort", onBuildAbort);
               abortControllersRef.current.delete(`verify-${nextPageId}`);
-              continue;
+              break;
             }
           }
 
@@ -1158,67 +1097,46 @@ export function useParallelBuild({
             continue;
           }
 
-          // ── Error belongs to this page — run screenshot repair ──
-          result = await repairPageWithScreenshot(page, verifyController.signal);
-
-          // Update stage based on result
-          if (result && (result.status === "passed" || result.status === "fixed")) {
-            useStreamingStore.getState().setPageBuildStage(nextPageId, "verified");
-            useStrategyStore.getState().addVerifiedPage(nextPageId);
-          } else if (result && result.status === "failed") {
-            useStreamingStore.getState().setPageBuildStage(nextPageId, "verify_failed");
-            doRebuildAppTsx();
-          } else {
-            // Null result (error in verification itself) — treat as verify_failed
-            useStreamingStore.getState().setPageBuildStage(nextPageId, "verify_failed");
-            doRebuildAppTsx();
-          }
-
-          // Post-repair cross-page check: if the repair fixed or broke other files,
-          // demote those pages so they get re-verified.
-          const crossPagePaths = new Set<string>(result?.fixedPaths ?? []);
-          if (result?.detectedErrorPath) crossPagePaths.add(result.detectedErrorPath);
-          if (result?.lastError) {
-            const errorFileMatch = result.lastError.match(/(?:\/[^\s:|]+\.(?:tsx?|jsx?|js))/);
-            if (errorFileMatch) crossPagePaths.add(errorFileMatch[0]);
-          }
-          for (const affectedPath of crossPagePaths) {
-            const affectedPage = findPageForPath(affectedPath);
-            if (affectedPage && affectedPage.pageId !== nextPageId) {
-              const affectedStage = useStreamingStore.getState().pageBuilds[affectedPage.pageId]?.buildStage;
-              if (affectedStage === "verified") {
-                console.log(`[parallel-build] Cross-page issue: ${affectedPath} affected during ${page.pageName} repair — re-enqueuing ${affectedPage.pageName}`);
-                useStreamingStore.getState().setPageBuildStage(affectedPage.pageId, "queued_verification");
-                useStreamingStore.getState().enqueueVerification(affectedPage.pageId);
-              }
-            }
-          }
-
-          // Track errors for subsequent pages
-          if (result && (result.status === "fixed" || result.status === "failed") && result.lastError) {
-            knownFailuresRef.current.push({
-              pageName: page.pageName,
-              error: result.lastError.slice(0, 200),
-              fix: result.fixSummary,
-            });
-          }
+          // ── Error belongs to this page — pause verification and send the user to chat ──
+          useStreamingStore.getState().setPageBuildStage(nextPageId, "verify_failed");
+          useStreamingStore.getState().updatePageVerification(nextPageId, "failed", {
+            attempt: 1,
+            issues: [earlyError],
+          });
+          useStreamingStore.getState().addPageVerificationLog(
+            nextPageId,
+            "Verification paused — take a screenshot of this error and send it in chat."
+          );
+          useStreamingStore.getState().pauseVerification(nextPageId, earlyError, earlyErrorPath);
+          doRebuildAppTsx();
+          useStreamingStore.getState().setVerificationActive(null);
+          signal.removeEventListener("abort", onBuildAbort);
+          abortControllersRef.current.delete(`verify-${nextPageId}`);
+          break;
         } catch (err) {
           if ((err as Error).name === "AbortError") {
-            aborted = true;
-            // If stopVerification already marked the page verify_failed, don't overwrite.
-            // If it was a build-level abort, just break the loop.
-            const currentStage = useStreamingStore.getState().pageBuilds[nextPageId]?.buildStage;
-            if (currentStage !== "verify_failed") {
-              useStreamingStore.getState().setPageBuildStage(nextPageId, "verify_failed");
-              useStreamingStore.getState().updatePageVerification(nextPageId, "failed", {
-                issues: ["Aborted"],
-              });
-              doRebuildAppTsx();
+            if (!signal.aborted) {
+              const currentStage = useStreamingStore.getState().pageBuilds[nextPageId]?.buildStage;
+              if (currentStage !== "verify_failed") {
+                useStreamingStore.getState().setPageBuildStage(nextPageId, "verify_failed");
+                useStreamingStore.getState().updatePageVerification(nextPageId, "failed", {
+                  issues: ["Aborted"],
+                });
+                useStreamingStore.getState().pauseVerification(nextPageId, "Aborted");
+                doRebuildAppTsx();
+              }
+            } else {
+              break;
             }
           } else {
             // Unexpected error — mark as verify_failed
             useStreamingStore.getState().setPageBuildStage(nextPageId, "verify_failed");
+            useStreamingStore.getState().updatePageVerification(nextPageId, "failed", {
+              issues: ["Verification failed unexpectedly"],
+            });
+            useStreamingStore.getState().pauseVerification(nextPageId, "Verification failed unexpectedly");
             doRebuildAppTsx();
+            break;
           }
         } finally {
           signal.removeEventListener("abort", onBuildAbort);
@@ -1226,9 +1144,6 @@ export function useParallelBuild({
         }
 
         useStreamingStore.getState().setVerificationActive(null);
-
-        // If this was a build-level abort, exit the loop
-        if (aborted && signal.aborted) break;
       }
     } finally {
       verificationProcessingRef.current = false;
@@ -1237,6 +1152,7 @@ export function useParallelBuild({
     // Check if all pages are done
     checkAllPagesComplete();
   };
+  processVerificationQueueRef.current = processVerificationQueue;
 
   // Single-call sequential build: one API call generates all pages (used for rebuilds)
   const buildAllPages = async (
@@ -1672,9 +1588,10 @@ export function useParallelBuild({
         && !sharedContextRef.current?.isRebuild;
 
       if (isParallelFresh) {
+        useStreamingStore.getState().resumeVerification();
         // Re-enqueue for verification queue
         useStreamingStore.getState().setPageBuildStage(pageId, "queued_verification");
-        useStreamingStore.getState().enqueueVerification(pageId);
+        useStreamingStore.getState().prependVerification(pageId);
         processVerificationQueue(controller.signal);
         return;
       }
@@ -1742,22 +1659,41 @@ export function useParallelBuild({
         issues: ["Stopped by user"],
       });
       useStreamingStore.getState().addPageVerificationLog(pageId, "Verification stopped by user");
+      const page = allPagesRef.current.find((item) => item.pageId === pageId);
+      useStreamingStore.getState().pauseVerification(
+        pageId,
+        "Stopped by user",
+        page ? `/pages/${page.componentName}.tsx` : undefined,
+      );
       doRebuildAppTsx();
 
-      // If this was the active verification, clear and continue queue
+      // If this was the active verification, clear it but keep the queue paused.
       if (useStreamingStore.getState().verificationActive === pageId) {
         useStreamingStore.getState().setVerificationActive(null);
-        const buildController = abortControllersRef.current.get("__build__");
-        if (buildController && !buildController.signal.aborted) {
-          processVerificationQueue(buildController.signal);
-        }
       }
 
       checkAllPagesComplete();
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [doRebuildAppTsx, checkAllPagesComplete]
   );
+
+  const resumePausedVerification = useCallback(() => {
+    const store = useStreamingStore.getState();
+    const pausedPageId = store.verificationPausedPageId;
+    if (!store.verificationPaused || !pausedPageId) return;
+
+    store.resumeVerification();
+    store.updatePageVerification(pausedPageId, "idle", { attempt: 0, issues: [] });
+    store.addPageVerificationLog(pausedPageId, "Manual fix received — resuming verification");
+    store.setPageBuildStage(pausedPageId, "queued_verification");
+    store.prependVerification(pausedPageId);
+    doRebuildAppTsx();
+
+    const buildController = abortControllersRef.current.get("__build__");
+    if (buildController && !buildController.signal.aborted) {
+      processVerificationQueueRef.current(buildController.signal);
+    }
+  }, [doRebuildAppTsx]);
 
   const cancelAll = useCallback(() => {
     for (const [, controller] of abortControllersRef.current) {
@@ -1785,7 +1721,7 @@ export function useParallelBuild({
     useStrategyStore.getState().setBuildingPages([]);
   }, []);
 
-  return { startBuild, retryPage, retryVerification, stopVerification, cancelAll };
+  return { startBuild, retryPage, retryVerification, stopVerification, resumePausedVerification, cancelAll };
 }
 
 // Helper: infer purpose from foundation file path

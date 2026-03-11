@@ -58,6 +58,7 @@ import type { ContextMenuPayload } from "@/lib/inspection/types";
 import type { FlowNodePosition } from "@/lib/flow/types";
 import type { PreviewMode } from "@/lib/tokens";
 import { serializeCanvasLayout, deserializeCanvasLayout } from "@/lib/canvas/canvas-layout-types";
+import type { RepairChatDraft } from "@/components/editor/ChatTab";
 
 type ViewMode = "app" | "design-system";
 
@@ -142,6 +143,7 @@ export default function ProjectEditor() {
   const [initialMessages, setInitialMessages] = useState<any[] | undefined>(undefined);
   const [initialInput, setInitialInput] = useState<string | undefined>(undefined);
   const [autoSubmit, setAutoSubmit] = useState(false);
+  const [pendingRepairDraft, setPendingRepairDraft] = useState<RepairChatDraft | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [chatMessages, setChatMessages] = useState<any[] | null>(null);
   const didHydrateRef = useRef(false);
@@ -305,6 +307,9 @@ export default function ProjectEditor() {
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
   const currentBuildingPages = useStrategyStore((s) => s.currentBuildingPages);
   const strategyUpdatedAfterBuild = useStrategyStore((s) => s.strategyUpdatedAfterBuild);
+  const repairChatIntent = useStreamingStore((s) => s.repairChatIntent);
+  const verificationPausedErrorText = useStreamingStore((s) => s.verificationPausedErrorText);
+  const verificationPausedErrorPath = useStreamingStore((s) => s.verificationPausedErrorPath);
 
   // Document/Insights state
   const insightsData = useDocumentStore((s) => s.insightsData);
@@ -630,6 +635,22 @@ export default function ProjectEditor() {
 
   // Flow manifest parsed from /flow.json
   const flowManifest = useFlowManifest(files);
+
+  useEffect(() => {
+    if (!repairChatIntent) return;
+
+    const page = flowManifest.pages.find((item) => item.id === repairChatIntent.pageId);
+    setRightPanelTab("chat");
+    setPendingRepairDraft({
+      pageId: repairChatIntent.pageId,
+      pageName: page?.name || repairChatIntent.pageId,
+      route: page?.route || `/${repairChatIntent.pageId}`,
+      errorText: verificationPausedErrorText || "Preview error detected",
+      errorPath: verificationPausedErrorPath || undefined,
+      nonce: repairChatIntent.nonce,
+    });
+    useStreamingStore.getState().clearRepairChatIntent();
+  }, [repairChatIntent, flowManifest.pages, verificationPausedErrorPath, verificationPausedErrorText]);
 
   // Orphan detection: clean up product-brain connections that reference deleted pages/personas/JTBDs
   useEffect(() => {
@@ -2330,6 +2351,7 @@ export default function ProjectEditor() {
           onMessagesChange={handleMessagesChange}
           initialInput={initialInput}
           autoSubmit={autoSubmit}
+          pendingRepairDraft={pendingRepairDraft}
           onBuildingResponseComplete={handleAutoReEvaluateAnnotations}
           onAnnotatedDeleteRequest={setPendingAnnotatedDelete}
           projectId={projectId}

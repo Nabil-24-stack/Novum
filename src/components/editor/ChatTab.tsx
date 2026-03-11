@@ -64,10 +64,21 @@ interface ChatTabProps {
   initialInput?: string;
   /** Auto-submit on mount after initialInput is set */
   autoSubmit?: boolean;
+  /** Draft inserted when the user chooses the explicit Fix in Chat recovery path */
+  pendingRepairDraft?: RepairChatDraft | null;
   /** Called when an AI response that wrote code files completes — used to auto re-evaluate annotations */
   onBuildingResponseComplete?: () => void;
   /** Project ID for analytics tracking */
   projectId?: string;
+}
+
+export interface RepairChatDraft {
+  pageId: string;
+  pageName: string;
+  route: string;
+  errorText: string;
+  errorPath?: string;
+  nonce: number;
 }
 
 // Regex to match code blocks with file attribute
@@ -976,11 +987,12 @@ function getMessageText(message: any): string {
   return "";
 }
 
-export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhaseAction, onHeroSubmit, initialMessages, onMessagesChange, initialInput, autoSubmit, onBuildingResponseComplete, projectId }: ChatTabProps) {
+export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhaseAction, onHeroSubmit, initialMessages, onMessagesChange, initialInput, autoSubmit, pendingRepairDraft, onBuildingResponseComplete, projectId }: ChatTabProps) {
   const [input, setInput] = useState(initialInput ?? "");
   const [selectedModel, setSelectedModel] = useState<ModelId>("claude-sonnet-4-6");
   const [stagedImages, setStagedImages] = useState<FileUIPart[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [activeRepairContext, setActiveRepairContext] = useState<RepairChatDraft | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { pinnedElements, unpinElement, clearPinnedElements } = useChatContextStore();
@@ -1007,6 +1019,9 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   const foundationPageId = useStreamingStore((s) => s.foundationPageId);
   const foundationBuild = useStreamingStore((s) => s.foundationBuild);
   const annotationEvaluation = useStreamingStore((s) => s.annotationEvaluation);
+  const verificationPaused = useStreamingStore((s) => s.verificationPaused);
+  const verificationPausedPageId = useStreamingStore((s) => s.verificationPausedPageId);
+  const requestRepairInChat = useStreamingStore((s) => s.requestRepairInChat);
 
   // Strategy alignment check state
   const [alignmentCheckPending, setAlignmentCheckPending] = useState(false);
@@ -1080,8 +1095,22 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   // Ref to trigger submit programmatically from effects
   const pendingSubmitRef = useRef<string | null>(null);
   const didAutoSubmitRef = useRef(false);
+  const lastRepairDraftNonceRef = useRef<number | null>(null);
 
   const isLoading = status === "submitted" || status === "streaming";
+
+  useEffect(() => {
+    if (!pendingRepairDraft) return;
+    if (lastRepairDraftNonceRef.current === pendingRepairDraft.nonce) return;
+
+    lastRepairDraftNonceRef.current = pendingRepairDraft.nonce;
+    setActiveRepairContext(pendingRepairDraft);
+    setInput(
+      `I hit a preview error on ${pendingRepairDraft.pageName} (${pendingRepairDraft.route}). I'm attaching a screenshot of the error. Please fix the code causing it.`
+    );
+
+    setTimeout(() => inputRef.current?.focus(), 50);
+  }, [pendingRepairDraft]);
 
   // Clear alignment check state when a new message is being sent
   useEffect(() => {
@@ -2215,7 +2244,11 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     if (!CODE_BLOCK_REGEX.test(text)) return;
     CODE_BLOCK_REGEX.lastIndex = 0; // reset stateful regex
 
-    onBuildingResponseComplete?.();
+    if (parallelMode && verificationPaused && verificationPausedPageId) {
+      parallelBuild.resumePausedVerification();
+    } else {
+      onBuildingResponseComplete?.();
+    }
 
     // --- Run verification loop on written files ---
     const writtenFiles = writtenFilesPerMessage.get(lastAssistant.id);
@@ -2260,7 +2293,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
         });
       }
     }
-  }, [messages, isLoading, onBuildingResponseComplete, files, getLatestFile, writeFile, selectedModel]);
+  }, [messages, isLoading, onBuildingResponseComplete, files, getLatestFile, writeFile, selectedModel, parallelMode, verificationPaused, verificationPausedPageId, parallelBuild]);
 
   // --- Image upload helpers ---
 
@@ -2696,11 +2729,25 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
 
     // Send user's clean message for display
     // Pass context via request-level body option (hidden from UI, sent to API)
+    const repairContext = activeRepairContext
+      ? {
+          pageId: activeRepairContext.pageId,
+          pageName: activeRepairContext.pageName,
+          route: activeRepairContext.route,
+          errorText: activeRepairContext.errorText,
+          errorPath: activeRepairContext.errorPath,
+        }
+      : undefined;
+
     await sendMessage(
       messagePayload as { text: string; files?: FileUIPart[] },
-      { body: { vfsContext, modelId: selectedModel, strategyPhase: effectivePhase, currentPageId: buildingPageId, currentPageName: buildingPageName, documentContext, hasUploadedDocuments, isSubsequentEdit } }
+      { body: { vfsContext, modelId: selectedModel, strategyPhase: effectivePhase, currentPageId: buildingPageId, currentPageName: buildingPageName, documentContext, hasUploadedDocuments, isSubsequentEdit, repairContext } }
     );
     trackEvent("chat_message_sent", projectId, { model: selectedModel, phase: effectivePhase });
+
+    if (repairContext) {
+      setActiveRepairContext(null);
+    }
 
     // Clear pinned elements after sending
     clearPinnedElements();
@@ -3093,6 +3140,8 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
               buildPhase={buildPhase}
               foundationPageId={foundationPageId}
               foundationBuild={foundationBuild}
+              verificationPaused={verificationPaused}
+              verificationPausedPageId={verificationPausedPageId}
               onRetry={(pageId) => {
                 if (parallelBuildConfigRef.current) {
                   parallelBuild.retryPage(
@@ -3102,8 +3151,8 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                   );
                 }
               }}
-              onRetryVerification={(pageId) => {
-                parallelBuild.retryVerification(pageId);
+              onFixInChat={(pageId) => {
+                requestRepairInChat(pageId);
               }}
               onRetryAllFailed={() => {
                 if (!parallelBuildConfigRef.current) return;
@@ -3115,9 +3164,6 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                       parallelBuildConfigRef.current.pages,
                       parallelBuildConfigRef.current.sharedContext
                     );
-                  } else if (s.buildStage === "verify_failed") {
-                    // Code exists but verification failed — retry verification only
-                    parallelBuild.retryVerification(pageId);
                   }
                 }
               }}

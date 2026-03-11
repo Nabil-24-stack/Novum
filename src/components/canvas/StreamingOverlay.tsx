@@ -78,6 +78,9 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
   const verificationStatus = useStreamingStore((s) =>
     s.parallelMode && pageId ? (s.pageBuilds[pageId]?.verificationStatus ?? "idle") : s.verificationStatus
   );
+  const verificationPausedPageId = useStreamingStore((s) => s.verificationPausedPageId);
+  const verificationPausedErrorText = useStreamingStore((s) => s.verificationPausedErrorText);
+  const requestRepairInChat = useStreamingStore((s) => s.requestRepairInChat);
 
   const codeEndRef = useRef<HTMLDivElement>(null);
   const phaseRef = useRef<Phase>("hidden");
@@ -108,6 +111,7 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
   const isQueuedOrGenerated = parallelMode && (
     buildStage === "queued_verification" || buildStage === "generated"
   );
+  const isFailedPrompt = parallelMode && buildStage === "verify_failed";
 
   const shouldBeActive = parallelMode
     ? pageBuild?.status === "streaming"
@@ -116,6 +120,7 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
       || buildStage === "pending"
       || buildStage === "generated"
       || buildStage === "queued_verification"
+      || buildStage === "verify_failed"
     : isStreaming && (targetPageId === null || targetPageId === pageId || forceShow === true);
 
   // Select the display file based on mode
@@ -197,7 +202,29 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
 
       {/* Code content, waiting state, or queued state */}
       <div className="flex-1 overflow-auto p-3">
-        {isQueuedOrGenerated ? (
+        {isFailedPrompt ? (
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-center max-w-md mx-auto">
+            <div className="space-y-2">
+              <h3 className="text-white text-sm font-semibold">Preview error needs manual fix</h3>
+              <p className="text-[#8b949e] text-xs leading-relaxed">
+                Take a screenshot of this error and send it in chat. That is the fastest recovery path.
+              </p>
+              {verificationPausedPageId === pageId && verificationPausedErrorText && (
+                <p className="text-[#c9d1d9] text-xs font-mono leading-relaxed whitespace-pre-wrap break-words">
+                  {verificationPausedErrorText}
+                </p>
+              )}
+            </div>
+            {pageId && (
+              <button
+                onClick={() => requestRepairInChat(pageId)}
+                className="inline-flex items-center justify-center px-3 py-2 text-xs font-medium rounded-md bg-white text-[#0d1117] hover:bg-neutral-200 transition-colors"
+              >
+                Fix in Chat
+              </button>
+            )}
+          </div>
+        ) : isQueuedOrGenerated ? (
           /* Queued for verification — distinct waiting UI */
           <div className="flex flex-col items-center justify-center h-full gap-3">
             <div className="flex items-center gap-2">

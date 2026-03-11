@@ -25,6 +25,11 @@ export interface FoundationBuild {
   error?: string;
 }
 
+export interface RepairChatIntent {
+  pageId: string;
+  nonce: number;
+}
+
 export interface PageBuildState {
   // Legacy fields kept for backward compat with rebuild path (buildAllPages)
   status: "pending" | "streaming" | "completed" | "error";
@@ -73,6 +78,11 @@ interface StreamingState {
   // Verification queue for parallel builds
   verificationQueue: string[];
   verificationActive: string | null;
+  verificationPaused: boolean;
+  verificationPausedPageId: string | null;
+  verificationPausedErrorText: string | null;
+  verificationPausedErrorPath: string | null;
+  repairChatIntent: RepairChatIntent | null;
 
   startParallelStreaming: (pageIds: string[]) => void;
   updatePageBuild: (pageId: string, update: Partial<PageBuildState>) => void;
@@ -83,8 +93,14 @@ interface StreamingState {
   setPageBuildStage: (pageId: string, stage: BuildStage) => void;
   setFoundationBuild: (update: Partial<FoundationBuild>) => void;
   enqueueVerification: (pageId: string) => void;
+  prependVerification: (pageId: string) => void;
   dequeueVerification: () => string | null;
   setVerificationActive: (pageId: string | null) => void;
+  pauseVerification: (pageId: string, errorText: string, errorPath?: string) => void;
+  resumeVerification: () => void;
+  clearVerificationPause: () => void;
+  requestRepairInChat: (pageId: string) => void;
+  clearRepairChatIntent: () => void;
   endParallelStreaming: () => void;
 
   // --- Annotation evaluation ---
@@ -170,6 +186,11 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
 
   verificationQueue: [],
   verificationActive: null,
+  verificationPaused: false,
+  verificationPausedPageId: null,
+  verificationPausedErrorText: null,
+  verificationPausedErrorPath: null,
+  repairChatIntent: null,
 
   startParallelStreaming: (pageIds) => {
     const builds: Record<string, PageBuildState> = {};
@@ -193,6 +214,11 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
       foundationBuild: { ...defaultFoundationBuild },
       verificationQueue: [],
       verificationActive: null,
+      verificationPaused: false,
+      verificationPausedPageId: null,
+      verificationPausedErrorText: null,
+      verificationPausedErrorPath: null,
+      repairChatIntent: null,
       annotationEvaluation: { status: "idle", connectionCount: 0 },
       // Also set isStreaming so overlays know something is happening
       isStreaming: true,
@@ -297,7 +323,17 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
 
   enqueueVerification: (pageId) => {
     set((s) => ({
-      verificationQueue: [...s.verificationQueue, pageId],
+      verificationQueue: s.verificationQueue.includes(pageId)
+        ? s.verificationQueue
+        : [...s.verificationQueue, pageId],
+    }));
+  },
+
+  prependVerification: (pageId) => {
+    set((s) => ({
+      verificationQueue: s.verificationQueue.includes(pageId)
+        ? [pageId, ...s.verificationQueue.filter((id) => id !== pageId)]
+        : [pageId, ...s.verificationQueue],
     }));
   },
 
@@ -313,6 +349,46 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
     set({ verificationActive: pageId });
   },
 
+  pauseVerification: (pageId, errorText, errorPath) => {
+    set({
+      verificationPaused: true,
+      verificationPausedPageId: pageId,
+      verificationPausedErrorText: errorText,
+      verificationPausedErrorPath: errorPath ?? null,
+    });
+  },
+
+  resumeVerification: () => {
+    set({
+      verificationPaused: false,
+      verificationPausedPageId: null,
+      verificationPausedErrorText: null,
+      verificationPausedErrorPath: null,
+    });
+  },
+
+  clearVerificationPause: () => {
+    set({
+      verificationPaused: false,
+      verificationPausedPageId: null,
+      verificationPausedErrorText: null,
+      verificationPausedErrorPath: null,
+    });
+  },
+
+  requestRepairInChat: (pageId) => {
+    set({
+      repairChatIntent: {
+        pageId,
+        nonce: Date.now(),
+      },
+    });
+  },
+
+  clearRepairChatIntent: () => {
+    set({ repairChatIntent: null });
+  },
+
   endParallelStreaming: () => {
     set({
       parallelMode: false,
@@ -322,6 +398,11 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
       foundationBuild: { ...defaultFoundationBuild },
       verificationQueue: [],
       verificationActive: null,
+      verificationPaused: false,
+      verificationPausedPageId: null,
+      verificationPausedErrorText: null,
+      verificationPausedErrorPath: null,
+      repairChatIntent: null,
       isStreaming: false,
       currentFile: null,
       targetPageId: null,
