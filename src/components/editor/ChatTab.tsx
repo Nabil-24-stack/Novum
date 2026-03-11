@@ -1005,6 +1005,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   const pageBuilds = useStreamingStore((s) => s.pageBuilds);
   const buildPhase = useStreamingStore((s) => s.buildPhase);
   const foundationPageId = useStreamingStore((s) => s.foundationPageId);
+  const foundationBuild = useStreamingStore((s) => s.foundationBuild);
   const annotationEvaluation = useStreamingStore((s) => s.annotationEvaluation);
 
   // Strategy alignment check state
@@ -3091,6 +3092,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
               pageNames={parallelPageNamesRef.current}
               buildPhase={buildPhase}
               foundationPageId={foundationPageId}
+              foundationBuild={foundationBuild}
               onRetry={(pageId) => {
                 if (parallelBuildConfigRef.current) {
                   parallelBuild.retryPage(
@@ -3105,15 +3107,18 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
               }}
               onRetryAllFailed={() => {
                 if (!parallelBuildConfigRef.current) return;
-                const failedIds = Object.entries(pageBuilds)
-                  .filter(([, s]) => s.status === "error")
-                  .map(([id]) => id);
-                for (const pageId of failedIds) {
-                  parallelBuild.retryPage(
-                    pageId,
-                    parallelBuildConfigRef.current.pages,
-                    parallelBuildConfigRef.current.sharedContext
-                  );
+                for (const [pageId, s] of Object.entries(pageBuilds)) {
+                  if (s.buildStage === "build_failed" || s.status === "error") {
+                    // Build failed — re-generate from scratch
+                    parallelBuild.retryPage(
+                      pageId,
+                      parallelBuildConfigRef.current.pages,
+                      parallelBuildConfigRef.current.sharedContext
+                    );
+                  } else if (s.buildStage === "verify_failed") {
+                    // Code exists but verification failed — retry verification only
+                    parallelBuild.retryVerification(pageId);
+                  }
                 }
               }}
             />

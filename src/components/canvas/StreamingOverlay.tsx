@@ -101,9 +101,21 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
 
   const phase = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
+  // Determine build stage for parallel mode overlay logic
+  const buildStage = pageBuild?.buildStage;
+
   // Determine if this overlay should be active
+  const isQueuedOrGenerated = parallelMode && (
+    buildStage === "queued_verification" || buildStage === "generated"
+  );
+
   const shouldBeActive = parallelMode
-    ? pageBuild?.status === "streaming" || pageBuild?.status === "pending"
+    ? pageBuild?.status === "streaming"
+      || pageBuild?.status === "pending"
+      || buildStage === "streaming"
+      || buildStage === "pending"
+      || buildStage === "generated"
+      || buildStage === "queued_verification"
     : isStreaming && (targetPageId === null || targetPageId === pageId || forceShow === true);
 
   // Select the display file based on mode
@@ -170,8 +182,8 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
         backgroundColor: "#0d1117",
       }}
     >
-      {/* File path header */}
-      {displayFile && (
+      {/* File path header — only for streaming, not for queued */}
+      {displayFile && !isQueuedOrGenerated && (
         <div className="flex items-center px-3 py-2 border-b border-[#21262d] shrink-0">
           <span className="text-[#8b949e] text-xs font-mono truncate">
             {displayFile.path}
@@ -183,9 +195,21 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
         </div>
       )}
 
-      {/* Code content or waiting state */}
+      {/* Code content, waiting state, or queued state */}
       <div className="flex-1 overflow-auto p-3">
-        {displayFile ? (
+        {isQueuedOrGenerated ? (
+          /* Queued for verification — distinct waiting UI */
+          <div className="flex flex-col items-center justify-center h-full gap-3">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse [animation-delay:200ms]" />
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse [animation-delay:400ms]" />
+            </div>
+            <span className="text-[#8b949e] text-xs font-mono">
+              Queued for verification...
+            </span>
+          </div>
+        ) : displayFile ? (
           <pre className="text-[#c9d1d9] text-xs font-mono leading-relaxed whitespace-pre-wrap break-words">
             {displayFile.content}
             {/* Blinking cursor */}

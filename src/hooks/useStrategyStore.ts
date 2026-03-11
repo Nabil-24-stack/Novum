@@ -129,6 +129,9 @@ interface StrategyState {
   journeyMapContinueAttempts: number;
   isJourneyMapContinuing: boolean;
 
+  // Pages that passed verification in parallel build
+  verifiedPages: string[];
+
   // Actions
   setPhase: (phase: StrategyPhase) => void;
   setUserPrompt: (prompt: string) => void;
@@ -154,6 +157,7 @@ interface StrategyState {
   setStrategyUpdatedAfterBuild: (v: boolean) => void;
   setJourneyMapContinueAttempts: (n: number) => void;
   setIsJourneyMapContinuing: (v: boolean) => void;
+  addVerifiedPage: (pageId: string) => void;
   hydrate: (data: Partial<typeof initialState>) => void;
   reset: () => void;
 }
@@ -183,6 +187,7 @@ const initialState = {
   strategyUpdatedAfterBuild: false,
   journeyMapContinueAttempts: 0,
   isJourneyMapContinuing: false,
+  verifiedPages: [] as string[],
 };
 
 export const useStrategyStore = create<StrategyState>((set, get) => ({
@@ -284,6 +289,13 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   setJourneyMapContinueAttempts: (n) => set({ journeyMapContinueAttempts: n }),
 
   setIsJourneyMapContinuing: (v) => set({ isJourneyMapContinuing: v }),
+
+  addVerifiedPage: (pageId) =>
+    set((state) => ({
+      verifiedPages: state.verifiedPages.includes(pageId)
+        ? state.verifiedPages
+        : [...state.verifiedPages, pageId],
+    })),
 
   hydrate: (data: Partial<typeof initialState>) => set({
     ...initialState,

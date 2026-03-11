@@ -45,7 +45,9 @@ function extractCodeBlocks(
 
   while ((match = CODE_BLOCK_REGEX.exec(text)) !== null) {
     const path = match[2].startsWith("/") ? match[2] : `/${match[2]}`;
-    const content = match[3].trim();
+    // Strip only trailing newline (not arbitrary whitespace) so section boundaries
+    // are preserved for focused-mode splicing.
+    const content = match[3].replace(/\n$/, "");
     blocks.push({ path, content });
   }
 
@@ -64,6 +66,16 @@ function ensureReactImport(code: string): string {
     );
   }
   return 'import * as React from "react";\n' + code;
+}
+
+/** Try to Babel-parse code. Returns true if it parses without error. */
+function canBabelParse(code: string): boolean {
+  try {
+    parse(code, { sourceType: "module", plugins: ["typescript", "jsx"] });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -157,6 +169,77 @@ function tryFixNestedQuotesInJSXAttr(
 }
 
 /**
+ * Attempt to fix nested quotes inside a JS string literal (not JSX attribute).
+ * Pattern: "text "inner" text" inside arrays/objects → `text "inner" text`
+ *
+ * Finds the outer extent of the intended string around the Babel error column,
+ * converts to a template literal, and returns the full fixed code (or null).
+ */
+function tryFixNestedQuotesInStringLiteral(
+  lines: string[],
+  errLine: number,
+  errCol: number
+): string | null {
+  const line = lines[errLine];
+  if (!line) return null;
+
+  // Collect all unescaped double-quote positions on this line
+  const quotePositions: number[] = [];
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '"' && (i === 0 || line[i - 1] !== "\\")) {
+      quotePositions.push(i);
+    }
+  }
+
+  // Need at least 4 quotes for a nested-quote issue: open "..." inner "..." close
+  if (quotePositions.length < 4) return null;
+
+  // Find the opening quote: the last " before errCol that could start a string literal.
+  // It should be preceded by a value-start character: [ ( : , = { + or start of line.
+  let openIdx = -1;
+  for (const pos of quotePositions) {
+    if (pos >= errCol) break;
+    const before = line.substring(0, pos).trimEnd();
+    const lastChar = before.length > 0 ? before[before.length - 1] : "";
+    if (!lastChar || /[[(=:,{+]/.test(lastChar)) {
+      openIdx = pos;
+    }
+  }
+
+  if (openIdx === -1) return null;
+
+  // Find the true closing quote: the last " followed by a valid string-end context.
+  // Valid terminators: , ] ) } ; or end of meaningful content.
+  let closeIdx = -1;
+  for (let i = quotePositions.length - 1; i >= 0; i--) {
+    const pos = quotePositions[i];
+    if (pos <= openIdx) break;
+    const afterQuote = line.substring(pos + 1).trimStart();
+    const nextChar = afterQuote.length > 0 ? afterQuote[0] : "";
+    if (!nextChar || /[,\]});]/.test(nextChar)) {
+      closeIdx = pos;
+      break;
+    }
+  }
+
+  if (closeIdx <= openIdx) return null;
+
+  const innerContent = line.substring(openIdx + 1, closeIdx);
+
+  // Must contain nested quotes to be a nested-quote issue
+  if (!innerContent.includes('"')) return null;
+
+  // Build template literal replacement, escaping ` and $
+  const escaped = innerContent.replace(/`/g, "\\`").replace(/\$/g, "\\$");
+  const fixedLine =
+    line.substring(0, openIdx) + "`" + escaped + "`" + line.substring(closeIdx + 1);
+
+  const fixedLines = [...lines];
+  fixedLines[errLine] = fixedLine;
+  return fixedLines.join("\n");
+}
+
+/**
  * Attempt to fix common syntax errors deterministically, without an AI call.
  * Returns the fixed code if successful, or null if the error can't be fixed.
  *
@@ -246,6 +329,21 @@ function tryDeterministicSyntaxFix(
         } catch {
           // Fix didn't resolve the error
         }
+      }
+    }
+  }
+
+  // --- Fix 3: Nested quotes in JS string literal (not JSX) ---
+  // e.g. "text "inner" text" in arrays/objects → `text "inner" text`
+  if (parseError.message.includes("Unexpected token")) {
+    const fixedCode = tryFixNestedQuotesInStringLiteral(lines, errLine, errCol);
+    if (fixedCode) {
+      if (canBabelParse(fixedCode)) {
+        return {
+          filePath: loc.filePath,
+          fixedCode,
+          description: "Fixed nested quotes in string literal (converted to template literal)",
+        };
       }
     }
   }
@@ -433,6 +531,9 @@ export async function runVerificationLoop(
 
   cb.startVerification();
 
+  // Files for which focused mode has been disabled (bad splice / parse failure)
+  const focusedModeDisabledFor = new Set<string>();
+
   try {
     // --- Phase 0: Deterministic pre-validation ---
     cb.addLog("Running pre-validation checks...");
@@ -472,6 +573,7 @@ export async function runVerificationLoop(
     let serverErrorRetries = 0;
     let deterministicAttempts = 0;
 
+    attemptLoop:
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
@@ -572,13 +674,17 @@ export async function runVerificationLoop(
         filePath: string;
         startLine: number;
         endLine: number;
+        fullLineCount: number;
       } | null = null;
       let apiFiles = writtenFiles;
 
       const syntaxLoc = parseSyntaxErrorLocation(detectedError);
       if (syntaxLoc && allFiles[syntaxLoc.filePath]) {
         const fileLines = allFiles[syntaxLoc.filePath].split("\n");
-        if (fileLines.length > FOCUSED_MODE_THRESHOLD) {
+        if (
+          fileLines.length > FOCUSED_MODE_THRESHOLD &&
+          !focusedModeDisabledFor.has(syntaxLoc.filePath)
+        ) {
           const startLine = Math.max(0, syntaxLoc.line - FOCUSED_LINES_BEFORE);
           const endLine = Math.min(
             fileLines.length,
@@ -593,6 +699,7 @@ export async function runVerificationLoop(
             filePath: syntaxLoc.filePath,
             startLine,
             endLine,
+            fullLineCount: fileLines.length,
           };
           cb.addLog(
             `Using focused mode: lines ${startLine + 1}\u2013${endLine} of ${syntaxLoc.filePath}`
@@ -620,6 +727,15 @@ export async function runVerificationLoop(
             errorText: enrichedError,
             vfsFilePaths,
             availableExports,
+            // Pass focused context so the route can strengthen the contract
+            ...(focusedSection ? {
+              focusedContext: {
+                filePath: focusedSection.filePath,
+                startLine: focusedSection.startLine,
+                endLine: focusedSection.endLine,
+                fullLineCount: focusedSection.fullLineCount,
+              },
+            } : {}),
           }),
           signal,
         });
@@ -692,6 +808,13 @@ export async function runVerificationLoop(
       cb.addLog(`AI found: ${issues[0]}`);
 
       if (!verifyResult.fixCode) {
+        // Focused mode produced no fix — fall back to whole-file before burning attempt
+        if (focusedSection) {
+          cb.addLog("No fix returned in focused mode — falling back to whole-file mode");
+          focusedModeDisabledFor.add(focusedSection.filePath);
+          attempt--; // Don't consume an attempt — infrastructure failure
+          continue attemptLoop;
+        }
         if (attempt === MAX_ATTEMPTS) {
           cb.addLog("Could not fix all issues");
           cb.setFailed(issues);
@@ -711,6 +834,13 @@ export async function runVerificationLoop(
       const fixBlocks = extractCodeBlocks(verifyResult.fixCode);
 
       if (fixBlocks.length === 0) {
+        // Focused mode produced no code blocks — fall back to whole-file
+        if (focusedSection) {
+          cb.addLog("No code blocks in focused mode response — falling back to whole-file mode");
+          focusedModeDisabledFor.add(focusedSection.filePath);
+          attempt--;
+          continue attemptLoop;
+        }
         if (attempt === MAX_ATTEMPTS) {
           cb.setFailed(issues);
           return {
@@ -725,30 +855,65 @@ export async function runVerificationLoop(
       }
 
       const fixedPaths: string[] = [];
+      let focusedFileHandled = false;
       for (const block of fixBlocks) {
-        let blockContent = block.content;
+        let candidateContent = block.content;
 
-        // If this was a focused section fix, splice the section back into the full file
+        // In focused mode, skip blocks targeting unrelated files — the model
+        // should only fix the focused file.  Writing an unrelated file from a
+        // focused context is almost certainly wrong.
+        if (focusedSection && block.path !== focusedSection.filePath) {
+          cb.addLog(`Skipping block for ${block.path} — focused mode targets ${focusedSection.filePath}`);
+          continue;
+        }
+
+        // --- Focused-mode splice ---
         if (focusedSection && block.path === focusedSection.filePath) {
-          const originalLines = allFiles[block.path].split("\n");
-          const fixedSectionLines = blockContent.split("\n");
-          originalLines.splice(
+          focusedFileHandled = true;
+          const originalCode = allFiles[block.path];
+          if (!originalCode) continue;
+          const originalLines = originalCode.split("\n");
+          const fixedSectionLines = candidateContent.split("\n");
+          const merged = [...originalLines];
+          merged.splice(
             focusedSection.startLine,
             focusedSection.endLine - focusedSection.startLine,
             ...fixedSectionLines
           );
-          blockContent = originalLines.join("\n");
+          candidateContent = merged.join("\n");
+
+          // Validate the merged file parses
+          if (!canBabelParse(candidateContent)) {
+            cb.addLog("Focused fix rejected — merged file still fails parse");
+            cb.addLog("Falling back to whole-file mode");
+            focusedModeDisabledFor.add(block.path);
+            attempt--; // Don't consume an attempt — infrastructure failure
+            continue attemptLoop; // Retry with whole-file context
+          }
+
           cb.addLog("Spliced focused fix back into full file");
         }
 
-        // Run through gatekeeper (same as ChatTab)
-        const gated = runGatekeeper(blockContent, allFiles, block.path);
+        // --- Gatekeeper + React import ---
+        const gated = runGatekeeper(candidateContent, allFiles, block.path);
         let finalContent = gated.code;
 
-        // Ensure React import for .tsx/.jsx files (Sandpack classic transform)
         const ext = block.path.split(".").pop() || "";
         if (ext === "tsx" || ext === "jsx") {
           finalContent = ensureReactImport(finalContent);
+        }
+
+        // --- Parse-safe validation: reject if final content doesn't parse ---
+        if (!canBabelParse(finalContent)) {
+          cb.addLog(`AI fix for ${block.path} still fails parse — rejecting write`);
+          if (focusedSection && block.path === focusedSection.filePath) {
+            // Focused-file fix broke after gatekeeper — fall back to whole-file
+            cb.addLog("Falling back to whole-file mode");
+            focusedModeDisabledFor.add(block.path);
+            attempt--;
+            continue attemptLoop;
+          }
+          continue; // Skip this block — don't write, don't mutate allFiles
         }
 
         writeFile(block.path, finalContent);
@@ -760,10 +925,26 @@ export async function runVerificationLoop(
         fixedPaths.push(block.path);
       }
 
-      lastFixSummary = `Fixed ${fixedPaths.join(", ")} (${issues[0] || "unknown issue"})`;
-      cb.addLog(
-        `Fix applied (attempt ${attempt}/${MAX_ATTEMPTS}), re-checking...`
-      );
+      // If focused mode was active but no fix was applied for the focused file
+      // (all blocks targeted wrong file, or parse validation rejected them all),
+      // fall back to whole-file mode without consuming the attempt.
+      if (focusedSection && !focusedFileHandled) {
+        cb.addLog("No valid fix for focused file — falling back to whole-file mode");
+        focusedModeDisabledFor.add(focusedSection.filePath);
+        attempt--;
+        continue attemptLoop;
+      }
+
+      if (fixedPaths.length > 0) {
+        lastFixSummary = `Fixed ${fixedPaths.join(", ")} (${issues[0] || "unknown issue"})`;
+        cb.addLog(
+          `Fix applied (attempt ${attempt}/${MAX_ATTEMPTS}), re-checking...`
+        );
+      } else {
+        cb.addLog(
+          `No valid fixes applied (attempt ${attempt}/${MAX_ATTEMPTS})`
+        );
+      }
 
       // Loop continues — next iteration will re-check for errors after fix
     }

@@ -2,19 +2,51 @@
 
 import { create } from "zustand";
 
+export type BuildStage =
+  | "pending"              // waiting for semaphore slot
+  | "streaming"            // AI generating code
+  | "generated"            // streaming done, file written to VFS
+  | "queued_verification"  // in verification queue, waiting its turn
+  | "verifying"            // currently being verified by Sandpack
+  | "verified"             // passed verification -- safe for App.tsx + annotations
+  | "build_failed"         // generation failed (API error, empty response)
+  | "verify_failed";       // verification exhausted 3 retries, code exists but has issues
+
+export interface FoundationArtifact {
+  path: string;
+  exports: string[];
+  purpose: string;
+}
+
+export interface FoundationBuild {
+  status: "idle" | "streaming" | "completed" | "error";
+  artifacts: FoundationArtifact[];
+  filePaths: string[];
+  error?: string;
+}
+
 export interface PageBuildState {
+  // Legacy fields kept for backward compat with rebuild path (buildAllPages)
   status: "pending" | "streaming" | "completed" | "error";
   currentFile: { path: string; content: string } | null;
   completedFilePaths: string[];
   error?: string;
-  // Per-page verification
+  // Per-page verification (legacy)
   verificationStatus: VerificationStatus;
   verificationAttempt: number;
   verificationIssues: string[];
   verificationLog: string[];
+  // New parallel build stage
+  buildStage: BuildStage;
 }
 
 export type VerificationStatus = "idle" | "capturing" | "reviewing" | "fixing" | "passed" | "failed";
+
+const defaultFoundationBuild: FoundationBuild = {
+  status: "idle",
+  artifacts: [],
+  filePaths: [],
+};
 
 interface StreamingState {
   // --- Single-build mode (existing) ---
@@ -36,6 +68,11 @@ interface StreamingState {
   pageBuilds: Record<string, PageBuildState>;
   buildPhase: "idle" | "building";
   foundationPageId: string | null;
+  foundationBuild: FoundationBuild;
+
+  // Verification queue for parallel builds
+  verificationQueue: string[];
+  verificationActive: string | null;
 
   startParallelStreaming: (pageIds: string[]) => void;
   updatePageBuild: (pageId: string, update: Partial<PageBuildState>) => void;
@@ -43,6 +80,11 @@ interface StreamingState {
   failPageBuild: (pageId: string, error: string) => void;
   updatePageVerification: (pageId: string, status: VerificationStatus, extra?: { attempt?: number; issues?: string[] }) => void;
   addPageVerificationLog: (pageId: string, message: string) => void;
+  setPageBuildStage: (pageId: string, stage: BuildStage) => void;
+  setFoundationBuild: (update: Partial<FoundationBuild>) => void;
+  enqueueVerification: (pageId: string) => void;
+  dequeueVerification: () => string | null;
+  setVerificationActive: (pageId: string | null) => void;
   endParallelStreaming: () => void;
 
   // --- Annotation evaluation ---
@@ -124,6 +166,10 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
   pageBuilds: {},
   buildPhase: "idle",
   foundationPageId: null,
+  foundationBuild: { ...defaultFoundationBuild },
+
+  verificationQueue: [],
+  verificationActive: null,
 
   startParallelStreaming: (pageIds) => {
     const builds: Record<string, PageBuildState> = {};
@@ -136,6 +182,7 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
         verificationAttempt: 0,
         verificationIssues: [],
         verificationLog: [],
+        buildStage: "pending",
       };
     }
     set({
@@ -143,6 +190,9 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
       pageBuilds: builds,
       buildPhase: "building",
       foundationPageId: pageIds[0] || null,
+      foundationBuild: { ...defaultFoundationBuild },
+      verificationQueue: [],
+      verificationActive: null,
       annotationEvaluation: { status: "idle", connectionCount: 0 },
       // Also set isStreaming so overlays know something is happening
       isStreaming: true,
@@ -181,7 +231,7 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
     set({
       pageBuilds: {
         ...pageBuilds,
-        [pageId]: { ...existing, status: "error", error, currentFile: null },
+        [pageId]: { ...existing, status: "error", error, currentFile: null, buildStage: "build_failed" },
       },
     });
   },
@@ -220,12 +270,58 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
     });
   },
 
+  setPageBuildStage: (pageId, stage) => {
+    const { pageBuilds } = get();
+    const existing = pageBuilds[pageId];
+    if (!existing) return;
+    // Sync legacy status field from buildStage for backward compat
+    let legacyStatus = existing.status;
+    if (stage === "pending") legacyStatus = "pending";
+    else if (stage === "streaming") legacyStatus = "streaming";
+    else if (stage === "generated" || stage === "queued_verification" || stage === "verifying" || stage === "verified") legacyStatus = "completed";
+    else if (stage === "build_failed") legacyStatus = "error";
+    else if (stage === "verify_failed") legacyStatus = "completed";
+    set({
+      pageBuilds: {
+        ...pageBuilds,
+        [pageId]: { ...existing, buildStage: stage, status: legacyStatus },
+      },
+    });
+  },
+
+  setFoundationBuild: (update) => {
+    set((s) => ({
+      foundationBuild: { ...s.foundationBuild, ...update },
+    }));
+  },
+
+  enqueueVerification: (pageId) => {
+    set((s) => ({
+      verificationQueue: [...s.verificationQueue, pageId],
+    }));
+  },
+
+  dequeueVerification: () => {
+    const { verificationQueue } = get();
+    if (verificationQueue.length === 0) return null;
+    const [next, ...rest] = verificationQueue;
+    set({ verificationQueue: rest });
+    return next;
+  },
+
+  setVerificationActive: (pageId) => {
+    set({ verificationActive: pageId });
+  },
+
   endParallelStreaming: () => {
     set({
       parallelMode: false,
       pageBuilds: {},
       buildPhase: "idle",
       foundationPageId: null,
+      foundationBuild: { ...defaultFoundationBuild },
+      verificationQueue: [],
+      verificationActive: null,
       isStreaming: false,
       currentFile: null,
       targetPageId: null,

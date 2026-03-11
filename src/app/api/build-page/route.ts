@@ -2,7 +2,7 @@ import { streamText } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
-import { buildParallelPagePrompt } from "@/lib/ai/strategy-prompts";
+import { buildParallelPagePrompt, buildFoundationPrompt } from "@/lib/ai/strategy-prompts";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 
 type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6" | "gpt-5.2";
@@ -90,6 +90,7 @@ export async function POST(req: Request) {
   const auth = await requireAuth();
   if (auth.response) return auth.response;
 
+  const body = await req.json();
   const {
     pageId,
     pageName,
@@ -101,8 +102,42 @@ export async function POST(req: Request) {
     userFlowContext,
     modelId,
     previousErrors,
-  } = await req.json();
+    isFoundation,
+    foundationArtifacts,
+    knownFailures,
+    pages, // for foundation builds: list of pages
+  } = body;
 
+  // Foundation build mode: generate shared layout components
+  if (isFoundation) {
+    const systemPrompt =
+      buildFoundationPrompt(
+        manifestoContext || "",
+        flowContext || "",
+        personaContext || "",
+        pages || [],
+      ) +
+      "\n\n" +
+      DESIGN_SYSTEM_RULES;
+
+    const result = streamText({
+      model: getModel(modelId || "claude-sonnet-4-6"),
+      system: systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: "Generate shared layout components for this app. Output each as a separate code block at `/components/layout/{Name}.tsx` with named exports. Output Navbar, Footer, and AppLayout.",
+        },
+      ],
+      providerOptions: {
+        openai: { store: false },
+      },
+    });
+
+    return result.toTextStreamResponse();
+  }
+
+  // Standard page build mode
   const systemPrompt =
     buildParallelPagePrompt(
       manifestoContext || "",
@@ -112,6 +147,8 @@ export async function POST(req: Request) {
       pageName,
       componentName || pageName,
       userFlowContext || undefined,
+      foundationArtifacts || undefined,
+      knownFailures || undefined,
     ) +
     "\n\n" +
     DESIGN_SYSTEM_RULES;

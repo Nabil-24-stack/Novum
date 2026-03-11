@@ -65,6 +65,7 @@ export async function POST(req: Request) {
       errorText,
       vfsFilePaths,
       availableExports,
+      focusedContext,
     } = body as {
       files: Record<string, string>;
       contextFiles?: Record<string, string>;
@@ -72,6 +73,12 @@ export async function POST(req: Request) {
       errorText?: string;
       vfsFilePaths?: string[];
       availableExports?: Record<string, string[]>;
+      focusedContext?: {
+        filePath: string;
+        startLine: number;
+        endLine: number;
+        fullLineCount: number;
+      };
     };
 
     if (!errorText) {
@@ -176,13 +183,28 @@ export async function POST(req: Request) {
 
     const model = getModel(modelId);
 
+    // Build focused-mode instruction when the caller sends only a section of the file
+    let focusedInstruction = "";
+    if (focusedContext) {
+      // startLine is 0-based, endLine is exclusive — convert to 1-based inclusive for the model
+      const humanStart = focusedContext.startLine + 1;
+      const humanEnd = focusedContext.endLine; // exclusive 0-based == inclusive 1-based
+      focusedInstruction = `\n\nIMPORTANT — FOCUSED SECTION MODE:
+You are seeing only lines ${humanStart}-${humanEnd} of "${focusedContext.filePath}" (full file is ${focusedContext.fullLineCount} lines).
+Your fix code block for this file MUST contain the COMPLETE replacement for lines ${humanStart}-${humanEnd}.
+- Include ALL lines in that range, even unchanged ones — they will be spliced back into the full file.
+- Do NOT use diffs, snippets, ellipses ("..."), or "// rest of file unchanged" comments.
+- Do NOT output lines outside this range — only the replacement for lines ${humanStart}-${humanEnd}.
+- The code block MUST use file="${focusedContext.filePath}".`;
+    }
+
     const result = await generateText({
       model,
       system: ERROR_FIX_SYSTEM_PROMPT,
       messages: [
         {
           role: "user",
-          content: `The page shows this error:\n\n"${errorText}"\n\nFiles that were just written:\n${fileContext}${additionalContext}${vfsStructureContext}${depsContext}\n\nDiagnose the error and provide a fix. Respond with JSON only.`,
+          content: `The page shows this error:\n\n"${errorText}"\n\nFiles that were just written:\n${fileContext}${additionalContext}${vfsStructureContext}${depsContext}${focusedInstruction}\n\nDiagnose the error and provide a fix. Respond with JSON only.`,
         },
       ],
       providerOptions: {

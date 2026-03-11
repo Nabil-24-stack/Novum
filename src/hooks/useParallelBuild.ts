@@ -1,10 +1,11 @@
 "use client";
 
 import { useRef, useCallback } from "react";
-import { useStreamingStore } from "./useStreamingStore";
+import { useStreamingStore, type FoundationArtifact } from "./useStreamingStore";
 import { useStrategyStore } from "./useStrategyStore";
 import { useProductBrainStore } from "./useProductBrainStore";
 import { useDocumentStore } from "./useDocumentStore";
+import { parse as babelParse } from "@babel/parser";
 import { parseStreamingContent } from "@/lib/streaming-parser";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
 import { trackEvent } from "@/lib/analytics/track-event";
@@ -30,6 +31,8 @@ interface SharedContext {
   isRebuild?: boolean;
 }
 
+const MAX_CONCURRENCY = 3;
+
 // Ensure every .tsx file has `import * as React from "react"` so JSX works in Sandpack's classic transform
 function ensureReactImport(code: string): string {
   // Already has the star import
@@ -43,6 +46,64 @@ function ensureReactImport(code: string): string {
   }
   // No react import at all — add at top (after any leading comments)
   return 'import * as React from "react";\n' + code;
+}
+
+/**
+ * Validate that code parses as valid JSX/TSX via Babel.
+ */
+function canBabelParse(code: string): boolean {
+  try {
+    babelParse(code, {
+      sourceType: "module",
+      plugins: ["jsx", "typescript"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Extract named exports from a file using simple regex.
+ */
+function extractNamedExports(code: string): string[] {
+  const exports: string[] = [];
+  const re = /export\s+(?:function|const|class|type|interface)\s+(\w+)/g;
+  let m;
+  while ((m = re.exec(code))) {
+    exports.push(m[1]);
+  }
+  return exports;
+}
+
+/**
+ * Extract local import paths from a file (relative imports only).
+ */
+function extractLocalImports(code: string): string[] {
+  const imports: string[] = [];
+  const re = /import\s+(?:.*?)\s+from\s+["'](\.[^"']+)["']/g;
+  let m;
+  while ((m = re.exec(code))) {
+    imports.push(m[1]);
+  }
+  return imports;
+}
+
+/**
+ * Resolve a relative import path from a given file to an absolute VFS path.
+ */
+function resolveImport(fromFile: string, importPath: string): string {
+  const fromDir = fromFile.substring(0, fromFile.lastIndexOf("/"));
+  const parts = [...fromDir.split("/"), ...importPath.split("/")];
+  const resolved: string[] = [];
+  for (const p of parts) {
+    if (p === "." || p === "") continue;
+    if (p === "..") { resolved.pop(); continue; }
+    resolved.push(p);
+  }
+  let abs = "/" + resolved.join("/");
+  if (!abs.match(/\.\w+$/)) abs += ".tsx";
+  return abs;
 }
 
 /**
@@ -133,21 +194,46 @@ export function useParallelBuild({
   const evaluationTriggeredRef = useRef(false);
   const rebuildTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Core rebuild logic — generates and writes /App.tsx with only completed pages
+  // Mutable build-local VFS snapshot for parallel builds
+  const latestBuildFilesRef = useRef<Record<string, string>>({});
+  // Accumulated error/fix summaries across the build session
+  const knownFailuresRef = useRef<Array<{ pageName: string; error: string; fix?: string }>>([]);
+
+  // Core rebuild logic — generates and writes /App.tsx with only appropriate pages
   const doRebuildAppTsx = useCallback(() => {
-    const completed = useStrategyStore.getState().completedPages;
-    const completedPages = allPagesRef.current.filter((p) =>
-      completed.includes(p.pageId)
-    );
-    if (completedPages.length === 0) return;
-    const appCode = generateAppTsx(
-      completedPages.map((p) => ({
-        id: p.pageId,
-        label: p.pageName,
-        route: p.pageRoute,
-      }))
-    );
+    const pageBuilds = useStreamingStore.getState().pageBuilds;
+    const isParallelFreshBuild = useStreamingStore.getState().parallelMode
+      && !sharedContextRef.current?.isRebuild;
+
+    let eligiblePages: PageBuildConfig[];
+
+    if (isParallelFreshBuild) {
+      // In parallel fresh builds, only include pages that are verifying or verified
+      // NOT verify_failed — a broken import kills the entire bundle
+      eligiblePages = allPagesRef.current.filter((p) => {
+        const stage = pageBuilds[p.pageId]?.buildStage;
+        return stage === "verifying" || stage === "verified";
+      });
+    } else {
+      // Legacy path (rebuilds, sequential): use completedPages from strategy store
+      const completed = useStrategyStore.getState().completedPages;
+      eligiblePages = allPagesRef.current.filter((p) =>
+        completed.includes(p.pageId)
+      );
+    }
+
+    const appCode = eligiblePages.length > 0
+      ? generateAppTsx(
+          eligiblePages.map((p) => ({
+            id: p.pageId,
+            label: p.pageName,
+            route: p.pageRoute,
+          }))
+        )
+      : // No eligible pages — write a stub App.tsx so Sandpack doesn't import broken modules
+        `import * as React from "react";\nimport { ToastProvider, Toaster } from "./components/ui/toast";\nimport "./globals.css";\n\nexport function App() {\n  return (\n    <ToastProvider>\n      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>\n        <p>Building pages...</p>\n      </div>\n      <Toaster />\n    </ToastProvider>\n  );\n}\n`;
     writeFile("/App.tsx", appCode);
+    latestBuildFilesRef.current["/App.tsx"] = appCode;
   }, [writeFile]);
 
   // Rebuild /App.tsx with only completed pages so Sandpack never imports missing modules.
@@ -285,20 +371,48 @@ export function useParallelBuild({
     }, 6000);
   }, [getLatestFile]);
 
-  // Check if all pages are done and trigger evaluation
+  // Check if all pages are done and trigger evaluation (parallel fresh build path)
   const checkAllPagesComplete = useCallback(() => {
     if (evaluationTriggeredRef.current) return;
 
-    const completed = useStrategyStore.getState().completedPages;
     const allPages = allPagesRef.current;
     if (allPages.length === 0) return;
 
-    const allDone = allPages.every((p) => completed.includes(p.pageId));
-    if (allDone) {
+    const pageBuilds = useStreamingStore.getState().pageBuilds;
+    const isParallelFreshBuild = useStreamingStore.getState().parallelMode
+      && !sharedContextRef.current?.isRebuild;
+
+    if (isParallelFreshBuild) {
+      // In parallel fresh builds, check buildStage
+      const hasIncomplete = allPages.some((p) => {
+        const stage = pageBuilds[p.pageId]?.buildStage;
+        return stage !== "verified" && stage !== "build_failed" && stage !== "verify_failed";
+      });
+      if (hasIncomplete) return;
+
+      const hasFailed = allPages.some((p) => {
+        const stage = pageBuilds[p.pageId]?.buildStage;
+        return stage === "build_failed" || stage === "verify_failed";
+      });
+
+      if (hasFailed) {
+        // Keep session open for retry — don't trigger evaluation
+        // But transition to complete if all are terminal (no more in-flight)
+        return;
+      }
+
+      // All verified — trigger annotation evaluation
+      evaluationTriggeredRef.current = true;
+      evaluateAnnotations();
+    } else {
+      // Legacy path: check completedPages
+      const completed = useStrategyStore.getState().completedPages;
+      const allDone = allPages.every((p) => completed.includes(p.pageId));
+      if (!allDone) return;
+
       evaluationTriggeredRef.current = true;
 
       // Check if any page failed verification — broken bundle makes annotations useless
-      const pageBuilds = useStreamingStore.getState().pageBuilds;
       const hasFailedVerification = allPages.some(
         (p) => pageBuilds[p.pageId]?.verificationStatus === "failed"
       );
@@ -346,22 +460,51 @@ export function useParallelBuild({
   }), []);
 
   // Run verification for a single page — returns result for error history tracking
-  const verifyPage = async (page: PageBuildConfig, signal: AbortSignal): Promise<import("@/lib/verification/verify-loop").VerificationResult | null> => {
+  const verifyPage = async (page: PageBuildConfig, signal: AbortSignal, useLatestRef = false): Promise<import("@/lib/verification/verify-loop").VerificationResult | null> => {
     const completedFilePaths = useStreamingStore.getState().pageBuilds[page.pageId]?.completedFilePaths || [];
 
-    // Build latest files map — `files` is a stale React closure, so
-    // we must read directly from the VFS store via getLatestFile.
-    const latestFiles: Record<string, string> = { ...files };
-    for (const fp of completedFilePaths) {
-      const latest = getLatestFile(fp);
-      if (latest) latestFiles[fp] = latest;
+    // For parallel builds, include foundation files in the import closure
+    const foundationBuild = useStreamingStore.getState().foundationBuild;
+    const expandedPaths = [...completedFilePaths];
+    if (foundationBuild.filePaths.length > 0) {
+      // Parse the page file to find which foundation files it imports
+      const pageFilePath = `/pages/${page.componentName}.tsx`;
+      const pageCode = useLatestRef
+        ? latestBuildFilesRef.current[pageFilePath]
+        : (getLatestFile(pageFilePath) || files[pageFilePath]);
+      if (pageCode) {
+        const localImports = extractLocalImports(pageCode);
+        for (const imp of localImports) {
+          const resolved = resolveImport(pageFilePath, imp);
+          if (foundationBuild.filePaths.includes(resolved) && !expandedPaths.includes(resolved)) {
+            expandedPaths.push(resolved);
+          }
+        }
+      }
     }
+
+    // Build latest files map
+    const latestFiles: Record<string, string> = useLatestRef
+      ? { ...latestBuildFilesRef.current }
+      : { ...files };
+    if (!useLatestRef) {
+      for (const fp of expandedPaths) {
+        const latest = getLatestFile(fp);
+        if (latest) latestFiles[fp] = latest;
+      }
+    }
+
+    // Wrap writeFile to also update latestBuildFilesRef
+    const wrappedWriteFile = (path: string, content: string) => {
+      writeFile(path, content);
+      latestBuildFilesRef.current[path] = content;
+    };
 
     try {
       const result = await runVerificationLoop({
-        completedFiles: completedFilePaths,
+        completedFiles: expandedPaths,
         allFiles: latestFiles,
-        writeFile,
+        writeFile: wrappedWriteFile,
         modelId: modelIdRef.current,
         pageId: page.pageId,
         signal,
@@ -383,13 +526,14 @@ export function useParallelBuild({
   };
 
   // Process a completed code block: run gatekeeper, write to VFS, update store
-  const processCompletedBlock = (block: { path: string; content: string }) => {
+  const processCompletedBlock = (block: { path: string; content: string }, filesSnapshot?: Record<string, string>) => {
     const ext = block.path.split(".").pop() || "";
     let finalContent = block.content;
     const page = findPageForPath(block.path);
+    const filesForGatekeeper = filesSnapshot || files;
 
     if (["tsx", "ts", "jsx", "js"].includes(ext)) {
-      const gated = runGatekeeper(block.content, files, block.path);
+      const gated = runGatekeeper(block.content, filesForGatekeeper, block.path);
       finalContent = gated.code;
       if (gated.report.hadChanges) {
         const total =
@@ -411,6 +555,7 @@ export function useParallelBuild({
     }
 
     writeFile(block.path, finalContent);
+    latestBuildFilesRef.current[block.path] = finalContent;
 
     // Update page status if this block corresponds to a known page
     if (page) {
@@ -449,178 +594,449 @@ export function useParallelBuild({
     }
   };
 
-  // Build pages one at a time, verifying each before proceeding.
-  // Error context from earlier pages is forwarded to subsequent builds.
-  const buildPagesSequentially = async (
+  // ─── Phase 1: Foundation Build ───────────────────────────────────────
+
+  const buildFoundation = async (
+    sharedContext: SharedContext,
+    pages: PageBuildConfig[],
+    signal: AbortSignal,
+    modelId: string,
+  ): Promise<FoundationArtifact[]> => {
+    const store = useStreamingStore.getState();
+    store.setFoundationBuild({ status: "streaming" });
+
+    try {
+      const response = await fetch("/api/build-page", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          isFoundation: true,
+          manifestoContext: sharedContext.manifestoContext,
+          personaContext: sharedContext.personaContext,
+          flowContext: sharedContext.flowContext,
+          modelId,
+          pages: pages.map((p) => ({ pageName: p.pageName, pageRoute: p.pageRoute })),
+        }),
+        signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response body");
+
+      const decoder = new TextDecoder();
+      let fullText = "";
+      const writtenPaths = new Set<string>();
+      const foundationFiles: { path: string; content: string }[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        fullText += chunk;
+
+        const parsed = parseStreamingContent(fullText);
+
+        for (const block of parsed.completedBlocks) {
+          const dedupKey = block.path + "|" + block.content.length;
+          if (!writtenPaths.has(dedupKey) && block.path.startsWith("/components/layout/")) {
+            writtenPaths.add(dedupKey);
+
+            const ext = block.path.split(".").pop() || "";
+            let finalContent = block.content;
+            if (["tsx", "ts", "jsx", "js"].includes(ext)) {
+              const gated = runGatekeeper(block.content, latestBuildFilesRef.current, block.path);
+              finalContent = gated.code;
+              if (ext === "tsx" || ext === "jsx") {
+                finalContent = ensureReactImport(finalContent);
+              }
+            }
+
+            writeFile(block.path, finalContent);
+            latestBuildFilesRef.current[block.path] = finalContent;
+            foundationFiles.push({ path: block.path, content: finalContent });
+          }
+        }
+      }
+
+      // Flush any remaining block
+      const finalParsed = parseStreamingContent(fullText);
+      if (finalParsed.currentFile && finalParsed.currentFile.path.startsWith("/components/layout/")) {
+        const dedupKey = finalParsed.currentFile.path + "|" + finalParsed.currentFile.content.length;
+        if (!writtenPaths.has(dedupKey)) {
+          const ext = finalParsed.currentFile.path.split(".").pop() || "";
+          let finalContent = finalParsed.currentFile.content;
+          if (["tsx", "ts", "jsx", "js"].includes(ext)) {
+            const gated = runGatekeeper(finalContent, latestBuildFilesRef.current, finalParsed.currentFile.path);
+            finalContent = gated.code;
+            if (ext === "tsx" || ext === "jsx") {
+              finalContent = ensureReactImport(finalContent);
+            }
+          }
+          writeFile(finalParsed.currentFile.path, finalContent);
+          latestBuildFilesRef.current[finalParsed.currentFile.path] = finalContent;
+          foundationFiles.push({ path: finalParsed.currentFile.path, content: finalContent });
+        }
+      }
+
+      if (foundationFiles.length === 0) {
+        throw new Error("Foundation generated no files");
+      }
+
+      // Validation: Babel parse + import closure
+      const validFiles = new Set(foundationFiles.map((f) => f.path));
+      const invalidFiles = new Set<string>();
+
+      // Phase 1: Exclude files that don't parse
+      for (const file of foundationFiles) {
+        if (!canBabelParse(file.content)) {
+          console.warn(`[Build] Foundation: ${file.path} failed Babel parse, excluding`);
+          invalidFiles.add(file.path);
+        }
+      }
+
+      // Phase 2: Check which files have broken imports to other foundation files
+      for (const file of foundationFiles) {
+        if (invalidFiles.has(file.path)) continue;
+        const imports = extractLocalImports(file.content);
+        for (const imp of imports) {
+          const resolved = resolveImport(file.path, imp);
+          // If it imports another /components/layout/ file that failed to generate, mark it
+          if (resolved.startsWith("/components/layout/") && !validFiles.has(resolved)) {
+            invalidFiles.add(file.path);
+          }
+        }
+      }
+
+      // Also invalidate files that import an invalid file
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const file of foundationFiles) {
+          if (invalidFiles.has(file.path)) continue;
+          const imports = extractLocalImports(file.content);
+          for (const imp of imports) {
+            const resolved = resolveImport(file.path, imp);
+            if (invalidFiles.has(resolved)) {
+              invalidFiles.add(file.path);
+              changed = true;
+            }
+          }
+        }
+      }
+
+      // Build artifacts manifest from valid files only
+      const artifacts: FoundationArtifact[] = foundationFiles
+        .filter((f) => !invalidFiles.has(f.path))
+        .map((f) => ({
+          path: f.path,
+          exports: extractNamedExports(f.content),
+          purpose: inferPurpose(f.path),
+        }));
+
+      const filePaths = artifacts.map((a) => a.path);
+
+      useStreamingStore.getState().setFoundationBuild({
+        status: "completed",
+        artifacts,
+        filePaths,
+      });
+
+      if (invalidFiles.size > 0) {
+        console.warn("[Build] Foundation: excluded files with broken imports:", [...invalidFiles]);
+      }
+
+      return artifacts;
+    } catch (err) {
+      if (signal.aborted) throw err;
+      console.error("[Build] Foundation build failed:", err);
+      useStreamingStore.getState().setFoundationBuild({
+        status: "error",
+        error: err instanceof Error ? err.message : "Unknown error",
+      });
+      toast.info("Building pages without shared layout components.");
+      return [];
+    }
+  };
+
+  // ─── Phase 2: Parallel Page Generation ──────────────────────────────
+
+  const buildPagesInParallel = async (
     pages: PageBuildConfig[],
     sharedContext: SharedContext,
     signal: AbortSignal,
     modelId: string,
+    foundationArtifacts: FoundationArtifact[],
   ) => {
-    const errorHistory: Array<{ pageName: string; error: string; fix?: string }> = [];
+    await runWithSemaphore(pages, MAX_CONCURRENCY, signal, async (page) => {
+      if (signal.aborted) return;
+      useStreamingStore.getState().setPageBuildStage(page.pageId, "streaming");
+      useStreamingStore.getState().updatePageBuild(page.pageId, { status: "streaming" });
+      await buildSinglePageParallel(page, sharedContext, signal, modelId, foundationArtifacts);
+    });
+  };
+
+  // Semaphore utility for bounded concurrency
+  const runWithSemaphore = async <T>(
+    items: T[],
+    maxConcurrent: number,
+    signal: AbortSignal,
+    fn: (item: T) => Promise<void>,
+  ) => {
+    let running = 0;
+    let idx = 0;
+    const results: Promise<void>[] = [];
+
+    return new Promise<void>((resolve) => {
+      const tryNext = () => {
+        while (running < maxConcurrent && idx < items.length && !signal.aborted) {
+          const item = items[idx++];
+          running++;
+          const p = fn(item).catch(() => {}).finally(() => {
+            running--;
+            tryNext();
+          });
+          results.push(p);
+        }
+        if (running === 0) {
+          resolve();
+        }
+      };
+      tryNext();
+    });
+  };
+
+  // Build a single page in parallel mode (no inline verification)
+  const buildSinglePageParallel = async (
+    page: PageBuildConfig,
+    sharedContext: SharedContext,
+    signal: AbortSignal,
+    modelId: string,
+    foundationArtifacts: FoundationArtifact[],
+  ) => {
+    const { updatePageBuild } = useStreamingStore.getState();
 
     try {
-      for (const page of pages) {
-        if (signal.aborted) break;
+      const response = await fetch("/api/build-page", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pageId: page.pageId,
+          pageName: page.pageName,
+          componentName: page.componentName,
+          pageRoute: page.pageRoute,
+          manifestoContext: sharedContext.manifestoContext,
+          personaContext: sharedContext.personaContext,
+          flowContext: sharedContext.flowContext,
+          userFlowContext: sharedContext.userFlowContext || "",
+          modelId,
+          foundationArtifacts: foundationArtifacts.length > 0 ? foundationArtifacts : undefined,
+          knownFailures: knownFailuresRef.current.length > 0 ? knownFailuresRef.current : undefined,
+        }),
+        signal,
+      });
 
-        const { updatePageBuild, completePageBuild, failPageBuild } =
-          useStreamingStore.getState();
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
 
-        updatePageBuild(page.pageId, { status: "streaming" });
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response body");
 
-        try {
-          // Build single page via /api/build-page with error context
-          const response = await fetch("/api/build-page", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              pageId: page.pageId,
-              pageName: page.pageName,
-              componentName: page.componentName,
-              pageRoute: page.pageRoute,
-              manifestoContext: sharedContext.manifestoContext,
-              personaContext: sharedContext.personaContext,
-              flowContext: sharedContext.flowContext,
-              userFlowContext: sharedContext.userFlowContext || "",
-              modelId,
-              previousErrors: errorHistory.length > 0 ? errorHistory : undefined,
-            }),
-            signal,
-          });
+      const decoder = new TextDecoder();
+      let fullText = "";
+      const writtenPaths = new Set<string>();
 
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-          }
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-          const reader = response.body?.getReader();
-          if (!reader) throw new Error("No response body");
+        const chunk = decoder.decode(value, { stream: true });
+        fullText += chunk;
 
-          const decoder = new TextDecoder();
-          let fullText = "";
-          const writtenPaths = new Set<string>();
+        const parsed = parseStreamingContent(fullText);
 
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+        if (parsed.currentFile) {
+          updatePageBuild(page.pageId, { currentFile: parsed.currentFile });
+        }
 
-            const chunk = decoder.decode(value, { stream: true });
-            fullText += chunk;
-
-            const parsed = parseStreamingContent(fullText);
-
-            if (parsed.currentFile) {
-              updatePageBuild(page.pageId, { currentFile: parsed.currentFile });
+        for (const block of parsed.completedBlocks) {
+          const dedupKey = block.path + "|" + block.content.length;
+          if (!writtenPaths.has(dedupKey)) {
+            // File path enforcement: only accept the expected page file
+            const expectedPath = `/pages/${page.componentName}.tsx`;
+            if (block.path !== expectedPath) {
+              console.warn(`[Build] ${page.pageName}: discarding unexpected file ${block.path}`);
+              continue;
             }
+            writtenPaths.add(dedupKey);
 
-            for (const block of parsed.completedBlocks) {
-              const dedupKey = block.path + "|" + block.content.length;
-              if (!writtenPaths.has(dedupKey)) {
-                writtenPaths.add(dedupKey);
-
-                const ext = block.path.split(".").pop() || "";
-                let finalContent = block.content;
-                if (["tsx", "ts", "jsx", "js"].includes(ext)) {
-                  const gated = runGatekeeper(block.content, files, block.path);
-                  finalContent = gated.code;
-                  if (gated.report.hadChanges) {
-                    const total =
-                      (gated.report.importFixes?.length || 0) +
-                      gated.report.colorViolations.length +
-                      gated.report.spacingViolations.length +
-                      gated.report.layoutViolations.length +
-                      gated.report.componentPromotions.length +
-                      gated.report.layoutDeclarationAdditions.length;
-                    toast.info(
-                      `Gatekeeper (${page.pageName}): ${total} design system fix${total > 1 ? "es" : ""} applied`
-                    );
-                  }
-                  if (ext === "tsx" || ext === "jsx") {
-                    finalContent = ensureReactImport(finalContent);
-                  }
-                }
-
-                writeFile(block.path, finalContent);
-
-                const current = useStreamingStore.getState().pageBuilds[page.pageId];
-                if (current) {
-                  updatePageBuild(page.pageId, {
-                    completedFilePaths: [...current.completedFilePaths, block.path],
-                  });
-                }
+            const ext = block.path.split(".").pop() || "";
+            let finalContent = block.content;
+            if (["tsx", "ts", "jsx", "js"].includes(ext)) {
+              const gated = runGatekeeper(block.content, latestBuildFilesRef.current, block.path);
+              finalContent = gated.code;
+              if (gated.report.hadChanges) {
+                const total =
+                  (gated.report.importFixes?.length || 0) +
+                  gated.report.colorViolations.length +
+                  gated.report.spacingViolations.length +
+                  gated.report.layoutViolations.length +
+                  gated.report.componentPromotions.length +
+                  gated.report.layoutDeclarationAdditions.length;
+                toast.info(
+                  `Gatekeeper (${page.pageName}): ${total} design system fix${total > 1 ? "es" : ""} applied`
+                );
+              }
+              if (ext === "tsx" || ext === "jsx") {
+                finalContent = ensureReactImport(finalContent);
               }
             }
-          }
 
-          // Flush final streaming block if incomplete
-          const finalParsed = parseStreamingContent(fullText);
-          if (finalParsed.currentFile) {
-            const dedupKey = finalParsed.currentFile.path + "|" + finalParsed.currentFile.content.length;
-            if (!writtenPaths.has(dedupKey)) {
-              writtenPaths.add(dedupKey);
+            writeFile(block.path, finalContent);
+            latestBuildFilesRef.current[block.path] = finalContent;
 
-              const ext = finalParsed.currentFile.path.split(".").pop() || "";
-              let finalContent = finalParsed.currentFile.content;
-              if (["tsx", "ts", "jsx", "js"].includes(ext)) {
-                const gated = runGatekeeper(finalContent, files, finalParsed.currentFile.path);
-                finalContent = gated.code;
-                if (ext === "tsx" || ext === "jsx") {
-                  finalContent = ensureReactImport(finalContent);
-                }
-              }
-
-              writeFile(finalParsed.currentFile.path, finalContent);
-
-              const current = useStreamingStore.getState().pageBuilds[page.pageId];
-              if (current) {
-                updatePageBuild(page.pageId, {
-                  completedFilePaths: [...current.completedFilePaths, finalParsed.currentFile.path],
-                });
-              }
-            }
-          }
-
-          completePageBuild(page.pageId);
-          useStrategyStore.getState().addCompletedPage(page.pageId);
-          rebuildAppTsx();
-          flushRebuildAppTsx();
-
-          // Wait for Sandpack to settle before verifying
-          if (!signal.aborted) {
-            await waitForSandpackSettle(page.pageId, signal);
-
-            const result = await verifyPage(page, signal);
-
-            // Track errors for subsequent pages
-            if (result && (result.status === "fixed" || result.status === "failed") && result.lastError) {
-              errorHistory.push({
-                pageName: page.pageName,
-                error: result.lastError.slice(0, 200),
-                fix: result.fixSummary,
+            const current = useStreamingStore.getState().pageBuilds[page.pageId];
+            if (current) {
+              useStreamingStore.getState().updatePageBuild(page.pageId, {
+                completedFilePaths: [...current.completedFilePaths, block.path],
               });
             }
           }
-        } catch (err: unknown) {
-          if (signal.aborted) break;
-          const message = err instanceof Error ? err.message : "Unknown error";
-          failPageBuild(page.pageId, message);
-          console.error(`[Build] Failed to build ${page.pageName}:`, err);
-
-          // Track build failures in error history too
-          errorHistory.push({
-            pageName: page.pageName,
-            error: message.slice(0, 200),
-          });
         }
       }
 
-      // All pages processed — trigger annotation evaluation
-      checkAllPagesComplete();
-    } finally {
-      abortControllersRef.current.delete("__build__");
+      // Flush final streaming block
+      const finalParsed = parseStreamingContent(fullText);
+      if (finalParsed.currentFile) {
+        const expectedPath = `/pages/${page.componentName}.tsx`;
+        const dedupKey = finalParsed.currentFile.path + "|" + finalParsed.currentFile.content.length;
+        if (!writtenPaths.has(dedupKey) && finalParsed.currentFile.path === expectedPath) {
+          writtenPaths.add(dedupKey);
+
+          const ext = finalParsed.currentFile.path.split(".").pop() || "";
+          let finalContent = finalParsed.currentFile.content;
+          if (["tsx", "ts", "jsx", "js"].includes(ext)) {
+            const gated = runGatekeeper(finalContent, latestBuildFilesRef.current, finalParsed.currentFile.path);
+            finalContent = gated.code;
+            if (ext === "tsx" || ext === "jsx") {
+              finalContent = ensureReactImport(finalContent);
+            }
+          }
+
+          writeFile(finalParsed.currentFile.path, finalContent);
+          latestBuildFilesRef.current[finalParsed.currentFile.path] = finalContent;
+
+          const current = useStreamingStore.getState().pageBuilds[page.pageId];
+          if (current) {
+            useStreamingStore.getState().updatePageBuild(page.pageId, {
+              completedFilePaths: [...current.completedFilePaths, finalParsed.currentFile.path],
+            });
+          }
+        }
+      }
+
+      // Mark as generated -> queued for verification
+      useStreamingStore.getState().setPageBuildStage(page.pageId, "generated");
+      useStrategyStore.getState().addCompletedPage(page.pageId);
+
+      // Enqueue for verification
+      useStreamingStore.getState().setPageBuildStage(page.pageId, "queued_verification");
+      useStreamingStore.getState().enqueueVerification(page.pageId);
+
+      // Trigger the verification queue processor
+      processVerificationQueue(signal);
+
+    } catch (err: unknown) {
+      if (signal.aborted) return;
+      const message = err instanceof Error ? err.message : "Unknown error";
+      useStreamingStore.getState().failPageBuild(page.pageId, message);
+      useStreamingStore.getState().setPageBuildStage(page.pageId, "build_failed");
+      console.error(`[Build] Failed to build ${page.pageName}:`, err);
+
+      // Track build failures
+      knownFailuresRef.current.push({
+        pageName: page.pageName,
+        error: message.slice(0, 200),
+      });
     }
   };
 
-  // Single-call sequential build: one API call generates all pages
+  // ─── Phase 3: Verification Queue ────────────────────────────────────
+
+  // Lock to prevent multiple queue processors from running simultaneously
+  const verificationProcessingRef = useRef(false);
+
+  const processVerificationQueue = async (signal: AbortSignal) => {
+    // Prevent concurrent queue processing
+    if (verificationProcessingRef.current) return;
+    verificationProcessingRef.current = true;
+
+    try {
+      while (!signal.aborted) {
+        const store = useStreamingStore.getState();
+        if (store.verificationActive) break; // Already verifying something
+
+        const nextPageId = store.dequeueVerification();
+        if (!nextPageId) break; // Queue empty
+
+        const page = allPagesRef.current.find((p) => p.pageId === nextPageId);
+        if (!page) continue;
+
+        store.setVerificationActive(nextPageId);
+        store.setPageBuildStage(nextPageId, "verifying");
+
+        // Add to App.tsx for verification
+        doRebuildAppTsx();
+
+        // Wait for Sandpack to settle
+        try {
+          await waitForSandpackSettle(nextPageId, signal);
+        } catch (err) {
+          if ((err as Error).name === "AbortError") break;
+        }
+
+        // Run verification
+        const result = await verifyPage(page, signal, true);
+
+        // Update stage based on result
+        if (result && (result.status === "passed" || result.status === "fixed")) {
+          useStreamingStore.getState().setPageBuildStage(nextPageId, "verified");
+          useStrategyStore.getState().addVerifiedPage(nextPageId);
+        } else if (result && result.status === "failed") {
+          useStreamingStore.getState().setPageBuildStage(nextPageId, "verify_failed");
+          // Remove from App.tsx by rebuilding without this page
+          doRebuildAppTsx();
+        } else {
+          // Null result (error in verification itself) — treat as verify_failed
+          useStreamingStore.getState().setPageBuildStage(nextPageId, "verify_failed");
+          doRebuildAppTsx();
+        }
+
+        // Track errors for subsequent pages
+        if (result && (result.status === "fixed" || result.status === "failed") && result.lastError) {
+          knownFailuresRef.current.push({
+            pageName: page.pageName,
+            error: result.lastError.slice(0, 200),
+            fix: result.fixSummary,
+          });
+        }
+
+        useStreamingStore.getState().setVerificationActive(null);
+      }
+    } finally {
+      verificationProcessingRef.current = false;
+    }
+
+    // Check if all pages are done
+    checkAllPagesComplete();
+  };
+
+  // Single-call sequential build: one API call generates all pages (used for rebuilds)
   const buildAllPages = async (
     pages: PageBuildConfig[],
     sharedContext: SharedContext,
@@ -783,7 +1199,7 @@ export function useParallelBuild({
     }
   };
 
-  // Build a single page via /api/build-page (used for retries)
+  // Build a single page via /api/build-page (used for retries in legacy mode)
   const buildSinglePage = async (
     page: PageBuildConfig,
     sharedContext: SharedContext,
@@ -895,12 +1311,20 @@ export function useParallelBuild({
     }
   };
 
+  // ─── startBuild ─────────────────────────────────────────────────────
+
   const startBuild = useCallback(
     (pages: PageBuildConfig[], sharedContext: SharedContext, modelId: string) => {
       modelIdRef.current = modelId;
       allPagesRef.current = pages;
       sharedContextRef.current = sharedContext;
       evaluationTriggeredRef.current = false;
+      knownFailuresRef.current = [];
+      verificationProcessingRef.current = false;
+
+      // Initialize latestBuildFilesRef from current VFS
+      latestBuildFilesRef.current = { ...files };
+
       const pageIds = pages.map((p) => p.pageId);
 
       // Pre-add common dependencies to /package.json so pages can import them
@@ -921,6 +1345,7 @@ export function useParallelBuild({
         }
         if (changed) {
           writeFile("/package.json", JSON.stringify(pkg, null, 2));
+          latestBuildFilesRef.current["/package.json"] = JSON.stringify(pkg, null, 2);
         }
       } catch {
         // Fail-safe: if parsing fails, continue without pre-populating
@@ -949,8 +1374,40 @@ export function useParallelBuild({
         // Rebuilds use single API call (buildAllPages) since pages may be unchanged
         buildAllPages(pages, sharedContext, controller.signal, modelId);
       } else {
-        // Fresh builds: build each page sequentially with inline verification
-        buildPagesSequentially(pages, sharedContext, controller.signal, modelId);
+        // Fresh builds: 3-phase parallel pipeline
+        // NOTE: We do NOT delete the __build__ controller here. It must stay alive
+        // so that cancelAll() can abort the verification queue (Phase 3) which runs
+        // asynchronously after buildPagesInParallel returns. The controller is cleaned
+        // up by cancelAll() or endParallelStreaming() at the end of the build lifecycle.
+        (async () => {
+          try {
+            // Phase 1: Foundation
+            const foundationArtifacts = await buildFoundation(
+              sharedContext,
+              pages,
+              controller.signal,
+              modelId,
+            );
+
+            if (controller.signal.aborted) return;
+
+            // Phase 2: Parallel page generation -> Phase 3: Verification queue (auto-triggered)
+            await buildPagesInParallel(
+              pages,
+              sharedContext,
+              controller.signal,
+              modelId,
+              foundationArtifacts,
+            );
+
+            // Phase 3 verification may still be processing — the queue processor
+            // will call checkAllPagesComplete when done, which triggers evaluateAnnotations
+            // -> endParallelStreaming, cleaning up the controller.
+          } catch (err) {
+            if (controller.signal.aborted) return;
+            console.error("[Build] Pipeline error:", err);
+          }
+        })();
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -965,6 +1422,9 @@ export function useParallelBuild({
       const controller = new AbortController();
       abortControllersRef.current.set(pageId, controller);
 
+      const isParallelFresh = useStreamingStore.getState().parallelMode
+        && !sharedContext.isRebuild;
+
       useStreamingStore.getState().updatePageBuild(pageId, {
         status: "pending",
         error: undefined,
@@ -974,10 +1434,25 @@ export function useParallelBuild({
         verificationAttempt: 0,
         verificationIssues: [],
         verificationLog: [],
+        buildStage: "pending",
       });
 
-      // Retry individual page via /api/build-page
-      buildSinglePage(page, sharedContext, controller.signal, modelIdRef.current);
+      if (isParallelFresh) {
+        // Use parallel path with foundation artifacts
+        const artifacts = useStreamingStore.getState().foundationBuild.artifacts;
+        (async () => {
+          try {
+            useStreamingStore.getState().setPageBuildStage(pageId, "streaming");
+            useStreamingStore.getState().updatePageBuild(pageId, { status: "streaming" });
+            await buildSinglePageParallel(page, sharedContext, controller.signal, modelIdRef.current, artifacts);
+          } finally {
+            abortControllersRef.current.delete(pageId);
+          }
+        })();
+      } else {
+        // Legacy retry path
+        buildSinglePage(page, sharedContext, controller.signal, modelIdRef.current);
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [writeFile, files]
@@ -991,6 +1466,18 @@ export function useParallelBuild({
       const controller = new AbortController();
       abortControllersRef.current.set(`verify-${pageId}`, controller);
 
+      const isParallelFresh = useStreamingStore.getState().parallelMode
+        && !sharedContextRef.current?.isRebuild;
+
+      if (isParallelFresh) {
+        // Re-enqueue for verification queue
+        useStreamingStore.getState().setPageBuildStage(pageId, "queued_verification");
+        useStreamingStore.getState().enqueueVerification(pageId);
+        processVerificationQueue(controller.signal);
+        return;
+      }
+
+      // Legacy path
       const completedFilePaths = useStreamingStore.getState().pageBuilds[pageId]?.completedFilePaths || [];
 
       // Build latest files map using getLatestFile
@@ -1015,13 +1502,27 @@ export function useParallelBuild({
         } else if (result.status === "failed") {
           toast.warning("Could not auto-fix all issues");
         }
+
+        // In parallel mode, update buildStage and check completion
+        if (isParallelFresh) {
+          if (result.status === "passed" || result.status === "fixed") {
+            useStreamingStore.getState().setPageBuildStage(pageId, "verified");
+            useStrategyStore.getState().addVerifiedPage(pageId);
+            doRebuildAppTsx();
+          } else {
+            useStreamingStore.getState().setPageBuildStage(pageId, "verify_failed");
+            doRebuildAppTsx();
+          }
+          checkAllPagesComplete();
+        }
       }).catch(() => {
         // Verification failed silently
       }).finally(() => {
         abortControllersRef.current.delete(`verify-${pageId}`);
       });
     },
-    [writeFile, files, getLatestFile, makeVerificationCallbacks, projectId]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- processVerificationQueue is a stable closure over refs
+    [writeFile, files, getLatestFile, makeVerificationCallbacks, projectId, doRebuildAppTsx, checkAllPagesComplete]
   );
 
   const cancelAll = useCallback(() => {
@@ -1029,9 +1530,37 @@ export function useParallelBuild({
       controller.abort();
     }
     abortControllersRef.current.clear();
+
+    // Clear verification queue state
+    const store = useStreamingStore.getState();
+    // Reset verification queue manually since endParallelStreaming will clear it
+    store.setVerificationActive(null);
+
+    // Clear mutable refs
+    latestBuildFilesRef.current = {};
+    knownFailuresRef.current = [];
+    verificationProcessingRef.current = false;
+
+    // Flush/cancel any pending rebuildAppTsx debounce timer
+    if (rebuildTimerRef.current) {
+      clearTimeout(rebuildTimerRef.current);
+      rebuildTimerRef.current = null;
+    }
+
     useStreamingStore.getState().endParallelStreaming();
     useStrategyStore.getState().setBuildingPages([]);
   }, []);
 
   return { startBuild, retryPage, retryVerification, cancelAll };
+}
+
+// Helper: infer purpose from foundation file path
+function inferPurpose(path: string): string {
+  const name = path.split("/").pop()?.replace(".tsx", "") || "";
+  switch (name.toLowerCase()) {
+    case "navbar": return "Top navigation bar with links to all pages";
+    case "footer": return "Page footer with app info";
+    case "applayout": return "Page wrapper with Navbar and Footer";
+    default: return `Shared layout component: ${name}`;
+  }
 }

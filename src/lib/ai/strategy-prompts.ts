@@ -690,6 +690,71 @@ If the user asks to change only the features, regenerate ONLY the \`type="featur
 - When iterating, output complete updated blocks (replace the whole structure)
 - You can update any output multiple times — just output new blocks`;
 
+export function buildFoundationPrompt(
+  overviewContext: string,
+  flowContext: string,
+  personaContext: string,
+  pages: { pageName: string; pageRoute: string }[],
+): string {
+  const pageList = pages.map((p) => `- **${p.pageName}** (route: "${p.pageRoute}")`).join("\n");
+
+  return `You are an expert Product Designer and Senior Frontend Architect. You are building shared layout components for a multi-page web application based on an approved product strategy.
+
+## PRODUCT CONTEXT
+
+${overviewContext}
+
+${personaContext}
+
+${flowContext}
+
+## PAGES IN THIS APP
+
+${pageList}
+
+## BUILD INSTRUCTIONS
+
+Generate shared layout components that ALL pages will import. Output each component as a SEPARATE code block at \`/components/layout/{Name}.tsx\` with named exports.
+
+### Required Components
+
+1. **Navbar** at \`/components/layout/Navbar.tsx\` — \`export function Navbar()\`
+   - App title/logo based on the product name
+   - Navigation links to ALL pages listed above
+   - Use \`navigate()\` from \`useRouter()\` (import from \`../../lib/router\`)
+   - Active state highlighting for current route
+   - Responsive: horizontal nav on desktop, consider mobile
+
+2. **Footer** at \`/components/layout/Footer.tsx\` — \`export function Footer()\`
+   - Simple footer with app name and copyright
+   - Keep it minimal but polished
+
+3. **AppLayout** at \`/components/layout/AppLayout.tsx\` — \`export function AppLayout({ children }: { children: React.ReactNode })\`
+   - Wraps content with Navbar at top and Footer at bottom
+   - Provides consistent page structure: min-h-screen flex column
+   - Main content area with proper max-width and padding
+
+### Rules
+
+1. **EVERY .tsx file MUST start with \`import * as React from "react";\`** — required for JSX
+2. Use ONLY named exports — NEVER \`export default\`
+3. Use semantic token classes (bg-primary, text-foreground, bg-background, etc.) — NEVER hardcoded Tailwind colors
+4. Use semantic typography classes: text-h1, text-h2, text-h3, text-h4, text-body, text-body-sm, text-caption
+5. Use the pre-installed component library (Button, etc.) — import from \`../../components/ui/...\`
+6. Navigation with \`navigate()\` from \`useRouter()\` — import from \`../../lib/router\`
+7. Output ONLY the code blocks — no conversational text
+
+## AVAILABLE PACKAGES (DO NOT ADD OTHERS)
+
+- \`react\`, \`react-dom\` — React 18
+- \`clsx\`, \`tailwind-merge\` — for cn() utility (import from \`../../lib/utils\`)
+- \`lucide-react\` — icons
+- \`recharts\` — charts
+- \`date-fns\` — date utilities
+
+**CRITICAL:** Do NOT import any package not listed above. Do NOT output a /package.json file.`;
+}
+
 export function buildParallelPagePrompt(
   overviewContext: string,
   flowContext: string,
@@ -698,9 +763,33 @@ export function buildParallelPagePrompt(
   currentPageName: string,
   componentName: string,
   userFlowContext?: string,
+  foundationArtifacts?: { path: string; exports: string[]; purpose: string }[],
+  knownFailures?: { pageName: string; error: string; fix?: string }[],
 ): string {
   const userFlowSection = userFlowContext
     ? `\n\n## USER FLOW REFERENCE\n\nThese user flows show what users do on this page. Use the actions listed for this page's node to guide which UI components and interactions to build.\n\n${userFlowContext}`
+    : "";
+
+  const foundationSection = foundationArtifacts && foundationArtifacts.length > 0
+    ? `\n\n## SHARED LAYOUT COMPONENTS (ALREADY BUILT — USE THESE)
+
+The following shared layout components have already been generated. Import and use them — do NOT recreate navigation, footer, or layout wrappers.
+
+${foundationArtifacts.map((a) => `- \`${a.path}\` — exports: \`${a.exports.join(", ")}\` — ${a.purpose}`).join("\n")}
+
+**Usage from /pages/*.tsx:**
+${foundationArtifacts.map((a) => {
+  const relativePath = a.path.replace(/\.tsx$/, "").replace(/^\//, "../");
+  return `\`import { ${a.exports.join(", ")} } from "${relativePath}";\``;
+}).join("\n")}
+
+Wrap your page content with \`<AppLayout>...</AppLayout>\` if an AppLayout component is available.`
+    : "";
+
+  const knownFailuresSection = knownFailures && knownFailures.length > 0
+    ? `\n\n## ERRORS FROM OTHER PAGES — AVOID THESE MISTAKES:\n${knownFailures.map(
+        (e) => `- ${e.pageName}: "${e.error}"${e.fix ? ` (Fixed by: ${e.fix})` : ""}`
+      ).join("\n")}`
     : "";
 
   return `You are an expert Product Designer and Senior Frontend Architect building a web application based on an approved product strategy.
@@ -711,7 +800,7 @@ ${overviewContext}
 
 ${personaContext}
 
-${flowContext}${userFlowSection}
+${flowContext}${userFlowSection}${foundationSection}${knownFailuresSection}
 
 ## BUILD INSTRUCTIONS
 
