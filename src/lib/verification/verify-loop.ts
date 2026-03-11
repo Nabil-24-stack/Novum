@@ -355,6 +355,7 @@ export interface VerificationResult {
   status: "passed" | "fixed" | "failed";
   attempts: number;
   fixCount: number;
+  fixedPaths: string[];
   lastError?: string;
   fixSummary?: string;
 }
@@ -397,6 +398,20 @@ function globalCallbacks(): VerificationStateCallbacks {
   };
 }
 
+/** Format a Sandpack error entry into a human-readable error string. */
+function formatSandpackError(entry: import("@/hooks/useSandpackErrorStore").SandpackErrorEntry): string {
+  let message = entry.error!.message;
+  const syntaxErrorMatch = message.match(/SyntaxError:\s*(.+)/);
+  if (syntaxErrorMatch) {
+    message = `SyntaxError: ${syntaxErrorMatch[1]}`;
+  }
+  const parts = [message];
+  if (entry.error!.path) parts.push(`File: ${entry.error!.path}`);
+  if (entry.error!.line) parts.push(`Line: ${entry.error!.line}`);
+  if (entry.error!.title && !syntaxErrorMatch) parts.unshift(entry.error!.title);
+  return parts.join(" | ");
+}
+
 /**
  * Detect errors using a layered approach:
  * 1. Sandpack native error (compilation/bundler) — most reliable
@@ -410,24 +425,34 @@ async function detectErrors(
 
   const storeKey = pageId || "prototype";
 
-  // Layer 1: Check Sandpack native error from global store
-  const entry = useSandpackErrorStore.getState().entries[storeKey];
-  if (entry?.error) {
-    let message = entry.error.message;
+  // Layer 1: Check Sandpack native errors from global store.
+  // All Sandpack frames compile the same App.tsx bundle, so a syntax error in
+  // any file surfaces across all frames.  Check the page-scoped entry first,
+  // then scan all other entries to catch errors another frame surfaced before
+  // the current page's frame finished bundling.
+  const allEntries = useSandpackErrorStore.getState().entries;
+  const primaryEntry = allEntries[storeKey];
+  const primarySettledAt = primaryEntry?.lastSettledAt ?? 0;
 
-    // Sandpack sometimes wraps SyntaxErrors in a TypeError:
-    // "Cannot assign to read only property 'message' of object 'SyntaxError: file.tsx: Unexpected token (10:5)'"
-    // Extract the actual SyntaxError for clearer AI context
-    const syntaxErrorMatch = message.match(/SyntaxError:\s*(.+)/);
-    if (syntaxErrorMatch) {
-      message = `SyntaxError: ${syntaxErrorMatch[1]}`;
+  // Check the primary (page-scoped) entry first — it was waited on by
+  // waitForSandpackSettle so it reflects the latest bundle state.
+  if (primaryEntry?.error) {
+    return formatSandpackError(primaryEntry);
+  }
+
+  // Scan other entries as a safety net, but only trust those that:
+  // 1. Have status "idle" (finished bundling — not still running with stale state)
+  // 2. Settled at least as recently as the primary entry (same bundle generation)
+  for (const key of Object.keys(allEntries)) {
+    if (key === storeKey) continue;
+    const entry = allEntries[key];
+    if (
+      entry?.error &&
+      entry.status === "idle" &&
+      entry.lastSettledAt >= primarySettledAt
+    ) {
+      return formatSandpackError(entry);
     }
-
-    const parts = [message];
-    if (entry.error.path) parts.push(`File: ${entry.error.path}`);
-    if (entry.error.line) parts.push(`Line: ${entry.error.line}`);
-    if (entry.error.title && !syntaxErrorMatch) parts.unshift(entry.error.title);
-    return parts.join(" | ");
   }
 
   // Layer 2: Query iframe for runtime errors (DOM text scanning)
@@ -522,12 +547,13 @@ export async function runVerificationLoop(
   }
 
   if (Object.keys(writtenFiles).length === 0) {
-    return { status: "passed", attempts: 0, fixCount: 0 };
+    return { status: "passed", attempts: 0, fixCount: 0, fixedPaths: [] };
   }
 
   let totalFixes = 0;
   let lastDetectedError: string | undefined;
   let lastFixSummary: string | undefined;
+  const allFixedPaths = new Set<string>();
 
   cb.startVerification();
 
@@ -614,6 +640,7 @@ export async function runVerificationLoop(
           status: totalFixes > 0 ? "fixed" : "passed",
           attempts: attempt,
           fixCount: totalFixes,
+          fixedPaths: [...allFixedPaths],
           lastError: lastDetectedError,
           fixSummary: lastFixSummary,
         };
@@ -654,6 +681,7 @@ export async function runVerificationLoop(
           writtenFiles[deterministicFix.filePath] =
             deterministicFix.fixedCode;
           totalFixes++;
+          allFixedPaths.add(deterministicFix.filePath);
           lastFixSummary = `Deterministic fix: ${deterministicFix.description} in ${deterministicFix.filePath}`;
           attempt--; // Don't consume an AI fix attempt
           continue; // Re-check for errors
@@ -665,6 +693,19 @@ export async function runVerificationLoop(
 
       // Enrich syntax errors with source context lines
       let enrichedError = enrichSyntaxError(detectedError, allFiles);
+
+      // Promote any file referenced in the error to primary AI context.
+      // In parallel builds the error may reference a different page's file
+      // imported via App.tsx — the AI needs it as primary context, not buried
+      // in the extra-context section with a 60s route limit.
+      const errorFileMatch = detectedError.match(/(?:\/[^\s:|]+\.(?:tsx?|jsx?|js))/);
+      if (errorFileMatch) {
+        const errorFilePath = errorFileMatch[0];
+        if (allFiles[errorFilePath] && !writtenFiles[errorFilePath]) {
+          writtenFiles[errorFilePath] = allFiles[errorFilePath];
+          cb.addLog(`Promoted ${errorFilePath} to primary context (cross-page error)`);
+        }
+      }
 
       // --- Focused section mode for syntax errors in large files ---
       // Instead of sending a 1000-line file to the AI (causing 504 timeouts),
@@ -759,6 +800,7 @@ export async function runVerificationLoop(
               status: "failed",
               attempts: attempt,
               fixCount: totalFixes,
+              fixedPaths: [...allFixedPaths],
               lastError: lastDetectedError,
               fixSummary: lastFixSummary,
             };
@@ -789,6 +831,7 @@ export async function runVerificationLoop(
             status: "failed",
             attempts: attempt,
             fixCount: totalFixes,
+            fixedPaths: [...allFixedPaths],
             lastError: lastDetectedError,
             fixSummary: lastFixSummary,
           };
@@ -822,6 +865,7 @@ export async function runVerificationLoop(
             status: "failed",
             attempts: attempt,
             fixCount: totalFixes,
+            fixedPaths: [...allFixedPaths],
             lastError: lastDetectedError,
             fixSummary: lastFixSummary,
           };
@@ -847,6 +891,7 @@ export async function runVerificationLoop(
             status: "failed",
             attempts: attempt,
             fixCount: totalFixes,
+            fixedPaths: [...allFixedPaths],
             lastError: lastDetectedError,
             fixSummary: lastFixSummary,
           };
@@ -923,6 +968,7 @@ export async function runVerificationLoop(
         allFiles[block.path] = finalContent;
         totalFixes++;
         fixedPaths.push(block.path);
+        allFixedPaths.add(block.path);
       }
 
       // If focused mode was active but no fix was applied for the focused file
@@ -956,13 +1002,14 @@ export async function runVerificationLoop(
       status: "failed",
       attempts: MAX_ATTEMPTS,
       fixCount: totalFixes,
+      fixedPaths: [...allFixedPaths],
       lastError: lastDetectedError,
       fixSummary: lastFixSummary,
     };
   } catch (err) {
     if ((err as Error).name === "AbortError") {
       cb.reset();
-      return { status: "passed", attempts: 0, fixCount: 0 };
+      return { status: "passed", attempts: 0, fixCount: 0, fixedPaths: [] };
     }
     // Unexpected error — mark as failed so the UI doesn't show a green checkmark
     console.error("[verify] Unexpected error:", err);
@@ -971,6 +1018,7 @@ export async function runVerificationLoop(
       status: "failed",
       attempts: 0,
       fixCount: 0,
+      fixedPaths: [...allFixedPaths],
       lastError: lastDetectedError,
     };
   }

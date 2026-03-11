@@ -21,7 +21,7 @@ function getModel(modelId: ModelId) {
   }
 }
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const ERROR_FIX_SYSTEM_PROMPT = `You are a code-level QA reviewer for a React web application running in Sandpack.
 The page has an error. Analyze the error text, source code, and available project files, then provide a fix.
@@ -120,28 +120,27 @@ export async function POST(req: Request) {
       }
 
       const structuralFiles: [string, string][] = [];
-      const pageFiles: [string, string][] = [];
       const referencedFiles: [string, string][] = [];
       const componentFiles: [string, string][] = [];
 
       for (const [path, content] of Object.entries(contextFiles)) {
         if (files[path]) continue; // Skip files already in primary context
         const isStructural = STRUCTURAL_PATTERNS.includes(path);
-        const isPage = path.startsWith("/pages/");
         const isComponent = path.startsWith("/components/ui/");
         const isReferenced = referencedPaths.has(path) || [...referencedPaths].some((rp) => path.endsWith(rp));
 
         if (isReferenced) referencedFiles.push([path, content]);
         else if (isStructural) structuralFiles.push([path, content]);
-        else if (isPage) pageFiles.push([path, content]);
         else if (isComponent) componentFiles.push([path, content]);
       }
 
-      // Prioritize: referenced files first, then structural, then ALL pages, then components (capped at 10)
+      // Prioritize: referenced files first, then structural, then components.
+      // Unreferenced page files are excluded — the broken file is already in
+      // primary context (promoted by the verify loop), and including all pages
+      // inflates the request body causing 504 timeouts on whole-file fallback.
       const extraFiles = [
         ...referencedFiles,
         ...structuralFiles,
-        ...pageFiles,
         ...componentFiles.slice(0, 10),
       ];
 

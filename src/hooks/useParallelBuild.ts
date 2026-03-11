@@ -1017,6 +1017,32 @@ export function useParallelBuild({
           doRebuildAppTsx();
         }
 
+        // Cross-page ownership: collect all file paths that were either fixed
+        // or identified as broken during this page's verification.  If any
+        // belong to another page that was previously "verified", that status
+        // is stale — re-enqueue it for re-verification.
+        const crossPagePaths = new Set<string>(result?.fixedPaths ?? []);
+
+        // Also extract file path from the last error — this catches the case
+        // where the verifier identified a cross-page file as broken but failed
+        // to fix it (504, exhausted attempts, etc.).
+        if (result?.lastError) {
+          const errorFileMatch = result.lastError.match(/(?:\/[^\s:|]+\.(?:tsx?|jsx?|js))/);
+          if (errorFileMatch) crossPagePaths.add(errorFileMatch[0]);
+        }
+
+        for (const affectedPath of crossPagePaths) {
+          const affectedPage = findPageForPath(affectedPath);
+          if (affectedPage && affectedPage.pageId !== nextPageId) {
+            const affectedStage = useStreamingStore.getState().pageBuilds[affectedPage.pageId]?.buildStage;
+            if (affectedStage === "verified") {
+              console.log(`[parallel-build] Cross-page issue: ${affectedPath} affected during ${page.pageName} verification — re-enqueuing ${affectedPage.pageName}`);
+              useStreamingStore.getState().setPageBuildStage(affectedPage.pageId, "queued_verification");
+              useStreamingStore.getState().enqueueVerification(affectedPage.pageId);
+            }
+          }
+        }
+
         // Track errors for subsequent pages
         if (result && (result.status === "fixed" || result.status === "failed") && result.lastError) {
           knownFailuresRef.current.push({
