@@ -137,8 +137,11 @@ function generateComponentVars(tokens: TokenState): string {
   return lines.join("\n");
 }
 
-type ParsedTokenInput = Partial<TokenState> & {
-  version?: string;
+type ParsedTokenInput = Omit<
+  Partial<TokenState>,
+  "version" | "primitives" | "semantics" | "components" | "globals"
+> & {
+  version?: "1.0" | "2.0";
   primitives?: Partial<TokenState["primitives"]>;
   semantics?: {
     colors?: Partial<
