@@ -3,6 +3,31 @@
  * These are used by the chat API to guide the AI's behavior.
  */
 
+export const DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT = `## DESIGN SYSTEM ENFORCEMENT (CRITICAL)
+
+- Use the pre-installed design system components before creating raw HTML equivalents.
+- Use ONLY semantic token classes (\`bg-primary\`, \`text-foreground\`, \`border-border\`, etc.). NEVER use hardcoded Tailwind palette classes, hex colors, rgb(), or hsl().
+- For solid action buttons, prefer the \`Button\` component's \`variant\` prop instead of custom color overrides:
+  - Primary CTA -> \`<Button variant="default">\`
+  - Secondary solid action -> \`<Button variant="secondary">\`
+  - Destructive action -> \`<Button variant="destructive">\`
+  - Outline, ghost, and link styles -> the matching \`Button\` variants
+- Use \`className\` on \`Button\` for layout, spacing, width, alignment, icon gap, and positioning. Do NOT use \`className\` to restyle button background/text colors for solid buttons.
+
+## BACKGROUND + TEXT PAIRING RULE (CRITICAL)
+
+When you apply an opaque semantic background, ALWAYS pair it with its matching foreground in the SAME state bucket (\`base\`, \`hover:\`, \`focus:\`, etc.):
+- \`bg-primary\` -> \`text-primary-foreground\`
+- \`bg-secondary\` -> \`text-secondary-foreground\`
+- \`bg-destructive\` -> \`text-destructive-foreground\`
+- \`bg-accent\` -> \`text-accent-foreground\`
+- \`bg-muted\` -> \`text-muted-foreground\`
+- \`bg-card\` -> \`text-card-foreground\`
+- \`bg-popover\` -> \`text-popover-foreground\`
+
+NEVER pair \`bg-primary\` with \`text-foreground\`, \`text-primary\`, or any other mismatched text color.
+Exception: low-opacity tints like \`bg-primary/10\` may keep inherited text when readability is preserved.`;
+
 export const PROBLEM_OVERVIEW_SYSTEM_PROMPT = `You are a Product Strategist and UX expert. The user has described a problem they want to solve with a web application.
 
 Your job is to gather information through clarifying questions FIRST, then generate a product overview AND user personas once you understand the problem well enough.

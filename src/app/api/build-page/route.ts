@@ -2,7 +2,11 @@ import { streamText } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
-import { buildParallelPagePrompt, buildFoundationPrompt } from "@/lib/ai/strategy-prompts";
+import {
+  DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT,
+  buildParallelPagePrompt,
+  buildFoundationPrompt,
+} from "@/lib/ai/strategy-prompts";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 
 type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6" | "gpt-5.2";
@@ -26,6 +30,8 @@ export const maxDuration = 120;
 
 // Design system rules (same as SYSTEM_PROMPT in /api/chat)
 const DESIGN_SYSTEM_RULES = `
+${DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT}
+
 ## STRICT EXPORT RULE (CRITICAL)
 
 1. You must **NEVER** use \`export default\`. This causes crashes.
@@ -73,11 +79,10 @@ const DESIGN_SYSTEM_RULES = `
 1. **EVERY .tsx file MUST start with \`import * as React from "react";\`** — this is required for JSX compilation. Never skip this import.
 2. Wrap code in a markdown code block with a \`file\` attribute: \`\`\`tsx file="/pages/PageName.tsx"\`\`\`
 3. Write the FULL file content — never partial snippets.
-4. Use semantic token classes (bg-primary, text-foreground, etc.) — NEVER hardcoded Tailwind colors.
-5. Use semantic typography classes: text-h1, text-h2, text-h3, text-h4, text-body, text-body-sm, text-caption.
-6. NEVER use text-xs, text-sm, text-base, text-lg, text-xl, etc.
-7. Use generous padding (p-6, p-8) and gaps (gap-6, gap-8).
-8. Every container element MUST have explicit layout (flex or grid).
+4. Use semantic typography classes: text-h1, text-h2, text-h3, text-h4, text-body, text-body-sm, text-caption.
+5. NEVER use text-xs, text-sm, text-base, text-lg, text-xl, etc.
+6. Use generous padding (p-6, p-8) and gaps (gap-6, gap-8).
+7. Every container element MUST have explicit layout (flex or grid).
 
 ## DESIGN PHILOSOPHY
 

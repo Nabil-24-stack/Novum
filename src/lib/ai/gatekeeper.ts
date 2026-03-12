@@ -4,11 +4,13 @@
  * Deterministic transpiler that intercepts AI-generated code blocks before
  * they hit the VFS, enforcing the Novum Design System.
  *
- * Four rules applied in order:
+ * Rules applied in order:
  * 1. Component Promotion - <button> → <Button> (structural changes first)
  * 2. Color Enforcement - bg-blue-500 → bg-primary (className transforms)
  * 3. Spacing Normalization - p-[11px] → p-3 (className transforms)
  * 4. Layout Enforcement - gap-7 → gap-8, grid-cols-[5] → grid-cols-5 (className transforms)
+ * 5. Typography Enforcement - text-sm → text-body-sm (className transforms)
+ * 6. Button Normalization - infer Button variants and strip conflicting solid color overrides
  *
  * Fail-safe: if any phase throws, original code passes through unchanged.
  */
@@ -24,6 +26,7 @@ import { enforceSpacing, type SpacingViolation } from "./spacing-mapper";
 import { enforceLayout, type LayoutViolation } from "./layout-mapper";
 import { enforceTypography, type TypographyViolation } from "./typography-mapper";
 import { enforceLayoutDeclarations, type LayoutDeclarationAddition } from "./layout-declaration-mapper";
+import { normalizeButtons, type ButtonNormalization } from "./button-normalizer";
 import { defaultTokenState } from "@/lib/tokens/defaults";
 import type { TokenState } from "@/lib/tokens/types";
 
@@ -50,6 +53,7 @@ export interface GatekeeperReport {
   typographyViolations: TypographyViolation[];
   componentPromotions: ComponentPromotion[];
   layoutDeclarationAdditions: LayoutDeclarationAddition[];
+  buttonNormalizations: ButtonNormalization[];
 }
 
 // ============================================================================
@@ -195,6 +199,7 @@ export function runGatekeeper(
     typographyViolations: [],
     componentPromotions: [],
     layoutDeclarationAdditions: [],
+    buttonNormalizations: [],
   };
 
   // Extension guard
@@ -211,6 +216,7 @@ export function runGatekeeper(
   const allTypographyViolations: TypographyViolation[] = [];
   let allPromotions: ComponentPromotion[] = [];
   let allLayoutDeclarationAdditions: LayoutDeclarationAddition[] = [];
+  let allButtonNormalizations: ButtonNormalization[] = [];
 
   // ── Phase -1: Import Fixing ──
   try {
@@ -305,6 +311,15 @@ export function runGatekeeper(
     console.warn("[Gatekeeper] Color/spacing enforcement failed, skipping:", err);
   }
 
+  // ── Phase 6: Button Variant Normalization ──
+  try {
+    const { code: normalizedButtons, normalizations } = normalizeButtons(currentCode);
+    currentCode = normalizedButtons;
+    allButtonNormalizations = normalizations;
+  } catch (err) {
+    console.warn("[Gatekeeper] Button normalization failed, skipping:", err);
+  }
+
   // ── Final Safety Net: Babel Parse Validation ──
   // If gatekeeper output doesn't parse but input did, revert to original.
   // Prevents any gatekeeper phase from silently introducing syntax errors.
@@ -329,6 +344,7 @@ export function runGatekeeper(
         allTypographyViolations.length = 0;
         allPromotions = [];
         allLayoutDeclarationAdditions = [];
+        allButtonNormalizations = [];
       }
     }
   }
@@ -340,7 +356,8 @@ export function runGatekeeper(
     allLayoutViolations.length > 0 ||
     allTypographyViolations.length > 0 ||
     allPromotions.length > 0 ||
-    allLayoutDeclarationAdditions.length > 0;
+    allLayoutDeclarationAdditions.length > 0 ||
+    allButtonNormalizations.length > 0;
 
   return {
     code: currentCode,
@@ -353,6 +370,7 @@ export function runGatekeeper(
       typographyViolations: allTypographyViolations,
       componentPromotions: allPromotions,
       layoutDeclarationAdditions: allLayoutDeclarationAdditions,
+      buttonNormalizations: allButtonNormalizations,
     },
   };
 }

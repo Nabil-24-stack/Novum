@@ -544,7 +544,8 @@ export function useParallelBuild({
           gated.report.spacingViolations.length +
           gated.report.layoutViolations.length +
           gated.report.componentPromotions.length +
-          gated.report.layoutDeclarationAdditions.length;
+          gated.report.layoutDeclarationAdditions.length +
+          gated.report.buttonNormalizations.length;
         const pageName = page?.pageName || block.path;
         toast.info(
           `Gatekeeper (${pageName}): ${total} design system fix${total > 1 ? "es" : ""} applied`
@@ -889,7 +890,8 @@ export function useParallelBuild({
                   gated.report.spacingViolations.length +
                   gated.report.layoutViolations.length +
                   gated.report.componentPromotions.length +
-                  gated.report.layoutDeclarationAdditions.length;
+                  gated.report.layoutDeclarationAdditions.length +
+                  gated.report.buttonNormalizations.length;
                 toast.info(
                   `Gatekeeper (${page.pageName}): ${total} design system fix${total > 1 ? "es" : ""} applied`
                 );
@@ -1388,7 +1390,8 @@ export function useParallelBuild({
                   gated.report.spacingViolations.length +
                   gated.report.layoutViolations.length +
                   gated.report.componentPromotions.length +
-                  gated.report.layoutDeclarationAdditions.length;
+                  gated.report.layoutDeclarationAdditions.length +
+                  gated.report.buttonNormalizations.length;
                 toast.info(
                   `Gatekeeper (${page.pageName}): ${total} design system fix${total > 1 ? "es" : ""} applied`
                 );

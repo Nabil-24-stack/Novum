@@ -2030,7 +2030,8 @@ export function ChatTab({
                 + gated.report.layoutViolations.length
                 + gated.report.typographyViolations.length
                 + gated.report.componentPromotions.length
-                + gated.report.layoutDeclarationAdditions.length;
+                + gated.report.layoutDeclarationAdditions.length
+                + gated.report.buttonNormalizations.length;
               toast.info(`Gatekeeper: ${total} design system fix${total > 1 ? "es" : ""} applied`);
               console.log("[Gatekeeper] Applied fixes:", gated.report);
             }

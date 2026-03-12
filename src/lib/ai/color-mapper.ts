@@ -523,61 +523,143 @@ const CONTRAST_PAIR_BASES = new Set([
   "primary", "secondary", "destructive", "accent", "muted", "card", "popover",
 ]);
 
+interface StatefulSemanticClass {
+  variants: string[];
+  variantKey: string;
+}
+
+interface StatefulSemanticBgClass extends StatefulSemanticClass {
+  base: string;
+  opacity: number;
+}
+
+interface StatefulTextColorClass extends StatefulSemanticClass {
+  suffix: string;
+  opacity: string;
+}
+
+function parseStatefulSemanticBgClass(cls: string): StatefulSemanticBgClass | null {
+  const parts = cls.split(":");
+  const utility = parts.pop()!;
+  const match = utility.match(/^bg-(primary|secondary|destructive|accent|muted|card|popover)(?:\/(\d+))?$/);
+  if (!match) return null;
+
+  return {
+    variants: parts,
+    variantKey: parts.join(":"),
+    base: match[1],
+    opacity: match[2] ? parseInt(match[2], 10) : 100,
+  };
+}
+
+function parseStatefulTextColorClass(cls: string): StatefulTextColorClass | null {
+  if (!isTextColorClass(cls)) return null;
+
+  const parts = cls.split(":");
+  const utility = parts.pop()!;
+  const match = utility.match(/^text-(.+?)(\/\d+)?$/);
+  if (!match) return null;
+
+  return {
+    variants: parts,
+    variantKey: parts.join(":"),
+    suffix: match[1],
+    opacity: match[2] || "",
+  };
+}
+
+function formatVariantPrefix(variants: string[]): string {
+  return variants.length > 0 ? `${variants.join(":")}:` : "";
+}
+
+function dedupeClassesPreserveLast(classes: string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+
+  for (let i = classes.length - 1; i >= 0; i--) {
+    const cls = classes[i];
+    if (seen.has(cls)) continue;
+    seen.add(cls);
+    deduped.push(cls);
+  }
+
+  return deduped.reverse();
+}
+
 /**
- * Post-process mapped classes to fix contrast conflicts.
- * When bg-{X} and text-{X} both exist (same semantic base), replaces
- * text-{X} with text-{X}-foreground so text is readable on the background.
+ * Post-process mapped classes to enforce readable semantic background/text pairs.
+ * Repairs conflicting text colors and injects a matching foreground when an
+ * opaque semantic background is missing one in the same state bucket.
  */
-function fixContrastPairs(
+function repairSemanticContrastBuckets(
   classes: string[],
 ): { classes: string[]; violations: ColorViolation[] } {
   const violations: ColorViolation[] = [];
+  const bgBuckets = new Map<string, StatefulSemanticBgClass>();
+  const textBuckets = new Map<string, StatefulTextColorClass[]>();
+  const repaired = [...classes];
 
-  // Collect base-state bg tokens: "bg-primary" → "primary", "bg-card" → "card"
-  const bgBases = new Set<string>();
   for (const cls of classes) {
-    // Skip classes with variant prefixes (hover:, dark:, etc.)
-    if (cls.includes(":")) continue;
-    const bgMatch = cls.match(/^bg-(\w+?)(?:\/\d+)?$/);
-    if (bgMatch && CONTRAST_PAIR_BASES.has(bgMatch[1])) {
-      bgBases.add(bgMatch[1]);
+    const bgUsage = parseStatefulSemanticBgClass(cls);
+    if (bgUsage) {
+      bgBuckets.set(bgUsage.variantKey, bgUsage);
+    }
+
+    const textUsage = parseStatefulTextColorClass(cls);
+    if (textUsage) {
+      const existing = textBuckets.get(textUsage.variantKey) || [];
+      existing.push(textUsage);
+      textBuckets.set(textUsage.variantKey, existing);
     }
   }
 
-  if (bgBases.size === 0) {
-    return { classes, violations };
+  for (const [variantKey, bgUsage] of bgBuckets.entries()) {
+    if (!CONTRAST_PAIR_BASES.has(bgUsage.base) || bgUsage.opacity <= 30) {
+      continue;
+    }
+
+    const expectedSuffix = `${bgUsage.base}-foreground`;
+    const variantPrefix = formatVariantPrefix(bgUsage.variants);
+    const textUsages = textBuckets.get(variantKey) || [];
+
+    if (textUsages.length === 0) {
+      const injection = `${variantPrefix}text-${expectedSuffix}`;
+      repaired.push(injection);
+      violations.push({
+        original: `${variantPrefix}bg-${bgUsage.base}`,
+        replacement: injection,
+        prefix: "text",
+        reason: `Missing text color in ${variantKey || "base"} state: "${variantPrefix}bg-${bgUsage.base}" → injected "${injection}"`,
+      });
+      continue;
+    }
+
+    for (const textUsage of textUsages) {
+      if (textUsage.suffix === expectedSuffix) continue;
+
+      const original = `${variantPrefix}text-${textUsage.suffix}${textUsage.opacity}`;
+      const replacement = `${variantPrefix}text-${expectedSuffix}${textUsage.opacity}`;
+      const index = repaired.indexOf(original);
+      if (index === -1) continue;
+
+      repaired[index] = replacement;
+      violations.push({
+        original,
+        replacement,
+        prefix: "text",
+        reason: `Contrast fix in ${variantKey || "base"} state: "${original}" conflicts with "${variantPrefix}bg-${bgUsage.base}"`,
+      });
+    }
   }
 
-  // Fix text classes that conflict with a bg of the same base
-  const fixed = classes.map((cls) => {
-    // Skip classes with variant prefixes
-    if (cls.includes(":")) return cls;
-    // Skip classes already using -foreground
-    if (cls.includes("-foreground")) return cls;
-
-    const textMatch = cls.match(/^text-(\w+?)(\/\d+)?$/);
-    if (!textMatch) return cls;
-
-    const [, base, opacity] = textMatch;
-    if (!CONTRAST_PAIR_BASES.has(base)) return cls;
-    if (!bgBases.has(base)) return cls;
-
-    // Conflict found: text-{X} paired with bg-{X}
-    const replacement = `text-${base}-foreground${opacity || ""}`;
-    violations.push({
-      original: cls,
-      replacement,
-      prefix: "text",
-      reason: `Contrast fix: "text-${base}" conflicts with "bg-${base}" → "${replacement}"`,
-    });
-    return replacement;
-  });
-
-  return { classes: fixed, violations };
+  return {
+    classes: dedupeClassesPreserveLast(repaired),
+    violations,
+  };
 }
 
 // ============================================================================
-// Missing Foreground Injection
+// Missing Foreground Detection Helpers
 // ============================================================================
 
 /**
@@ -632,57 +714,6 @@ function isTextColorClass(cls: string): boolean {
 }
 
 /**
- * Inject missing text-{X}-foreground when bg-{X} exists but no text color is present.
- * Skips injection for low-opacity backgrounds (≤30%) where inherited text-foreground is fine.
- */
-function injectMissingForeground(
-  classes: string[],
-): { classes: string[]; violations: ColorViolation[] } {
-  const violations: ColorViolation[] = [];
-
-  // Collect base-state bg semantic tokens with their opacity
-  const bgBases = new Map<string, number>(); // base → opacity (100 if no modifier)
-  for (const cls of classes) {
-    if (cls.includes(":")) continue; // skip variants
-    const bgMatch = cls.match(/^bg-(\w+?)(?:\/(\d+))?$/);
-    if (bgMatch && CONTRAST_PAIR_BASES.has(bgMatch[1])) {
-      const opacity = bgMatch[2] ? parseInt(bgMatch[2], 10) : 100;
-      bgBases.set(bgMatch[1], opacity);
-    }
-  }
-
-  if (bgBases.size === 0) {
-    return { classes, violations };
-  }
-
-  // Check if ANY base-state text color class already exists
-  const hasTextColor = classes.some(cls => {
-    if (cls.includes(":")) return false; // skip variants
-    return isTextColorClass(cls);
-  });
-
-  if (hasTextColor) {
-    return { classes, violations };
-  }
-
-  // No text color found — inject foreground for the first bg base with opacity > 30
-  for (const [base, opacity] of bgBases) {
-    if (opacity <= 30) continue; // skip tints
-
-    const injection = `text-${base}-foreground`;
-    violations.push({
-      original: `bg-${base}`,
-      replacement: injection,
-      prefix: "text",
-      reason: `Missing text color: "bg-${base}" has no text color class → injected "${injection}"`,
-    });
-    return { classes: [...classes, injection], violations };
-  }
-
-  return { classes, violations };
-}
-
-/**
  * Process a className string, replacing color violations with semantic tokens.
  * Returns the updated className and list of violations found.
  */
@@ -704,16 +735,12 @@ export function enforceColors(
     return cls;
   });
 
-  // Post-process: fix contrast pairs where bg-X and text-X share the same base
-  const { classes: fixed, violations: contrastViolations } = fixContrastPairs(mapped);
+  // Post-process: repair semantic background/text pairing in each state bucket
+  const { classes: repaired, violations: contrastViolations } = repairSemanticContrastBuckets(mapped);
   violations.push(...contrastViolations);
 
-  // Post-process: inject missing foreground when bg-X has no text color
-  const { classes: withForeground, violations: fgViolations } = injectMissingForeground(fixed);
-  violations.push(...fgViolations);
-
   return {
-    result: withForeground.join(" "),
+    result: repaired.join(" "),
     violations,
   };
 }

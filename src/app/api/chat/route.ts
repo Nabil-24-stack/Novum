@@ -2,7 +2,15 @@ import { streamText, convertToModelMessages } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
-import { PROBLEM_OVERVIEW_SYSTEM_PROMPT, buildIdeationSystemPrompt, buildSolutionDesignSystemPrompt, buildBuildSystemPrompt, buildDeepDiveSystemPrompt, buildEditingSystemPrompt } from "@/lib/ai/strategy-prompts";
+import {
+  DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT,
+  PROBLEM_OVERVIEW_SYSTEM_PROMPT,
+  buildIdeationSystemPrompt,
+  buildSolutionDesignSystemPrompt,
+  buildBuildSystemPrompt,
+  buildDeepDiveSystemPrompt,
+  buildEditingSystemPrompt,
+} from "@/lib/ai/strategy-prompts";
 import { INSIGHTS_PROMPT_FRAGMENT } from "@/lib/ai/insights-prompt";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 
@@ -487,7 +495,9 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     2. Remove any connections in /flow.json referencing the deleted page (in \`from\` or \`to\`)
     3. Update /App.tsx to remove the route and import
     4. Delete the page file (output an empty code block: \`\`\`tsx file="/pages/PageName.tsx"\n\`\`\`)
-    Always keep /flow.json in sync with the actual pages.`;
+    Always keep /flow.json in sync with the actual pages.
+
+${DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT}`;
 
 export async function POST(req: Request) {
   const auth = await requireAuth();
