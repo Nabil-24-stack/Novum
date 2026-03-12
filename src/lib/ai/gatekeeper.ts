@@ -10,7 +10,7 @@
  * 3. Spacing Normalization - p-[11px] → p-3 (className transforms)
  * 4. Layout Enforcement - gap-7 → gap-8, grid-cols-[5] → grid-cols-5 (className transforms)
  * 5. Typography Enforcement - text-sm → text-body-sm (className transforms)
- * 6. Button Normalization - infer Button variants and strip conflicting solid color overrides
+ * 6. Component Normalization - infer Button/Badge variants and strip conflicting Badge/Tabs color overrides
  *
  * Fail-safe: if any phase throws, original code passes through unchanged.
  */
@@ -26,7 +26,12 @@ import { enforceSpacing, type SpacingViolation } from "./spacing-mapper";
 import { enforceLayout, type LayoutViolation } from "./layout-mapper";
 import { enforceTypography, type TypographyViolation } from "./typography-mapper";
 import { enforceLayoutDeclarations, type LayoutDeclarationAddition } from "./layout-declaration-mapper";
-import { normalizeButtons, type ButtonNormalization } from "./button-normalizer";
+import {
+  normalizeComponents,
+  type BadgeNormalization,
+  type ButtonNormalization,
+  type TabsNormalization,
+} from "./component-normalizer";
 import { defaultTokenState } from "@/lib/tokens/defaults";
 import type { TokenState } from "@/lib/tokens/types";
 
@@ -54,6 +59,8 @@ export interface GatekeeperReport {
   componentPromotions: ComponentPromotion[];
   layoutDeclarationAdditions: LayoutDeclarationAddition[];
   buttonNormalizations: ButtonNormalization[];
+  badgeNormalizations: BadgeNormalization[];
+  tabsNormalizations: TabsNormalization[];
 }
 
 // ============================================================================
@@ -200,6 +207,8 @@ export function runGatekeeper(
     componentPromotions: [],
     layoutDeclarationAdditions: [],
     buttonNormalizations: [],
+    badgeNormalizations: [],
+    tabsNormalizations: [],
   };
 
   // Extension guard
@@ -217,6 +226,8 @@ export function runGatekeeper(
   let allPromotions: ComponentPromotion[] = [];
   let allLayoutDeclarationAdditions: LayoutDeclarationAddition[] = [];
   let allButtonNormalizations: ButtonNormalization[] = [];
+  let allBadgeNormalizations: BadgeNormalization[] = [];
+  let allTabsNormalizations: TabsNormalization[] = [];
 
   // ── Phase -1: Import Fixing ──
   try {
@@ -311,13 +322,15 @@ export function runGatekeeper(
     console.warn("[Gatekeeper] Color/spacing enforcement failed, skipping:", err);
   }
 
-  // ── Phase 6: Button Variant Normalization ──
+  // ── Phase 6: Component Normalization ──
   try {
-    const { code: normalizedButtons, normalizations } = normalizeButtons(currentCode);
-    currentCode = normalizedButtons;
-    allButtonNormalizations = normalizations;
+    const normalized = normalizeComponents(currentCode);
+    currentCode = normalized.code;
+    allButtonNormalizations = normalized.buttonNormalizations;
+    allBadgeNormalizations = normalized.badgeNormalizations;
+    allTabsNormalizations = normalized.tabsNormalizations;
   } catch (err) {
-    console.warn("[Gatekeeper] Button normalization failed, skipping:", err);
+    console.warn("[Gatekeeper] Component normalization failed, skipping:", err);
   }
 
   // ── Final Safety Net: Babel Parse Validation ──
@@ -345,6 +358,8 @@ export function runGatekeeper(
         allPromotions = [];
         allLayoutDeclarationAdditions = [];
         allButtonNormalizations = [];
+        allBadgeNormalizations = [];
+        allTabsNormalizations = [];
       }
     }
   }
@@ -357,7 +372,9 @@ export function runGatekeeper(
     allTypographyViolations.length > 0 ||
     allPromotions.length > 0 ||
     allLayoutDeclarationAdditions.length > 0 ||
-    allButtonNormalizations.length > 0;
+    allButtonNormalizations.length > 0 ||
+    allBadgeNormalizations.length > 0 ||
+    allTabsNormalizations.length > 0;
 
   return {
     code: currentCode,
@@ -371,6 +388,8 @@ export function runGatekeeper(
       componentPromotions: allPromotions,
       layoutDeclarationAdditions: allLayoutDeclarationAdditions,
       buttonNormalizations: allButtonNormalizations,
+      badgeNormalizations: allBadgeNormalizations,
+      tabsNormalizations: allTabsNormalizations,
     },
   };
 }

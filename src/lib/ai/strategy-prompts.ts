@@ -13,6 +13,14 @@ export const DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT = `## DESIGN SYSTEM ENFORCEME
   - Destructive action -> \`<Button variant="destructive">\`
   - Outline, ghost, and link styles -> the matching \`Button\` variants
 - Use \`className\` on \`Button\` for layout, spacing, width, alignment, icon gap, and positioning. Do NOT use \`className\` to restyle button background/text colors for solid buttons.
+- For badges, prefer the \`Badge\` component's \`variant\` prop instead of custom color overrides:
+  - Default status -> \`<Badge>\` or \`<Badge variant="default">\`
+  - Secondary/subtle status -> \`<Badge variant="secondary">\`
+  - Destructive status -> \`<Badge variant="destructive">\`
+  - Outline badge -> \`<Badge variant="outline">\`
+- Use \`className\` on \`Badge\` for spacing, sizing, alignment, and layout. Do NOT use \`className\` to recolor badges.
+- For tabs, use \`Tabs\`, \`TabsList\`, \`TabsTrigger\`, and \`TabsContent\` directly. Preserve the built-in muted list styling and active trigger styling.
+- Use \`className\` on \`TabsList\` and \`TabsTrigger\` only for width, spacing, sizing, alignment, and layout. Do NOT override their background or text colors with semantic token classes.
 
 ## BACKGROUND + TEXT PAIRING RULE (CRITICAL)
 
