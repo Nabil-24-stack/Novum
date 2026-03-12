@@ -1,10 +1,9 @@
 /**
  * Prompt for the annotation evaluation pass.
  *
- * After all pages are built (with `data-strategy-id` tags), a single API call
- * reviews all page code together with strategy context and critically decides
- * which tagged sections deserve annotations. Cross-page perspective lets it
- * compare importance and avoid redundancy.
+ * The evaluator can review either a single page or a multi-page app. The
+ * output schema stays identical in both modes so callers can process results
+ * page-by-page without any special casing.
  */
 
 interface PageCode {
@@ -19,6 +18,7 @@ export function buildAnnotationEvaluationPrompt(
   pagesCode: PageCode[],
   insightsContext?: string,
 ): string {
+  const isSinglePage = pagesCode.length === 1;
   const pagesSection = pagesCode
     .map(
       (p) =>
@@ -30,7 +30,7 @@ export function buildAnnotationEvaluationPrompt(
     ? `\n\n## RESEARCH INSIGHTS\n\n${insightsContext}`
     : "";
 
-  return `You are a Product Strategy Evaluator. You are reviewing the code for a multi-page web application and deciding which UI sections have a strong, meaningful connection to the product strategy.
+  return `You are a Product Strategy Evaluator. You are reviewing ${isSinglePage ? "a web application page" : "the code for a multi-page web application"} and deciding which UI sections have a strong, meaningful connection to the product strategy.
 
 ## PRODUCT STRATEGY CONTEXT
 
@@ -38,13 +38,13 @@ ${overviewContext}
 
 ${personaContext}${insightsSection}
 
-## ALL PAGES CODE
+## ${isSinglePage ? "PAGE CODE" : "ALL PAGES CODE"}
 
 ${pagesSection}
 
 ## YOUR TASK
 
-Review every element with a \`data-strategy-id\` attribute across all pages. For each one, decide whether it represents a deliberate product decision worth annotating. Output connections ONLY for sections with strong strategic links.
+Review every element with a \`data-strategy-id\` attribute ${isSinglePage ? "on this page" : "across all pages"}. For each one, decide whether it represents a deliberate product decision worth annotating. Output connections ONLY for sections with strong strategic links.
 
 ## RELEVANCE THRESHOLD
 
@@ -89,8 +89,9 @@ The rationale must explain the design DECISION — why THIS approach over altern
 
 - 1-4 connections per page where connections are strong and non-obvious
 - Zero connections is acceptable for utility pages (settings, profile, etc.)
-- Across the entire app, aim for quality over quantity — 5-15 total connections is typical
-- Avoid redundancy: if two pages have similar sections (e.g., both have a "recent activity" feed), only annotate the primary instance
+${isSinglePage
+    ? "- Focus only on the strength of this page's strategic decisions. Do not invent cross-page comparisons."
+    : '- Across the entire app, aim for quality over quantity — 5-15 total connections is typical\n- Avoid redundancy: if two pages have similar sections (e.g., both have a "recent activity" feed), only annotate the primary instance'}
 
 ## OUTPUT FORMAT
 

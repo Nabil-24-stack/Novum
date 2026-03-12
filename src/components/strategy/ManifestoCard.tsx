@@ -18,6 +18,7 @@ interface ManifestoCardProps {
   jtbdCoverage?: JtbdCoverage[];
   coverageSummary?: CoverageSummary | null;
   coverageDisplayState: CoverageDisplayState;
+  coverageProgressNote?: string | null;
   onAddressGaps?: () => void;
 }
 
@@ -29,6 +30,7 @@ export function ManifestoCard({
   jtbdCoverage,
   coverageSummary,
   coverageDisplayState,
+  coverageProgressNote,
   onAddressGaps,
 }: ManifestoCardProps) {
   const canvasScale = useCanvasScale();
@@ -198,6 +200,11 @@ export function ManifestoCard({
                   <p className="text-sm text-neutral-500 mt-1">
                     of jobs-to-be-done addressed
                   </p>
+                  {coverageProgressNote && (
+                    <p className="text-xs text-neutral-400 mt-2">
+                      {coverageProgressNote}
+                    </p>
+                  )}
                 </div>
 
                 {coverageSummary.personaCoverage.length > 0 && (

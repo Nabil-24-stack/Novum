@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import { useEffect, useRef, useState, useCallback, useMemo, DragEvent, ClipboardEvent, FormEvent } from "react";
-import { Send, Loader2, X, ImagePlus, ChevronDown, ArrowRight, Check, AlertTriangle, Square, FileText } from "lucide-react";
+import { Send, Loader2, X, ImagePlus, ChevronDown, ArrowRight, Check, AlertTriangle, Square, FileText, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { useChatContextStore, type PinnedElement, type AddressGapsPayload } from "@/hooks/useChatContextStore";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
@@ -1334,6 +1334,18 @@ export function ChatTab({
     sharedContext: { manifestoContext: string; personaContext: string; flowContext: string };
   } | null>(null);
   const parallelPageNamesRef = useRef<Record<string, { name: string; route: string }>>({});
+  const failedAnnotationPageNames = useMemo(
+    () =>
+      annotationEvaluation.failedPageIds.map(
+        (pageId) => parallelPageNamesRef.current[pageId]?.name ?? pageId
+      ),
+    [annotationEvaluation.failedPageIds]
+  );
+  const annotationProcessedPages = annotationEvaluation.completedPages + annotationEvaluation.failedPages;
+  const annotationActiveStep = Math.min(
+    annotationEvaluation.totalPages,
+    annotationProcessedPages + (annotationEvaluation.activePageId ? 1 : 0)
+  );
 
   const { messages, sendMessage, status, error, stop } = useChat({
     messages: initialMessages,
@@ -3597,6 +3609,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
               onStopVerification={(pageId) => {
                 parallelBuild.stopVerification(pageId);
               }}
+              onRetryAnnotation={(pageId) => {
+                parallelBuild.retryAnnotation(pageId);
+              }}
             />
           </div>
         )}
@@ -3608,11 +3623,17 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
               {annotationEvaluation.status === "evaluating" && (
                 <div className="space-y-2">
                   <p>
-                    Now I&apos;m evaluating strategy annotations across all pages. I&apos;m reviewing each UI section to identify which ones represent deliberate product decisions tied to your personas and jobs-to-be-done...
+                    {annotationEvaluation.totalPages > 0
+                      ? <>Annotating {annotationEvaluation.activePageName || "the next screen"} ({annotationActiveStep} of {annotationEvaluation.totalPages}). I&apos;m reviewing tagged sections and keeping only the ones that clearly reflect a deliberate product decision tied to your personas and jobs-to-be-done.</>
+                      : "I'm annotating the generated screens and mapping strategic decisions back to your personas and jobs-to-be-done."}
                   </p>
                   <div className="flex items-center gap-2 text-xs text-neutral-500">
                     <Loader2 className="w-3 h-3 animate-spin" />
-                    <span>Analyzing sections and mapping to strategy artifacts</span>
+                    <span>
+                      {annotationEvaluation.completedPages > 0 || annotationEvaluation.failedPages > 0
+                        ? `${annotationProcessedPages} page${annotationProcessedPages === 1 ? "" : "s"} finished so far`
+                        : "Analyzing sections and mapping them to strategy artifacts"}
+                    </span>
                   </div>
                 </div>
               )}
@@ -3620,24 +3641,45 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 <div className="space-y-1">
                   <p>
                     {annotationEvaluation.connectionCount > 0
-                      ? <>Strategy evaluation complete — I mapped <strong>{annotationEvaluation.connectionCount}</strong> annotation{annotationEvaluation.connectionCount > 1 ? "s" : ""} across your pages. Each one connects a UI section to a specific persona need or job-to-be-done. Toggle the annotation button on any frame header to see them.</>
-                      : "Strategy evaluation complete — no sections warranted annotations. The pages are utility-focused without strong strategic connections to flag."}
+                      ? <>Strategy annotation complete - I mapped <strong>{annotationEvaluation.connectionCount}</strong> annotation{annotationEvaluation.connectionCount > 1 ? "s" : ""} across {annotationEvaluation.completedPages} page{annotationEvaluation.completedPages === 1 ? "" : "s"}. Toggle the annotation button on any frame header to inspect them.</>
+                      : "Strategy annotation complete - no sections warranted annotations. The pages are utility-focused without strong strategic connections to flag."}
                   </p>
                   <div className="flex items-center gap-2 text-xs text-emerald-600">
                     <Check className="w-3 h-3" />
-                    <span>Evaluation complete</span>
+                    <span>Annotation complete</span>
                   </div>
                 </div>
               )}
               {annotationEvaluation.status === "error" && (
-                <div className="space-y-1">
+                <div className="space-y-2">
                   <p>
-                    I couldn&apos;t complete the strategy annotation evaluation, but your pages are fully built and working. You can still use the app — annotations just won&apos;t be available.
+                    {annotationEvaluation.connectionCount > 0
+                      ? "I annotated part of the app, but a few screens still need annotation retries. Your current convergence score reflects the pages that were evaluated successfully."
+                      : "I couldn't complete the strategy annotation pass, so convergence couldn't be calculated from this run yet."}
                   </p>
                   <div className="flex items-center gap-2 text-xs text-amber-600">
                     <AlertTriangle className="w-3 h-3" />
-                    <span>{annotationEvaluation.errorMessage || "Evaluation failed"}</span>
+                    <span>
+                      {annotationEvaluation.errorMessage || "Annotation evaluation failed"}
+                      {failedAnnotationPageNames.length > 0 ? ` — ${failedAnnotationPageNames.join(", ")}` : ""}
+                    </span>
                   </div>
+                  {annotationEvaluation.failedPageIds.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {annotationEvaluation.failedPageIds.map((pageId) => (
+                        <button
+                          key={pageId}
+                          onClick={() => {
+                            parallelBuild.retryAnnotation(pageId);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 transition-colors hover:bg-amber-100"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          Retry {parallelPageNamesRef.current[pageId]?.name ?? pageId}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

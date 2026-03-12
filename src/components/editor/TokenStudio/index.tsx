@@ -30,7 +30,7 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
 export function TokenStudio({ tokenState }: TokenStudioProps) {
   const [activeTab, setActiveTab] = useState<TabId>("palette");
   const [view, setView] = useState<ViewMode>("presets");
-  const currentPresetId = tokenState.tokens.activePresetId ?? "arctic";
+  const currentPresetId = tokenState.tokens.activePresetId ?? "monochrome";
 
   const {
     tokens,

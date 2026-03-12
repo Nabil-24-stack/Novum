@@ -14,6 +14,7 @@ interface BuildProgressCardsProps {
   onRetry: (pageId: string) => void;
   onFixInChat: (pageId: string) => void;
   onRetryAllFailed: () => void;
+  onRetryAnnotation?: (pageId: string) => void;
   onStopVerification?: (pageId: string) => void;
 }
 
@@ -27,6 +28,7 @@ export function BuildProgressCards({
   onRetry,
   onFixInChat,
   onRetryAllFailed,
+  onRetryAnnotation,
   onStopVerification,
 }: BuildProgressCardsProps) {
   const entries = Object.entries(pageBuilds);
@@ -40,18 +42,26 @@ export function BuildProgressCards({
   const buildFailedCount = entries.filter(([, s]) => s.buildStage === "build_failed").length;
   const verifyFailedCount = entries.filter(([, s]) => s.buildStage === "verify_failed").length;
   const pendingCount = entries.filter(([, s]) => s.buildStage === "pending").length;
+  const annotationQueuedCount = entries.filter(([, s]) => s.annotationStatus === "queued").length;
+  const annotationEvaluatingCount = entries.filter(([, s]) => s.annotationStatus === "evaluating").length;
+  const annotationDoneCount = entries.filter(([, s]) => s.annotationStatus === "done").length;
+  const annotationErrorCount = entries.filter(([, s]) => s.annotationStatus === "error").length;
   const totalCount = entries.length;
   const failedCount = buildFailedCount + verifyFailedCount;
-  const allTerminal = entries.every(([, s]) => {
+  const allBuildTerminal = entries.every(([, s]) => {
     const st = s.buildStage;
     return st === "verified" || st === "unchanged" || st === "build_failed" || st === "verify_failed";
   });
+  const verifiedForAnnotationCount = entries.filter(([, s]) => s.buildStage === "verified").length;
+  const completedAnnotationCount = annotationDoneCount + annotationErrorCount;
 
   // Build a rich status line
   const statusParts: string[] = [];
   if (streamingCount > 0) statusParts.push(`${streamingCount} streaming`);
   if (verifyingCount > 0) statusParts.push(`${verifyingCount} verifying`);
   if (queuedCount > 0) statusParts.push(`${queuedCount} queued`);
+  if (annotationEvaluatingCount > 0) statusParts.push(`${annotationEvaluatingCount} annotating`);
+  if (annotationQueuedCount > 0) statusParts.push(`${annotationQueuedCount} annotation queued`);
   if (pendingCount > 0) statusParts.push(`${pendingCount} pending`);
   if (unchangedCount > 0) statusParts.push(`${unchangedCount} unchanged`);
   const completedCount = verifiedCount + unchangedCount;
@@ -60,6 +70,9 @@ export function BuildProgressCards({
   // Card background color based on buildStage
   function cardClasses(build: PageBuildState): string {
     const stage = build.buildStage;
+    if (stage === "verified" && build.annotationStatus === "evaluating") return "bg-blue-50 border-blue-200";
+    if (stage === "verified" && build.annotationStatus === "queued") return "bg-yellow-50 border-yellow-200";
+    if (stage === "verified" && build.annotationStatus === "error") return "bg-amber-50 border-amber-200";
     if (stage === "verifying") return "bg-blue-50 border-blue-200";
     if (stage === "verified") return "bg-emerald-50 border-emerald-200";
     if (stage === "unchanged") return "bg-neutral-50 border-neutral-200";
@@ -149,7 +162,16 @@ export function BuildProgressCards({
               {stage === "verifying" && (
                 <Eye className="w-4 h-4 text-blue-500 animate-pulse" />
               )}
-              {stage === "verified" && (
+              {stage === "verified" && build.annotationStatus === "queued" && (
+                <Clock className="w-4 h-4 text-yellow-600" />
+              )}
+              {stage === "verified" && build.annotationStatus === "evaluating" && (
+                <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+              )}
+              {stage === "verified" && build.annotationStatus === "error" && (
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+              )}
+              {stage === "verified" && (build.annotationStatus === "done" || build.annotationStatus === "idle") && (
                 <ShieldCheck className="w-4 h-4 text-emerald-600" />
               )}
               {stage === "unchanged" && (
@@ -196,9 +218,37 @@ export function BuildProgressCards({
                 </span>
               )}
               {stage === "verified" && (
-                <span className="text-xs text-emerald-600">
-                  Verified
-                </span>
+                <div className="space-y-1">
+                  {build.annotationStatus === "queued" && (
+                    <span className="text-xs text-yellow-700 block">
+                      Verified - queued for strategy annotation...
+                    </span>
+                  )}
+                  {build.annotationStatus === "evaluating" && (
+                    <span className="text-xs text-blue-600 block">
+                      Verified - mapping strategic sections to personas and jobs-to-be-done...
+                    </span>
+                  )}
+                  {(build.annotationStatus === "idle" || build.annotationStatus === "done") && (
+                    <span className="text-xs text-emerald-600 block">
+                      {build.annotationStatus === "done"
+                        ? build.annotationConnectionCount > 0
+                          ? `Verified - ${build.annotationConnectionCount} strategic annotation${build.annotationConnectionCount === 1 ? "" : "s"} mapped`
+                          : "Verified - no strategic annotations needed"
+                        : "Verified"}
+                    </span>
+                  )}
+                  {build.annotationStatus === "error" && (
+                    <>
+                      <span className="text-xs text-amber-700 block">
+                        Annotation failed for this page
+                      </span>
+                      <span className="text-xs text-amber-600 block">
+                        {build.annotationError || "The evaluator could not map this screen to the strategy."}
+                      </span>
+                    </>
+                  )}
+                </div>
               )}
               {stage === "unchanged" && (
                 <span className="text-xs text-neutral-500">
@@ -262,6 +312,15 @@ export function BuildProgressCards({
                 Fix in Chat
               </button>
             )}
+            {stage === "verified" && build.annotationStatus === "error" && onRetryAnnotation && (
+              <button
+                onClick={() => onRetryAnnotation(pageId)}
+                className="shrink-0 inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-900 bg-white border border-amber-300 rounded hover:bg-amber-100 transition-colors"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Retry Annotation
+              </button>
+            )}
           </div>
         );
       })}
@@ -284,7 +343,7 @@ export function BuildProgressCards({
       {/* Bottom summary / actions */}
       <div className="flex items-center justify-between pt-2 border-t border-neutral-200 mt-1">
         <div className="text-sm text-neutral-600">
-          {!allTerminal ? (
+          {!allBuildTerminal ? (
             <span className="flex items-center gap-2">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               Building pages...
@@ -293,19 +352,31 @@ export function BuildProgressCards({
                 {unchangedCount > 0 && <span className="text-neutral-400">, {unchangedCount} unchanged</span>}
               </span>
             </span>
+          ) : annotationEvaluatingCount > 0 || annotationQueuedCount > 0 ? (
+            <span className="flex items-center gap-2">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Annotating strategy...
+              <span className="text-neutral-400">
+                ({completedAnnotationCount}/{verifiedForAnnotationCount})
+              </span>
+            </span>
           ) : failedCount > 0 ? (
             <span className="text-red-600">
               {failedCount} page{failedCount !== 1 ? "s" : ""} failed
             </span>
+          ) : annotationErrorCount > 0 ? (
+            <span className="text-amber-600">
+              Annotation failed on {annotationErrorCount} page{annotationErrorCount !== 1 ? "s" : ""}
+            </span>
           ) : (
             <span className="text-emerald-600 font-medium flex items-center gap-1.5">
               <Check className="w-3.5 h-3.5" />
-              All pages built!
+              All pages built and annotated!
             </span>
           )}
         </div>
 
-        {allTerminal && buildFailedCount > 0 && (
+        {allBuildTerminal && buildFailedCount > 0 && (
           <button
             onClick={onRetryAllFailed}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-700 bg-neutral-100 rounded-lg hover:bg-neutral-200 transition-colors"

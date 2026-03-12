@@ -95,7 +95,9 @@ export async function POST(req: Request) {
       messages: [
         {
           role: "user",
-          content: `Review all ${pages.length} pages and output the decision-connections JSON for sections with strong strategic links. Remember: quality over quantity, and zero connections is fine for utility pages.`,
+          content: pages.length === 1
+            ? `Review this page and output the decision-connections JSON for sections with strong strategic links. Zero connections is fine if nothing on the page reflects a meaningful strategic decision.`
+            : `Review all ${pages.length} pages and output the decision-connections JSON for sections with strong strategic links. Remember: quality over quantity, and zero connections is fine for utility pages.`,
         },
       ],
       providerOptions: {

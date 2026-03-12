@@ -14,7 +14,7 @@ import { runVerificationLoop, detectErrors, sleep, POST_SETTLE_DELAY_MS, type Ve
 import { isIframeAvailable } from "@/lib/verification/screenshot-capture";
 import { waitForSandpackSettle as waitForSandpackSettleStore } from "@/hooks/useSandpackErrorStore";
 import { buildProductBrainFromEvaluation } from "@/lib/product-brain/snapshot";
-import type { ProductBrainData } from "@/lib/product-brain/types";
+import type { DecisionConnection, ProductBrainData } from "@/lib/product-brain/types";
 import { toast } from "sonner";
 
 export interface PageBuildConfig {
@@ -34,6 +34,31 @@ interface SharedContext {
 }
 
 const MAX_CONCURRENCY = 3;
+const DEFAULT_ANNOTATION_RETRY_DELAYS_MS = [1000, 3000];
+const DEFAULT_ANNOTATION_ERROR = "Annotation evaluation failed";
+
+export interface AnnotationEvaluationResponse {
+  pages: Array<{
+    pageId: string;
+    pageName: string;
+    connections: DecisionConnection[];
+  }>;
+}
+
+export type AnnotationEvaluationResult =
+  | {
+      ok: true;
+      pages: AnnotationEvaluationResponse["pages"];
+    }
+  | {
+      ok: false;
+      errorMessage: string;
+    };
+
+interface AnnotationRetryOptions {
+  initialDelayMs?: number;
+  retryDelaysMs?: number[];
+}
 
 // Ensure every .tsx file has `import * as React from "react"` so JSX works in Sandpack's classic transform
 function ensureReactImport(code: string): string {
@@ -120,7 +145,8 @@ export async function evaluateAnnotationsStandalone(
   insightsContext: string | undefined,
   modelId: string,
   flowManifestPages?: { id: string; name: string; route: string }[],
-): Promise<{ pages: Array<{ pageId: string; pageName: string; connections: import("@/lib/product-brain/types").DecisionConnection[] }> } | null> {
+  options?: AnnotationRetryOptions,
+): Promise<AnnotationEvaluationResult> {
   // Collect code for all page files in VFS
   const pagesCode: { pageId: string; pageName: string; code: string }[] = [];
   for (const [path, content] of Object.entries(files)) {
@@ -136,15 +162,23 @@ export async function evaluateAnnotationsStandalone(
     }
   }
 
-  if (pagesCode.length === 0) return null;
+  if (pagesCode.length === 0) {
+    return { ok: false, errorMessage: "No page code was available for annotation evaluation" };
+  }
 
-  const MAX_RETRIES = 2;
-  const RETRY_DELAYS = [3000, 8000]; // 3s, 8s backoff
+  const retryDelays = options?.retryDelaysMs ?? DEFAULT_ANNOTATION_RETRY_DELAYS_MS;
+  const maxRetries = retryDelays.length;
+  let lastErrorMessage = DEFAULT_ANNOTATION_ERROR;
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      const delay = RETRY_DELAYS[attempt - 1] ?? 8000;
-      console.log(`[evaluateAnnotationsStandalone] Retry ${attempt}/${MAX_RETRIES} in ${delay}ms...`);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt === 0) {
+      const initialDelay = options?.initialDelayMs ?? 0;
+      if (initialDelay > 0) {
+        await new Promise((r) => setTimeout(r, initialDelay));
+      }
+    } else {
+      const delay = retryDelays[attempt - 1] ?? retryDelays[retryDelays.length - 1] ?? 0;
+      console.log(`[evaluateAnnotationsStandalone] Retry ${attempt}/${maxRetries} in ${delay}ms...`);
       await new Promise((r) => setTimeout(r, delay));
     }
 
@@ -163,23 +197,51 @@ export async function evaluateAnnotationsStandalone(
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        console.warn(`[evaluateAnnotationsStandalone] Attempt ${attempt + 1} failed:`, body?.detail || response.status);
+        lastErrorMessage =
+          typeof body?.detail === "string"
+            ? body.detail
+            : typeof body?.error === "string"
+              ? body.error
+              : `HTTP ${response.status}`;
+        console.warn(`[evaluateAnnotationsStandalone] Attempt ${attempt + 1} failed:`, lastErrorMessage);
         continue; // Retry
       }
 
-      return await response.json();
+      const result = (await response.json()) as AnnotationEvaluationResponse;
+      if (!Array.isArray(result?.pages)) {
+        lastErrorMessage = "Annotation evaluator returned an invalid response";
+        continue;
+      }
+
+      return { ok: true, pages: result.pages };
     } catch (err) {
       console.warn(`[evaluateAnnotationsStandalone] Attempt ${attempt + 1} error:`, err);
+      lastErrorMessage = err instanceof Error ? err.message : DEFAULT_ANNOTATION_ERROR;
       continue; // Retry
     }
   }
 
   console.warn("[evaluateAnnotationsStandalone] Failed after all retries");
-  return null;
+  return { ok: false, errorMessage: lastErrorMessage };
 }
 
 function countConnections(brainData: ProductBrainData): number {
   return brainData.pages.reduce((sum, page) => sum + page.connections.length, 0);
+}
+
+function buildInsightsContext() {
+  const insightsData = useDocumentStore.getState().insightsData;
+  return insightsData
+    ? insightsData.insights
+        .map((ins, i) => {
+          const parts = [`${i}. ${ins.insight}`];
+          if (ins.sourceDocument) parts.push(`Source: ${ins.sourceDocument}`);
+          if (ins.quote) parts.push(`Quote: "${ins.quote}"`);
+          if (ins.source === "conversation") parts.push("(from conversation)");
+          return parts.join(" — ");
+        })
+        .join("\n")
+    : undefined;
 }
 
 export function useParallelBuild({
@@ -199,11 +261,127 @@ export function useParallelBuild({
   const sharedContextRef = useRef<SharedContext | null>(null);
   const evaluationTriggeredRef = useRef(false);
   const rebuildTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const annotationProcessingRef = useRef(false);
 
   // Mutable build-local VFS snapshot for parallel builds
   const latestBuildFilesRef = useRef<Record<string, string>>({});
   // Accumulated error/fix summaries across the build session
   const knownFailuresRef = useRef<Array<{ pageName: string; error: string; fix?: string }>>([]);
+
+  const persistCurrentBrainSnapshot = useCallback(() => {
+    const brainData = useProductBrainStore.getState().brainData;
+    if (!brainData) return null;
+    const serializedBrain = JSON.stringify(brainData, null, 2);
+    writeFile("/product-brain.json", serializedBrain);
+    latestBuildFilesRef.current["/product-brain.json"] = serializedBrain;
+    return brainData;
+  }, [writeFile]);
+
+  const syncAnnotationEvaluationFromPageBuilds = useCallback((update?: Partial<ReturnType<typeof useStreamingStore.getState>["annotationEvaluation"]>) => {
+    const store = useStreamingStore.getState();
+    const pages = allPagesRef.current;
+    const completedPages = pages.filter((page) => store.pageBuilds[page.pageId]?.annotationStatus === "done").length;
+    const failedPageIds = pages
+      .filter((page) => store.pageBuilds[page.pageId]?.annotationStatus === "error")
+      .map((page) => page.pageId);
+    const failedPages = failedPageIds.length;
+    const totalPages = pages.length;
+    const connectionCount = countConnections(useProductBrainStore.getState().brainData ?? { version: 1, pages: [] });
+    const hasQueueWork = store.annotationQueue.length > 0 || Boolean(store.annotationActive);
+    const hasRemainingWork = pages.some((page) => {
+      const build = store.pageBuilds[page.pageId];
+      const stage = build?.buildStage;
+      const annotationStatus = build?.annotationStatus;
+
+      if (stage === "verified") {
+        return annotationStatus !== "done" && annotationStatus !== "error";
+      }
+
+      return stage !== "build_failed" && stage !== "verify_failed" && stage !== "unchanged";
+    });
+
+    const defaultStatus =
+      hasQueueWork || hasRemainingWork
+        ? "evaluating"
+        : failedPages > 0
+          ? "error"
+          : totalPages > 0 && completedPages + failedPages >= totalPages
+            ? "done"
+            : connectionCount > 0
+              ? "done"
+              : "idle";
+
+    const activePage = store.annotationActive
+      ? allPagesRef.current.find((page) => page.pageId === store.annotationActive)
+      : null;
+
+    useStreamingStore.getState().setAnnotationEvaluation({
+      status: defaultStatus,
+      connectionCount,
+      activePageId: store.annotationActive,
+      activePageName: activePage?.pageName ?? null,
+      completedPages,
+      failedPages,
+      failedPageIds,
+      totalPages,
+      errorMessage: failedPages > 0 ? store.annotationEvaluation.errorMessage : undefined,
+      ...update,
+    });
+  }, []);
+
+  const markPageAnnotationSkipped = useCallback((pageId: string, reason: string) => {
+    useStreamingStore.getState().updatePageAnnotation(pageId, "error", {
+      connectionCount: 0,
+      error: reason,
+    });
+    syncAnnotationEvaluationFromPageBuilds({
+      errorMessage: reason,
+    });
+  }, [syncAnnotationEvaluationFromPageBuilds]);
+
+  const evaluateSinglePageAnnotations = useCallback(async (
+    page: PageBuildConfig,
+    options?: AnnotationRetryOptions,
+  ): Promise<AnnotationEvaluationResult> => {
+    const context = sharedContextRef.current;
+    if (!context) {
+      return { ok: false, errorMessage: "Missing strategy context for annotation evaluation" };
+    }
+
+    const pagePath = `/pages/${page.componentName}.tsx`;
+    const pageCode = getLatestFile(pagePath) ?? latestBuildFilesRef.current[pagePath] ?? files[pagePath];
+    if (!pageCode?.trim()) {
+      return { ok: false, errorMessage: "No generated page code was available to annotate" };
+    }
+
+    return evaluateAnnotationsStandalone(
+      { [pagePath]: pageCode },
+      context.manifestoContext,
+      context.personaContext,
+      buildInsightsContext(),
+      modelIdRef.current,
+      [{ id: page.pageId, name: page.pageName, route: page.pageRoute }],
+      options,
+    );
+  }, [files, getLatestFile]);
+
+  const applySinglePageAnnotationResult = useCallback((page: PageBuildConfig, evaluatedPages: AnnotationEvaluationResponse["pages"]) => {
+    const normalized = buildProductBrainFromEvaluation(evaluatedPages, [
+      { pageId: page.pageId, pageName: page.pageName },
+    ]);
+    const nextPage = normalized.pages[0];
+    if (!nextPage) {
+      return { pageConnectionCount: 0, totalConnections: countConnections(useProductBrainStore.getState().brainData ?? { version: 1, pages: [] }) };
+    }
+
+    useProductBrainStore.getState().addPageDecisions(nextPage);
+    useStrategyStore.getState().setCoverageDisplayState("ready");
+    const persistedBrain = persistCurrentBrainSnapshot();
+    return {
+      pageConnectionCount: nextPage.connections.length,
+      totalConnections: persistedBrain ? countConnections(persistedBrain) : countConnections({ version: 1, pages: [nextPage] }),
+    };
+  }, [persistCurrentBrainSnapshot]);
 
   // Core rebuild logic — generates and writes /App.tsx with only appropriate pages
   const doRebuildAppTsx = useCallback(() => {
@@ -263,182 +441,182 @@ export function useParallelBuild({
     }
   }, [doRebuildAppTsx]);
 
-  // After ALL pages are built, run a single evaluation pass to generate annotations.
-  // Retries with exponential backoff on model/API failures.
+  const processAnnotationQueueRef = useRef<(signal: AbortSignal) => Promise<void>>(async () => {});
+
   const evaluateAnnotations = useCallback(async () => {
-    const context = sharedContextRef.current;
-    if (!context) return;
-
     const pages = allPagesRef.current;
-    const expectedPages = pages.map((page) => ({
-      pageId: page.pageId,
-      pageName: page.pageName,
-    }));
+    if (pages.length === 0) return;
 
-    // Collect code for all completed pages using getLatestFile (bypasses stale React state)
-    const pagesCode: { pageId: string; pageName: string; code: string }[] = [];
+    useStreamingStore.getState().setAnnotationEvaluating({
+      connectionCount: countConnections(useProductBrainStore.getState().brainData ?? { version: 1, pages: [] }),
+      activePageId: null,
+      activePageName: null,
+      completedPages: 0,
+      failedPages: 0,
+      failedPageIds: [],
+      totalPages: pages.length,
+      errorMessage: undefined,
+    });
+
+    let completedPages = 0;
+    const failedPageIds: string[] = [];
+    let lastErrorMessage: string | undefined;
+
     for (const page of pages) {
-      const filePath = `/pages/${page.componentName}.tsx`;
-      const code = getLatestFile(filePath);
-      if (code) {
-        pagesCode.push({ pageId: page.pageId, pageName: page.pageName, code });
-      }
-    }
+      useStreamingStore.getState().setAnnotationEvaluating({
+        activePageId: page.pageId,
+        activePageName: page.pageName,
+        completedPages,
+        failedPages: failedPageIds.length,
+        failedPageIds,
+        totalPages: pages.length,
+        errorMessage: undefined,
+      });
 
-    if (pagesCode.length === 0) return;
+      const result = await evaluateSinglePageAnnotations(page, {
+        initialDelayMs: completedPages + failedPageIds.length === 0 ? 500 : 0,
+      });
 
-    useStreamingStore.getState().setAnnotationEvaluating();
-
-    // Get insights context if available
-    const insightsData = useDocumentStore.getState().insightsData;
-    const insightsContext = insightsData
-      ? insightsData.insights.map((ins, i) => {
-          const parts = [`${i}. ${ins.insight}`];
-          if (ins.sourceDocument) parts.push(`Source: ${ins.sourceDocument}`);
-          if (ins.quote) parts.push(`Quote: "${ins.quote}"`);
-          if (ins.source === "conversation") parts.push(`(from conversation)`);
-          return parts.join(" — ");
-        }).join("\n")
-      : undefined;
-
-    const MAX_RETRIES = 3;
-    const RETRY_DELAYS = [3000, 8000, 15000]; // 3s, 8s, 15s backoff
-
-    let lastError: unknown = null;
-    let success = false;
-
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      // Brief delay before first attempt to let the model API cool down after the build
-      if (attempt === 0) {
-        await new Promise((r) => setTimeout(r, 2000));
-      } else {
-        // Exponential backoff for retries
-        const delay = RETRY_DELAYS[attempt - 1] ?? 15000;
-        console.log(`[Build] Annotation evaluation retry ${attempt}/${MAX_RETRIES} in ${delay}ms...`);
-        await new Promise((r) => setTimeout(r, delay));
-      }
-
-      try {
-        const response = await fetch("/api/evaluate-annotations", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            pages: pagesCode,
-            manifestoContext: context.manifestoContext,
-            personaContext: context.personaContext,
-            insightsContext,
-            modelId: modelIdRef.current,
-          }),
+      if (result.ok) {
+        const { totalConnections } = applySinglePageAnnotationResult(page, result.pages);
+        completedPages += 1;
+        useStreamingStore.getState().setAnnotationEvaluating({
+          connectionCount: totalConnections,
+          activePageId: null,
+          activePageName: null,
+          completedPages,
+          failedPages: failedPageIds.length,
+          failedPageIds,
+          totalPages: pages.length,
+          errorMessage: undefined,
         });
-
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}));
-          const detail = body?.detail || `HTTP ${response.status}`;
-          console.warn(`[Build] Annotation evaluation attempt ${attempt + 1} failed:`, detail);
-          lastError = new Error(detail);
-          continue; // Retry
-        }
-
-        const result = await response.json();
-        const evaluatedPages = result?.pages;
-
-        if (Array.isArray(evaluatedPages)) {
-          const brainData = buildProductBrainFromEvaluation(evaluatedPages, expectedPages);
-          useProductBrainStore.getState().setBrainData(brainData);
-          useStrategyStore.getState().setCoverageDisplayState("ready");
-          const serializedBrain = JSON.stringify(brainData, null, 2);
-          writeFile("/product-brain.json", serializedBrain);
-          latestBuildFilesRef.current["/product-brain.json"] = serializedBrain;
-
-          const totalConnections = countConnections(brainData);
-          useStreamingStore.getState().setAnnotationDone(totalConnections);
-          success = true;
-          break; // Success — exit retry loop
-        }
-      } catch (err) {
-        console.warn(`[Build] Annotation evaluation attempt ${attempt + 1} error:`, err);
-        lastError = err;
-        continue; // Retry
+      } else {
+        failedPageIds.push(page.pageId);
+        lastErrorMessage = result.errorMessage;
+        useStreamingStore.getState().setAnnotationEvaluating({
+          activePageId: null,
+          activePageName: null,
+          completedPages,
+          failedPages: failedPageIds.length,
+          failedPageIds,
+          totalPages: pages.length,
+          errorMessage: result.errorMessage,
+        });
       }
     }
 
-    if (!success) {
-      console.warn("[Build] Annotation evaluation failed after all retries:", lastError);
-      useStreamingStore.getState().setAnnotationError("Annotation evaluation failed — use the retry button to try again");
+    const totalConnections = countConnections(useProductBrainStore.getState().brainData ?? { version: 1, pages: [] });
+    if (failedPageIds.length > 0) {
+      useStreamingStore.getState().setAnnotationError(
+        lastErrorMessage || "Some pages could not be annotated",
+        {
+          connectionCount: totalConnections,
+          activePageId: null,
+          activePageName: null,
+          completedPages,
+          failedPages: failedPageIds.length,
+          failedPageIds,
+          totalPages: pages.length,
+        }
+      );
       if (!useProductBrainStore.getState().brainData) {
         useStrategyStore.getState().setCoverageDisplayState("unavailable");
       }
-      toast.error("Annotations could not be generated. Click the retry button to try again.");
+    } else {
+      useStreamingStore.getState().setAnnotationDone(totalConnections, {
+        activePageId: null,
+        activePageName: null,
+        completedPages,
+        failedPages: 0,
+        failedPageIds: [],
+        totalPages: pages.length,
+      });
     }
+  }, [applySinglePageAnnotationResult, evaluateSinglePageAnnotations]);
 
-    // Always transition to complete, even on failure
-    useStrategyStore.getState().setPhase("complete");
-    useStreamingStore.getState().endParallelStreaming();
-    useStrategyStore.getState().setBuildingPages([]);
-    // Auto-dismiss annotation status after user has time to read it
-    setTimeout(() => {
-      useStreamingStore.getState().resetAnnotationEvaluation();
-    }, 6000);
-  }, [getLatestFile, writeFile]);
-
-  // Check if all pages are done and trigger evaluation (parallel fresh build path)
   const checkAllPagesComplete = useCallback(() => {
     if (evaluationTriggeredRef.current) return;
 
     const allPages = allPagesRef.current;
     if (allPages.length === 0) return;
 
-    if (useStreamingStore.getState().verificationPaused) return;
+    const store = useStreamingStore.getState();
+    if (store.verificationPaused) return;
 
-    const pageBuilds = useStreamingStore.getState().pageBuilds;
-    const isParallelFreshBuild = useStreamingStore.getState().parallelMode
-      && !sharedContextRef.current?.isRebuild;
+    const pageBuilds = store.pageBuilds;
+    const isParallelFreshBuild = store.parallelMode && !sharedContextRef.current?.isRebuild;
 
     if (isParallelFreshBuild) {
-      // In parallel fresh builds, check buildStage
-      const hasIncomplete = allPages.some((p) => {
-        const stage = pageBuilds[p.pageId]?.buildStage;
-        return stage !== "verified" && stage !== "build_failed" && stage !== "verify_failed";
+      const allBuildsTerminal = allPages.every((page) => {
+        const stage = pageBuilds[page.pageId]?.buildStage;
+        return stage === "verified" || stage === "build_failed" || stage === "verify_failed";
       });
-      if (hasIncomplete) return;
+      if (!allBuildsTerminal) return;
 
-      const hasFailed = allPages.some((p) => {
-        const stage = pageBuilds[p.pageId]?.buildStage;
+      if (store.verificationActive || store.verificationQueue.length > 0) return;
+      if (store.annotationActive || store.annotationQueue.length > 0) return;
+
+      const hasIncompleteAnnotations = allPages.some((page) => {
+        const build = pageBuilds[page.pageId];
+        const annotationStatus = build?.annotationStatus;
+        const stage = build?.buildStage;
+        if (stage === "verified") {
+          return annotationStatus !== "done" && annotationStatus !== "error";
+        }
+        if (stage === "build_failed" || stage === "verify_failed") {
+          return annotationStatus !== "error";
+        }
+        return true;
+      });
+      if (hasIncompleteAnnotations) return;
+
+      const hasBuildFailures = allPages.some((page) => {
+        const stage = pageBuilds[page.pageId]?.buildStage;
         return stage === "build_failed" || stage === "verify_failed";
       });
+      const failedAnnotationCount = allPages.filter(
+        (page) => pageBuilds[page.pageId]?.annotationStatus === "error"
+      ).length;
 
-      if (hasFailed) {
-        // Keep session open for retry — don't trigger evaluation
-        // But transition to complete if all are terminal (no more in-flight)
+      if (hasBuildFailures) {
+        syncAnnotationEvaluationFromPageBuilds();
         return;
       }
 
-      // All verified — trigger annotation evaluation
       evaluationTriggeredRef.current = true;
-      evaluateAnnotations();
-    } else {
-      // Legacy path: check completedPages
-      const completed = useStrategyStore.getState().completedPages;
-      const allDone = allPages.every((p) => completed.includes(p.pageId));
-      if (!allDone) return;
-
-      evaluationTriggeredRef.current = true;
-
-      // Check if any page failed verification — broken bundle makes annotations useless
-      const hasFailedVerification = allPages.some(
-        (p) => pageBuilds[p.pageId]?.verificationStatus === "failed"
-      );
-
-      if (hasFailedVerification) {
-        // Skip annotations, transition to complete
-        useStrategyStore.getState().setPhase("complete");
-        useStreamingStore.getState().endParallelStreaming();
-        useStrategyStore.getState().setBuildingPages([]);
-      } else {
-        evaluateAnnotations();
+      syncAnnotationEvaluationFromPageBuilds();
+      if (!useProductBrainStore.getState().brainData && failedAnnotationCount > 0) {
+        useStrategyStore.getState().setCoverageDisplayState("unavailable");
       }
+      useStrategyStore.getState().setPhase("complete");
+      useStreamingStore.getState().endParallelStreaming();
+      useStrategyStore.getState().setBuildingPages([]);
+      return;
     }
-  }, [evaluateAnnotations]);
+
+    const completed = useStrategyStore.getState().completedPages;
+    const allDone = allPages.every((page) => completed.includes(page.pageId));
+    if (!allDone) return;
+
+    evaluationTriggeredRef.current = true;
+
+    const hasFailedVerification = allPages.some(
+      (page) => pageBuilds[page.pageId]?.verificationStatus === "failed"
+    );
+
+    if (hasFailedVerification) {
+      useStrategyStore.getState().setPhase("complete");
+      useStreamingStore.getState().endParallelStreaming();
+      useStrategyStore.getState().setBuildingPages([]);
+      return;
+    }
+
+    void evaluateAnnotations().finally(() => {
+      useStrategyStore.getState().setPhase("complete");
+      useStreamingStore.getState().endParallelStreaming();
+      useStrategyStore.getState().setBuildingPages([]);
+    });
+  }, [evaluateAnnotations, syncAnnotationEvaluationFromPageBuilds]);
 
   // Map a file path like "/pages/Dashboard.tsx" to the matching PageBuildConfig
   const findPageForPath = useCallback((filePath: string): PageBuildConfig | undefined => {
@@ -974,6 +1152,7 @@ export function useParallelBuild({
       const message = err instanceof Error ? err.message : "Unknown error";
       useStreamingStore.getState().failPageBuild(page.pageId, message);
       useStreamingStore.getState().setPageBuildStage(page.pageId, "build_failed");
+      markPageAnnotationSkipped(page.pageId, "Skipped because this page failed to generate");
       console.error(`[Build] Failed to build ${page.pageName}:`, err);
 
       // Track build failures
@@ -984,7 +1163,94 @@ export function useParallelBuild({
     }
   };
 
-  // ─── Phase 3: Verification Queue ────────────────────────────────────
+  // ─── Phase 3: Annotation Queue ─────────────────────────────────────
+
+  const processAnnotationQueue = async (signal: AbortSignal) => {
+    if (annotationProcessingRef.current) return;
+    annotationProcessingRef.current = true;
+
+    try {
+      while (!signal.aborted) {
+        const store = useStreamingStore.getState();
+        if (store.annotationActive) break;
+
+        const nextPageId = store.dequeueAnnotation();
+        if (!nextPageId) break;
+
+        const page = allPagesRef.current.find((item) => item.pageId === nextPageId);
+        if (!page) continue;
+
+        store.setAnnotationActivePage(nextPageId);
+        store.updatePageAnnotation(nextPageId, "evaluating", {
+          connectionCount: 0,
+          error: undefined,
+        });
+        syncAnnotationEvaluationFromPageBuilds({
+          status: "evaluating",
+          activePageId: nextPageId,
+          activePageName: page.pageName,
+          errorMessage: undefined,
+        });
+
+        const annotationController = new AbortController();
+        abortControllersRef.current.set(`annotate-${nextPageId}`, annotationController);
+        const onBuildAbort = () => annotationController.abort();
+        signal.addEventListener("abort", onBuildAbort, { once: true });
+
+        try {
+          const result = await evaluateSinglePageAnnotations(page, {
+            initialDelayMs: 500,
+          });
+
+          if (result.ok) {
+            const { pageConnectionCount, totalConnections } = applySinglePageAnnotationResult(page, result.pages);
+            store.updatePageAnnotation(nextPageId, "done", {
+              connectionCount: pageConnectionCount,
+              error: undefined,
+            });
+            syncAnnotationEvaluationFromPageBuilds({
+              connectionCount: totalConnections,
+              activePageId: null,
+              activePageName: null,
+              errorMessage: undefined,
+            });
+          } else {
+            store.updatePageAnnotation(nextPageId, "error", {
+              connectionCount: 0,
+              error: result.errorMessage,
+            });
+            syncAnnotationEvaluationFromPageBuilds({
+              activePageId: null,
+              activePageName: null,
+              errorMessage: result.errorMessage,
+            });
+          }
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : DEFAULT_ANNOTATION_ERROR;
+          store.updatePageAnnotation(nextPageId, "error", {
+            connectionCount: 0,
+            error: errorMessage,
+          });
+          syncAnnotationEvaluationFromPageBuilds({
+            activePageId: null,
+            activePageName: null,
+            errorMessage: errorMessage,
+          });
+        } finally {
+          signal.removeEventListener("abort", onBuildAbort);
+          abortControllersRef.current.delete(`annotate-${nextPageId}`);
+          useStreamingStore.getState().setAnnotationActivePage(null);
+        }
+      }
+    } finally {
+      annotationProcessingRef.current = false;
+    }
+
+    checkAllPagesComplete();
+  };
+  processAnnotationQueueRef.current = processAnnotationQueue;
+
+  // ─── Phase 4: Verification Queue ────────────────────────────────────
 
   // Lock to prevent multiple queue processors from running simultaneously
   const verificationProcessingRef = useRef(false);
@@ -1077,6 +1343,10 @@ export function useParallelBuild({
                 attempt: 1,
                 issues: [earlyError],
               });
+              markPageAnnotationSkipped(
+                ownerPage.pageId,
+                "Skipped because this page still has verification errors"
+              );
               useStreamingStore.getState().addPageVerificationLog(
                 ownerPage.pageId,
                 `Verification paused — unresolved error belongs to ${ownerPage.pageName}`
@@ -1086,6 +1356,10 @@ export function useParallelBuild({
               useStreamingStore.getState().updatePageVerification(nextPageId, "idle", {
                 attempt: 0,
                 issues: [],
+              });
+              useStreamingStore.getState().updatePageAnnotation(nextPageId, "idle", {
+                connectionCount: 0,
+                error: undefined,
               });
               useStreamingStore.getState().setPageBuildStage(nextPageId, "queued_verification");
               useStreamingStore.getState().enqueueVerification(nextPageId);
@@ -1107,9 +1381,19 @@ export function useParallelBuild({
             useStrategyStore.getState().addVerifiedPage(nextPageId);
             useStreamingStore.getState().updatePageVerification(nextPageId, "passed");
             useStreamingStore.getState().addPageVerificationLog(nextPageId, "No errors detected");
+            useStreamingStore.getState().updatePageAnnotation(nextPageId, "queued", {
+              connectionCount: 0,
+              error: undefined,
+            });
+            useStreamingStore.getState().enqueueAnnotation(nextPageId);
+            syncAnnotationEvaluationFromPageBuilds({
+              status: "evaluating",
+              errorMessage: undefined,
+            });
             useStreamingStore.getState().setVerificationActive(null);
             signal.removeEventListener("abort", onBuildAbort);
             abortControllersRef.current.delete(`verify-${nextPageId}`);
+            processAnnotationQueueRef.current(signal);
             continue;
           }
 
@@ -1119,6 +1403,10 @@ export function useParallelBuild({
             attempt: 1,
             issues: [earlyError],
           });
+          markPageAnnotationSkipped(
+            nextPageId,
+            "Skipped because this page still has verification errors"
+          );
           useStreamingStore.getState().addPageVerificationLog(
             nextPageId,
             "Verification paused — take a screenshot of this error and send it in chat."
@@ -1138,6 +1426,10 @@ export function useParallelBuild({
                 useStreamingStore.getState().updatePageVerification(nextPageId, "failed", {
                   issues: ["Aborted"],
                 });
+                markPageAnnotationSkipped(
+                  nextPageId,
+                  "Skipped because verification was interrupted before annotation"
+                );
                 useStreamingStore.getState().pauseVerification(nextPageId, "Aborted");
                 doRebuildAppTsx();
               }
@@ -1150,6 +1442,10 @@ export function useParallelBuild({
             useStreamingStore.getState().updatePageVerification(nextPageId, "failed", {
               issues: ["Verification failed unexpectedly"],
             });
+            markPageAnnotationSkipped(
+              nextPageId,
+              "Skipped because verification failed unexpectedly"
+            );
             useStreamingStore.getState().pauseVerification(nextPageId, "Verification failed unexpectedly");
             doRebuildAppTsx();
             break;
@@ -1459,6 +1755,7 @@ export function useParallelBuild({
       evaluationTriggeredRef.current = false;
       knownFailuresRef.current = [];
       verificationProcessingRef.current = false;
+      annotationProcessingRef.current = false;
 
       // Initialize latestBuildFilesRef from current VFS
       latestBuildFilesRef.current = { ...files };
@@ -1575,6 +1872,12 @@ export function useParallelBuild({
         verificationIssues: [],
         verificationLog: [],
         buildStage: "pending",
+        annotationStatus: "idle",
+        annotationConnectionCount: 0,
+        annotationError: undefined,
+      });
+      syncAnnotationEvaluationFromPageBuilds({
+        errorMessage: undefined,
       });
 
       if (isParallelFresh) {
@@ -1602,6 +1905,13 @@ export function useParallelBuild({
     (pageId: string) => {
       // Reset verification state (clears log)
       useStreamingStore.getState().updatePageVerification(pageId, "idle", { attempt: 0, issues: [] });
+      useStreamingStore.getState().updatePageAnnotation(pageId, "idle", {
+        connectionCount: 0,
+        error: undefined,
+      });
+      syncAnnotationEvaluationFromPageBuilds({
+        errorMessage: undefined,
+      });
 
       const controller = new AbortController();
       abortControllersRef.current.set(`verify-${pageId}`, controller);
@@ -1614,7 +1924,8 @@ export function useParallelBuild({
         // Re-enqueue for verification queue
         useStreamingStore.getState().setPageBuildStage(pageId, "queued_verification");
         useStreamingStore.getState().prependVerification(pageId);
-        processVerificationQueue(controller.signal);
+        const buildController = abortControllersRef.current.get("__build__");
+        processVerificationQueue(buildController && !buildController.signal.aborted ? buildController.signal : controller.signal);
         return;
       }
 
@@ -1680,6 +1991,7 @@ export function useParallelBuild({
       useStreamingStore.getState().updatePageVerification(pageId, "failed", {
         issues: ["Stopped by user"],
       });
+      markPageAnnotationSkipped(pageId, "Skipped because verification was stopped before annotation");
       useStreamingStore.getState().addPageVerificationLog(pageId, "Verification stopped by user");
       const page = allPagesRef.current.find((item) => item.pageId === pageId);
       useStreamingStore.getState().pauseVerification(
@@ -1696,7 +2008,7 @@ export function useParallelBuild({
 
       checkAllPagesComplete();
     },
-    [doRebuildAppTsx, checkAllPagesComplete]
+    [doRebuildAppTsx, checkAllPagesComplete, markPageAnnotationSkipped]
   );
 
   const resumePausedVerification = useCallback(() => {
@@ -1706,6 +2018,13 @@ export function useParallelBuild({
 
     store.resumeVerification();
     store.updatePageVerification(pausedPageId, "idle", { attempt: 0, issues: [] });
+    store.updatePageAnnotation(pausedPageId, "idle", {
+      connectionCount: 0,
+      error: undefined,
+    });
+    syncAnnotationEvaluationFromPageBuilds({
+      errorMessage: undefined,
+    });
     store.addPageVerificationLog(pausedPageId, "Manual fix received — resuming verification");
     store.setPageBuildStage(pausedPageId, "queued_verification");
     store.prependVerification(pausedPageId);
@@ -1715,7 +2034,96 @@ export function useParallelBuild({
     if (buildController && !buildController.signal.aborted) {
       processVerificationQueueRef.current(buildController.signal);
     }
-  }, [doRebuildAppTsx]);
+  }, [doRebuildAppTsx, syncAnnotationEvaluationFromPageBuilds]);
+
+  const retryAnnotation = useCallback(async (pageId: string) => {
+    const page = allPagesRef.current.find((item) => item.pageId === pageId);
+    if (!page) return;
+
+    const store = useStreamingStore.getState();
+    const buildController = abortControllersRef.current.get("__build__");
+    const isParallelBuildActive =
+      store.parallelMode && !!buildController && !buildController.signal.aborted;
+
+    if (isParallelBuildActive) {
+      store.updatePageAnnotation(pageId, "queued", {
+        connectionCount: 0,
+        error: undefined,
+      });
+      store.prependAnnotation(pageId);
+      syncAnnotationEvaluationFromPageBuilds({
+        status: "evaluating",
+        errorMessage: undefined,
+      });
+      processAnnotationQueueRef.current(buildController.signal);
+      return;
+    }
+
+    const controller = new AbortController();
+    abortControllersRef.current.set(`annotate-${pageId}`, controller);
+
+    const currentEvaluation = useStreamingStore.getState().annotationEvaluation;
+    const totalPages = currentEvaluation.totalPages || allPagesRef.current.length || 1;
+    const remainingFailedPageIds = currentEvaluation.failedPageIds.filter((id) => id !== pageId);
+
+    useStreamingStore.getState().setAnnotationEvaluating({
+      activePageId: pageId,
+      activePageName: page.pageName,
+      completedPages: currentEvaluation.completedPages,
+      failedPages: remainingFailedPageIds.length,
+      failedPageIds: remainingFailedPageIds,
+      totalPages,
+      errorMessage: undefined,
+    });
+
+    try {
+      const result = await evaluateSinglePageAnnotations(page);
+      if (result.ok) {
+        const { totalConnections } = applySinglePageAnnotationResult(page, result.pages);
+        const completedPages = Math.min(totalPages, currentEvaluation.completedPages + 1);
+
+        if (remainingFailedPageIds.length > 0) {
+          useStreamingStore.getState().setAnnotationError(
+            `${remainingFailedPageIds.length} page${remainingFailedPageIds.length === 1 ? "" : "s"} still need annotation retry`,
+            {
+              connectionCount: totalConnections,
+              activePageId: null,
+              activePageName: null,
+              completedPages,
+              failedPages: remainingFailedPageIds.length,
+              failedPageIds: remainingFailedPageIds,
+              totalPages,
+            }
+          );
+        } else {
+          useStreamingStore.getState().setAnnotationDone(totalConnections, {
+            activePageId: null,
+            activePageName: null,
+            completedPages,
+            failedPages: 0,
+            failedPageIds: [],
+            totalPages,
+          });
+        }
+        useStrategyStore.getState().setCoverageDisplayState("ready");
+      } else {
+        const failedPageIds = [...remainingFailedPageIds, pageId];
+        useStreamingStore.getState().setAnnotationError(result.errorMessage, {
+          activePageId: null,
+          activePageName: null,
+          completedPages: currentEvaluation.completedPages,
+          failedPages: failedPageIds.length,
+          failedPageIds,
+          totalPages,
+        });
+        if (!useProductBrainStore.getState().brainData) {
+          useStrategyStore.getState().setCoverageDisplayState("unavailable");
+        }
+      }
+    } finally {
+      abortControllersRef.current.delete(`annotate-${pageId}`);
+    }
+  }, [applySinglePageAnnotationResult, evaluateSinglePageAnnotations, syncAnnotationEvaluationFromPageBuilds]);
 
   const cancelAll = useCallback(() => {
     for (const [, controller] of abortControllersRef.current) {
@@ -1732,6 +2140,7 @@ export function useParallelBuild({
     latestBuildFilesRef.current = {};
     knownFailuresRef.current = [];
     verificationProcessingRef.current = false;
+    annotationProcessingRef.current = false;
 
     // Flush/cancel any pending rebuildAppTsx debounce timer
     if (rebuildTimerRef.current) {
@@ -1743,7 +2152,7 @@ export function useParallelBuild({
     useStrategyStore.getState().setBuildingPages([]);
   }, []);
 
-  return { startBuild, retryPage, retryVerification, stopVerification, resumePausedVerification, cancelAll };
+  return { startBuild, retryPage, retryVerification, retryAnnotation, stopVerification, resumePausedVerification, cancelAll };
 }
 
 // Helper: infer purpose from foundation file path

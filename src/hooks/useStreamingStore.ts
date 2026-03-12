@@ -13,6 +13,8 @@ export type BuildStage =
   | "build_failed"         // generation failed (API error, empty response)
   | "verify_failed";       // verification exhausted 3 retries, code exists but has issues
 
+export type AnnotationStatus = "idle" | "queued" | "evaluating" | "done" | "error";
+
 export interface FoundationArtifact {
   path: string;
   exports: string[];
@@ -44,6 +46,9 @@ export interface PageBuildState {
   verificationLog: string[];
   // New parallel build stage
   buildStage: BuildStage;
+  annotationStatus: AnnotationStatus;
+  annotationConnectionCount: number;
+  annotationError?: string;
 }
 
 export type VerificationStatus = "idle" | "capturing" | "reviewing" | "fixing" | "passed" | "failed";
@@ -81,6 +86,8 @@ interface StreamingState {
   // Verification queue for parallel builds
   verificationQueue: string[];
   verificationActive: string | null;
+  annotationQueue: string[];
+  annotationActive: string | null;
   verificationPaused: boolean;
   verificationPausedPageId: string | null;
   verificationPausedErrorText: string | null;
@@ -99,6 +106,15 @@ interface StreamingState {
   prependVerification: (pageId: string) => void;
   dequeueVerification: () => string | null;
   setVerificationActive: (pageId: string | null) => void;
+  enqueueAnnotation: (pageId: string) => void;
+  prependAnnotation: (pageId: string) => void;
+  dequeueAnnotation: () => string | null;
+  setAnnotationActivePage: (pageId: string | null) => void;
+  updatePageAnnotation: (
+    pageId: string,
+    status: AnnotationStatus,
+    extra?: { connectionCount?: number; error?: string }
+  ) => void;
   pauseVerification: (pageId: string, errorText: string, errorPath?: string) => void;
   resumeVerification: () => void;
   clearVerificationPause: () => void;
@@ -110,11 +126,18 @@ interface StreamingState {
   annotationEvaluation: {
     status: "idle" | "evaluating" | "done" | "error";
     connectionCount: number;
+    activePageId: string | null;
+    activePageName: string | null;
+    completedPages: number;
+    failedPages: number;
+    failedPageIds: string[];
+    totalPages: number;
     errorMessage?: string;
   };
-  setAnnotationEvaluating: () => void;
-  setAnnotationDone: (connectionCount: number) => void;
-  setAnnotationError: (message: string) => void;
+  setAnnotationEvaluation: (update: Partial<StreamingState["annotationEvaluation"]>) => void;
+  setAnnotationEvaluating: (update?: Partial<StreamingState["annotationEvaluation"]>) => void;
+  setAnnotationDone: (connectionCount: number, update?: Partial<StreamingState["annotationEvaluation"]>) => void;
+  setAnnotationError: (message: string, update?: Partial<StreamingState["annotationEvaluation"]>) => void;
   resetAnnotationEvaluation: () => void;
 
   // --- Refresh signals (store-based iframe remount) ---
@@ -201,6 +224,8 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
 
   verificationQueue: [],
   verificationActive: null,
+  annotationQueue: [],
+  annotationActive: null,
   verificationPaused: false,
   verificationPausedPageId: null,
   verificationPausedErrorText: null,
@@ -219,6 +244,8 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
         verificationIssues: [],
         verificationLog: [],
         buildStage: "pending",
+        annotationStatus: "idle",
+        annotationConnectionCount: 0,
       };
     }
     set({
@@ -229,12 +256,23 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
       foundationBuild: { ...defaultFoundationBuild },
       verificationQueue: [],
       verificationActive: null,
+      annotationQueue: [],
+      annotationActive: null,
       verificationPaused: false,
       verificationPausedPageId: null,
       verificationPausedErrorText: null,
       verificationPausedErrorPath: null,
       repairChatIntent: null,
-      annotationEvaluation: { status: "idle", connectionCount: 0 },
+      annotationEvaluation: {
+        status: "idle",
+        connectionCount: 0,
+        activePageId: null,
+        activePageName: null,
+        completedPages: 0,
+        failedPages: 0,
+        failedPageIds: [],
+        totalPages: pageIds.length,
+      },
       // Also set isStreaming so overlays know something is happening
       isStreaming: true,
       targetPageId: null,
@@ -365,6 +403,51 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
     set({ verificationActive: pageId });
   },
 
+  enqueueAnnotation: (pageId) => {
+    set((s) => ({
+      annotationQueue: s.annotationQueue.includes(pageId)
+        ? s.annotationQueue
+        : [...s.annotationQueue, pageId],
+    }));
+  },
+
+  prependAnnotation: (pageId) => {
+    set((s) => ({
+      annotationQueue: s.annotationQueue.includes(pageId)
+        ? [pageId, ...s.annotationQueue.filter((id) => id !== pageId)]
+        : [pageId, ...s.annotationQueue],
+    }));
+  },
+
+  dequeueAnnotation: () => {
+    const { annotationQueue } = get();
+    if (annotationQueue.length === 0) return null;
+    const [next, ...rest] = annotationQueue;
+    set({ annotationQueue: rest });
+    return next;
+  },
+
+  setAnnotationActivePage: (pageId) => {
+    set({ annotationActive: pageId });
+  },
+
+  updatePageAnnotation: (pageId, status, extra) => {
+    const { pageBuilds } = get();
+    const existing = pageBuilds[pageId];
+    if (!existing) return;
+    set({
+      pageBuilds: {
+        ...pageBuilds,
+        [pageId]: {
+          ...existing,
+          annotationStatus: status,
+          annotationConnectionCount: extra?.connectionCount ?? existing.annotationConnectionCount,
+          annotationError: extra?.error,
+        },
+      },
+    });
+  },
+
   pauseVerification: (pageId, errorText, errorPath) => {
     set({
       verificationPaused: true,
@@ -414,6 +497,8 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
       foundationBuild: { ...defaultFoundationBuild },
       verificationQueue: [],
       verificationActive: null,
+      annotationQueue: [],
+      annotationActive: null,
       verificationPaused: false,
       verificationPausedPageId: null,
       verificationPausedErrorText: null,
@@ -428,22 +513,70 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
   },
 
   // --- Annotation evaluation ---
-  annotationEvaluation: { status: "idle" as const, connectionCount: 0 },
-
-  setAnnotationEvaluating: () => {
-    set({ annotationEvaluation: { status: "evaluating", connectionCount: 0 } });
+  annotationEvaluation: {
+    status: "idle" as const,
+    connectionCount: 0,
+    activePageId: null,
+    activePageName: null,
+    completedPages: 0,
+    failedPages: 0,
+    failedPageIds: [],
+    totalPages: 0,
   },
 
-  setAnnotationDone: (connectionCount) => {
-    set({ annotationEvaluation: { status: "done", connectionCount } });
+  setAnnotationEvaluation: (update) => {
+    set((s) => ({
+      annotationEvaluation: { ...s.annotationEvaluation, ...update },
+    }));
   },
 
-  setAnnotationError: (message) => {
-    set({ annotationEvaluation: { status: "error", connectionCount: 0, errorMessage: message } });
+  setAnnotationEvaluating: (update) => {
+    set((s) => ({
+      annotationEvaluation: {
+        ...s.annotationEvaluation,
+        status: "evaluating",
+        errorMessage: undefined,
+        ...update,
+      },
+    }));
+  },
+
+  setAnnotationDone: (connectionCount, update) => {
+    set((s) => ({
+      annotationEvaluation: {
+        ...s.annotationEvaluation,
+        status: "done",
+        connectionCount,
+        errorMessage: undefined,
+        ...update,
+      },
+    }));
+  },
+
+  setAnnotationError: (message, update) => {
+    set((s) => ({
+      annotationEvaluation: {
+        ...s.annotationEvaluation,
+        status: "error",
+        errorMessage: message,
+        ...update,
+      },
+    }));
   },
 
   resetAnnotationEvaluation: () => {
-    set({ annotationEvaluation: { status: "idle", connectionCount: 0 } });
+    set({
+      annotationEvaluation: {
+        status: "idle",
+        connectionCount: 0,
+        activePageId: null,
+        activePageName: null,
+        completedPages: 0,
+        failedPages: 0,
+        failedPageIds: [],
+        totalPages: 0,
+      },
+    });
   },
 
   // --- Refresh signals ---

@@ -884,13 +884,13 @@ const noirLuxePreset: Preset = {
  * All available presets
  */
 export const PRESETS: Preset[] = [
+  monochromePreset,
   brutalistPreset,
   softPreset,
   neonPreset,
   editorialPreset,
   terraPreset,
   arcticPreset,
-  monochromePreset,
   sunsetPopPreset,
   noirLuxePreset,
 ];
