@@ -71,11 +71,11 @@ const componentRegistry: Array<{
     showcase: (
       <Card className="w-full">
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Card Title</CardTitle>
+          <CardTitle>Card Title</CardTitle>
           <CardDescription>Card description</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">Content area</p>
+          <p className="text-body-sm text-muted-foreground">Content area</p>
         </CardContent>
       </Card>
     ),
@@ -86,6 +86,9 @@ const componentRegistry: Array<{
       <div className="flex flex-wrap gap-2">
         <Badge>Default</Badge>
         <Badge variant="secondary">Secondary</Badge>
+        <Badge variant="success">Success</Badge>
+        <Badge variant="warning">Warning</Badge>
+        <Badge variant="info">Info</Badge>
         <Badge variant="outline">Outline</Badge>
         <Badge variant="destructive">Destructive</Badge>
       </div>
@@ -166,9 +169,9 @@ const componentRegistry: Array<{
     name: "Separator",
     showcase: (
       <div className="space-y-2 w-full">
-        <p className="text-sm">Above</p>
+        <p className="text-body-sm">Above</p>
         <Separator />
-        <p className="text-sm">Below</p>
+        <p className="text-body-sm">Below</p>
       </div>
     ),
   },
@@ -181,10 +184,10 @@ const componentRegistry: Array<{
           <TabsTrigger value="tab2">Tab 2</TabsTrigger>
         </TabsList>
         <TabsContent value="tab1">
-          <p className="text-sm text-muted-foreground">Content for tab 1</p>
+          <p className="text-body-sm text-muted-foreground">Content for tab 1</p>
         </TabsContent>
         <TabsContent value="tab2">
-          <p className="text-sm text-muted-foreground">Content for tab 2</p>
+          <p className="text-body-sm text-muted-foreground">Content for tab 2</p>
         </TabsContent>
       </Tabs>
     ),
@@ -201,7 +204,7 @@ const componentRegistry: Array<{
             <DialogTitle>Dialog Title</DialogTitle>
             <DialogDescription>This is a dialog description.</DialogDescription>
           </DialogHeader>
-          <p className="text-sm">Dialog content goes here.</p>
+          <p className="text-body">Dialog content goes here.</p>
         </DialogContent>
       </Dialog>
     ),
@@ -244,6 +247,18 @@ const componentRegistry: Array<{
         <Alert>
           <AlertTitle>Heads up!</AlertTitle>
           <AlertDescription>You can add components using the cli.</AlertDescription>
+        </Alert>
+        <Alert variant="success">
+          <AlertTitle>Saved</AlertTitle>
+          <AlertDescription>Your project settings were updated.</AlertDescription>
+        </Alert>
+        <Alert variant="warning">
+          <AlertTitle>Review needed</AlertTitle>
+          <AlertDescription>This flow has unpublished changes.</AlertDescription>
+        </Alert>
+        <Alert variant="info">
+          <AlertTitle>Note</AlertTitle>
+          <AlertDescription>Preview mode mirrors the active token set.</AlertDescription>
         </Alert>
         <Alert variant="destructive">
           <AlertTitle>Error</AlertTitle>
@@ -334,7 +349,7 @@ const componentRegistry: Array<{
     name: "Aspect Ratio",
     showcase: (
       <AspectRatio ratio={16 / 9} className="bg-muted rounded-md flex items-center justify-center w-full">
-        <span className="text-sm text-muted-foreground">16:9</span>
+        <span className="text-body-sm text-muted-foreground">16:9</span>
       </AspectRatio>
     ),
   },
@@ -343,11 +358,11 @@ const componentRegistry: Array<{
     showcase: (
       <TooltipProvider>
         <Tooltip>
-          <TooltipTrigger className="px-3 py-1.5 border rounded-md text-sm">
+          <TooltipTrigger className="px-3 py-1.5 border rounded-md text-body-sm">
             Hover me
           </TooltipTrigger>
           <TooltipContent>
-            <p>Add to library</p>
+            <p className="text-caption">Add to library</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
@@ -362,8 +377,8 @@ const componentRegistry: Array<{
         </PopoverTrigger>
         <PopoverContent className="w-60">
           <div className="space-y-2">
-            <h4 className="font-medium text-sm">Dimensions</h4>
-            <p className="text-xs text-muted-foreground">Set the dimensions.</p>
+            <h4 className="text-body">Dimensions</h4>
+            <p className="text-caption text-muted-foreground">Set the dimensions.</p>
           </div>
         </PopoverContent>
       </Popover>
@@ -372,12 +387,32 @@ const componentRegistry: Array<{
   {
     name: "Toast",
     showcase: (
-      <ToastComponent variant="default" className="w-full">
-        <div className="grid gap-1">
-          <ToastTitle>Notification</ToastTitle>
-          <ToastDescription>Your message has been sent.</ToastDescription>
-        </div>
-      </ToastComponent>
+      <div className="w-full space-y-2">
+        <ToastComponent variant="default" className="w-full">
+          <div className="grid gap-1">
+            <ToastTitle>Notification</ToastTitle>
+            <ToastDescription>Your message has been sent.</ToastDescription>
+          </div>
+        </ToastComponent>
+        <ToastComponent variant="success" className="w-full">
+          <div className="grid gap-1">
+            <ToastTitle>Published</ToastTitle>
+            <ToastDescription>Your design system is live.</ToastDescription>
+          </div>
+        </ToastComponent>
+        <ToastComponent variant="warning" className="w-full">
+          <div className="grid gap-1">
+            <ToastTitle>Check contrast</ToastTitle>
+            <ToastDescription>One status token may need tuning.</ToastDescription>
+          </div>
+        </ToastComponent>
+        <ToastComponent variant="info" className="w-full">
+          <div className="grid gap-1">
+            <ToastTitle>Heads up</ToastTitle>
+            <ToastDescription>A fresh preset is ready to preview.</ToastDescription>
+          </div>
+        </ToastComponent>
+      </div>
     ),
   },
   {
@@ -393,8 +428,8 @@ export function DesignSystem() {
     <div className="min-h-screen bg-background p-8">
       <div className="max-w-6xl mx-auto">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-foreground">Design System</h1>
-          <p className="text-muted-foreground mt-2">
+          <h1 className="text-h1 text-foreground">Design System</h1>
+          <p className="mt-2 text-body-sm text-muted-foreground">
             {componentRegistry.length} components available
           </p>
         </div>
@@ -403,9 +438,9 @@ export function DesignSystem() {
           {componentRegistry.map(({ name, showcase }) => (
             <div
               key={name}
-              className="rounded-lg border bg-card p-6 shadow-sm"
+              className="rounded-lg border bg-card p-6"
             >
-              <h3 className="font-semibold text-lg mb-4 text-card-foreground">
+              <h3 className="mb-4 text-h4 text-card-foreground">
                 {name}
               </h3>
               <div className="min-h-[80px] flex items-center">

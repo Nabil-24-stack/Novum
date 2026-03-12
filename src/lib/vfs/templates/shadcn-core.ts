@@ -4,26 +4,29 @@ export const badgeTemplate = `import * as React from "react";
 import { cn } from "../../lib/utils";
 
 export interface BadgeProps extends React.HTMLAttributes<HTMLDivElement> {
-  variant?: "default" | "secondary" | "destructive" | "outline";
+  variant?: "default" | "secondary" | "success" | "warning" | "info" | "destructive" | "outline";
 }
 
 export function Badge({ className, variant = "default", ...props }: BadgeProps) {
   const variants = {
     default: "bg-primary text-primary-foreground hover:bg-primary/80",
     secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+    success: "bg-success text-success-foreground hover:bg-success/85",
+    warning: "bg-warning text-warning-foreground hover:bg-warning/85",
+    info: "bg-info text-info-foreground hover:bg-info/85",
     destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/80",
-    outline: "text-foreground border border-input",
+    outline: "bg-background text-foreground border border-input hover:bg-muted",
   };
 
   return (
     <div
       className={cn(
-        "inline-flex items-center px-2.5 py-0.5 text-xs font-semibold transition-colors border-solid border-input",
+        "inline-flex items-center px-2.5 py-0.5 text-caption transition-colors border-solid border-input",
         variants[variant],
         className
       )}
       style={{
-        borderRadius: "var(--badge-radius, var(--radius))",
+        borderRadius: "var(--badge-radius, var(--radius-md))",
         borderWidth: "var(--badge-border-width, 0px)",
         boxShadow: "var(--badge-shadow, none)",
       }}
@@ -62,7 +65,7 @@ export function AvatarFallback({ className, ...props }: AvatarFallbackProps) {
   return (
     <div
       className={cn(
-        "flex h-full w-full items-center justify-center rounded-full bg-muted text-foreground text-sm font-medium",
+        "flex h-full w-full items-center justify-center rounded-full bg-muted text-foreground text-body-sm",
         className
       )}
       {...props}
@@ -97,7 +100,7 @@ export function Switch({ className, checked = false, onCheckedChange, ...props }
     >
       <span
         className={cn(
-          "pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform",
+          "pointer-events-none block h-5 w-5 rounded-full border border-border bg-background ring-0 transition-transform",
           checked ? "translate-x-5" : "translate-x-0"
         )}
       />
@@ -198,15 +201,15 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
       <input
         type={type}
         className={cn(
-          "flex h-10 w-full border border-input bg-background text-foreground px-3 py-2 text-sm",
-          "ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground",
+          "flex h-10 w-full border border-input bg-background text-foreground px-3 py-2 text-body",
+          "ring-offset-background file:border-0 file:bg-transparent file:text-body-sm file:text-foreground",
           "placeholder:text-muted-foreground",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
           "disabled:cursor-not-allowed disabled:opacity-50",
           className
         )}
         style={{
-          borderRadius: "var(--input-radius, var(--radius))",
+          borderRadius: "var(--input-radius, var(--radius-md))",
           borderWidth: "var(--input-border-width, 1px)",
           boxShadow: "var(--input-shadow, none)",
         }}
@@ -230,7 +233,7 @@ export const Label = React.forwardRef<HTMLLabelElement, LabelProps>(
       <label
         ref={ref}
         className={cn(
-          "text-sm font-medium leading-none text-foreground peer-disabled:cursor-not-allowed peer-disabled:opacity-70",
+          "text-body-sm leading-none text-foreground peer-disabled:cursor-not-allowed peer-disabled:opacity-70",
           className
         )}
         {...props}
@@ -247,16 +250,22 @@ import { cn } from "../../lib/utils";
 export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {}
 
 export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
-  ({ className, children, ...props }, ref) => {
+  ({ className, children, style, ...props }, ref) => {
     return (
       <select
         ref={ref}
         className={cn(
-          "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background text-foreground px-3 py-2 text-sm",
+          "flex h-10 w-full items-center justify-between border border-input bg-background text-foreground px-3 py-2 text-body",
           "ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
           "disabled:cursor-not-allowed disabled:opacity-50",
           className
         )}
+        style={{
+          borderRadius: "var(--select-radius, var(--radius-md))",
+          borderWidth: "var(--select-border-width, 1px)",
+          boxShadow: "var(--select-shadow, none)",
+          ...style,
+        }}
         {...props}
       >
         {children}
@@ -379,7 +388,7 @@ export function TabsList({ className, ...props }: TabsListProps) {
         className
       )}
       style={{
-        borderRadius: "var(--tabs-radius, var(--radius))",
+        borderRadius: "var(--tabs-radius, var(--radius-md))",
         borderWidth: "var(--tabs-border-width, 0px)",
         boxShadow: "var(--tabs-shadow, none)",
       }}
@@ -403,14 +412,14 @@ export function TabsTrigger({ className, value, ...props }: TabsTriggerProps) {
       type="button"
       onClick={() => context.onValueChange(value)}
       className={cn(
-        "inline-flex items-center justify-center whitespace-nowrap px-3 py-1.5 text-sm font-medium",
+        "inline-flex items-center justify-center whitespace-nowrap px-3 py-1.5 text-body-sm",
         "ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         "disabled:pointer-events-none disabled:opacity-50",
-        isActive ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
+        isActive ? "border border-border bg-background text-foreground" : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
         className
       )}
       style={{
-        borderRadius: "calc(var(--tabs-radius, var(--radius)) - 2px)",
+        borderRadius: "var(--tabs-radius, var(--radius-md))",
       }}
       {...props}
     />
@@ -534,13 +543,13 @@ export function DialogHeader({ className, ...props }: DialogHeaderProps) {
 export interface DialogTitleProps extends React.HTMLAttributes<HTMLHeadingElement> {}
 
 export function DialogTitle({ className, ...props }: DialogTitleProps) {
-  return <h2 className={cn("text-lg font-semibold leading-none tracking-tight text-foreground", className)} {...props} />;
+  return <h2 className={cn("text-h4 text-foreground", className)} {...props} />;
 }
 
 export interface DialogDescriptionProps extends React.HTMLAttributes<HTMLParagraphElement> {}
 
 export function DialogDescription({ className, ...props }: DialogDescriptionProps) {
-  return <p className={cn("text-sm text-muted-foreground", className)} {...props} />;
+  return <p className={cn("text-body-sm text-muted-foreground", className)} {...props} />;
 }
 `;
 
@@ -592,7 +601,7 @@ export function AccordionTrigger({ className, children, isOpen, setIsOpen, ...pr
       type="button"
       onClick={() => setIsOpen?.(!isOpen)}
       className={cn(
-        "flex flex-1 items-center justify-between py-4 font-medium transition-all hover:underline w-full text-left text-foreground",
+        "flex flex-1 items-center justify-between py-4 text-body transition-all hover:underline w-full text-left text-foreground",
         className
       )}
       {...props}
@@ -618,7 +627,7 @@ export function AccordionContent({ className, children, isOpen, ...props }: Acco
   if (!isOpen) return null;
 
   return (
-    <div className={cn("overflow-hidden text-sm pb-4 pt-0 text-foreground", className)} {...props}>
+    <div className={cn("overflow-hidden text-body-sm pb-4 pt-0 text-foreground", className)} {...props}>
       {children}
     </div>
   );
@@ -631,16 +640,22 @@ import { cn } from "../../lib/utils";
 export interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {}
 
 export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
-  ({ className, ...props }, ref) => {
+  ({ className, style, ...props }, ref) => {
     return (
       <textarea
         className={cn(
-          "flex min-h-[80px] w-full rounded-md border border-input bg-background text-foreground px-3 py-2 text-sm",
+          "flex min-h-[80px] w-full border border-input bg-background text-foreground px-3 py-2 text-body",
           "ring-offset-background placeholder:text-muted-foreground",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
           "disabled:cursor-not-allowed disabled:opacity-50",
           className
         )}
+        style={{
+          borderRadius: "var(--textarea-radius, var(--radius-md))",
+          borderWidth: "var(--textarea-border-width, 1px)",
+          boxShadow: "var(--textarea-shadow, none)",
+          ...style,
+        }}
         ref={ref}
         {...props}
       />
@@ -686,23 +701,31 @@ export const alertTemplate = `import * as React from "react";
 import { cn } from "../../lib/utils";
 
 export interface AlertProps extends React.HTMLAttributes<HTMLDivElement> {
-  variant?: "default" | "destructive";
+  variant?: "default" | "success" | "warning" | "info" | "destructive";
 }
 
 export function Alert({ className, variant = "default", ...props }: AlertProps) {
   const variants = {
     default: "bg-background text-foreground border-border",
-    destructive: "bg-destructive/10 text-destructive border-destructive/50",
+    success: "bg-success text-success-foreground border-success",
+    warning: "bg-warning text-warning-foreground border-warning",
+    info: "bg-info text-info-foreground border-info",
+    destructive: "bg-destructive text-destructive-foreground border-destructive",
   };
 
   return (
     <div
       role="alert"
       className={cn(
-        "relative w-full rounded-lg border p-4",
+        "relative w-full border p-4",
         variants[variant],
         className
       )}
+      style={{
+        borderRadius: "var(--alert-radius, var(--radius-lg))",
+        borderWidth: "var(--alert-border-width, 1px)",
+        boxShadow: "var(--alert-shadow, none)",
+      }}
       {...props}
     />
   );
@@ -713,7 +736,7 @@ export interface AlertTitleProps extends React.HTMLAttributes<HTMLHeadingElement
 export function AlertTitle({ className, ...props }: AlertTitleProps) {
   return (
     <h5
-      className={cn("mb-1 font-medium leading-none tracking-tight", className)}
+      className={cn("mb-1 text-body leading-none", className)}
       {...props}
     />
   );
@@ -724,7 +747,7 @@ export interface AlertDescriptionProps extends React.HTMLAttributes<HTMLParagrap
 export function AlertDescription({ className, ...props }: AlertDescriptionProps) {
   return (
     <div
-      className={cn("text-sm [&_p]:leading-relaxed", className)}
+      className={cn("text-body-sm [&_p]:leading-relaxed", className)}
       {...props}
     />
   );
@@ -832,6 +855,7 @@ export function Toggle({
   onPressedChange,
   variant = "default",
   size = "default",
+  style,
   ...props
 }: ToggleProps) {
   const [internalPressed, setInternalPressed] = React.useState(defaultPressed);
@@ -860,16 +884,22 @@ export function Toggle({
       aria-pressed={isPressed}
       onClick={handleClick}
       className={cn(
-        "inline-flex items-center justify-center rounded-md text-sm font-medium",
+        "inline-flex items-center justify-center text-body-sm",
         "ring-offset-background transition-colors",
         "hover:bg-muted hover:text-muted-foreground",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         "disabled:pointer-events-none disabled:opacity-50",
-        isPressed && "bg-accent text-accent-foreground",
+        isPressed && "border border-border bg-secondary text-secondary-foreground",
         variants[variant],
         sizes[size],
         className
       )}
+      style={{
+        borderRadius: "var(--toggle-radius, var(--radius-md))",
+        borderWidth: "var(--toggle-border-width, 0px)",
+        boxShadow: "var(--toggle-shadow, none)",
+        ...style,
+      }}
       {...props}
     />
   );
@@ -886,7 +916,7 @@ export const Table = React.forwardRef<HTMLTableElement, TableProps>(
     <div className="relative w-full overflow-auto">
       <table
         ref={ref}
-        className={cn("w-full caption-bottom text-sm", className)}
+        className={cn("w-full caption-bottom text-body-sm", className)}
         {...props}
       />
     </div>
@@ -935,7 +965,7 @@ export const TableHead = React.forwardRef<HTMLTableCellElement, TableHeadProps>(
     <th
       ref={ref}
       className={cn(
-        "h-12 px-4 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0",
+        "h-12 px-4 text-left align-middle text-body-sm text-muted-foreground [&:has([role=checkbox])]:pr-0",
         className
       )}
       {...props}
@@ -967,7 +997,7 @@ export function Breadcrumb({ className, ...props }: BreadcrumbProps) {
   return (
     <nav
       aria-label="breadcrumb"
-      className={cn("flex flex-wrap items-center gap-1.5 break-words text-sm text-muted-foreground", className)}
+      className={cn("flex flex-wrap items-center gap-1.5 break-words text-body-sm text-muted-foreground", className)}
       {...props}
     />
   );
@@ -1144,7 +1174,7 @@ export interface TooltipContentProps extends React.HTMLAttributes<HTMLDivElement
   sideOffset?: number;
 }
 
-export function TooltipContent({ className, side = "top", sideOffset = 4, children, ...props }: TooltipContentProps) {
+export function TooltipContent({ className, side = "top", sideOffset = 4, children, style, ...props }: TooltipContentProps) {
   const context = React.useContext(TooltipContext);
   if (!context) throw new Error("TooltipContent must be used within Tooltip");
 
@@ -1189,10 +1219,17 @@ export function TooltipContent({ className, side = "top", sideOffset = 4, childr
     <div
       ref={contentRef}
       className={cn(
-        "fixed z-50 overflow-hidden rounded-md border bg-popover px-3 py-1.5 text-sm text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95",
+        "fixed z-50 overflow-hidden border bg-popover px-3 py-1.5 text-caption text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95",
         className
       )}
-      style={{ top: position.top, left: position.left }}
+      style={{
+        top: position.top,
+        left: position.left,
+        borderRadius: "var(--tooltip-radius, var(--radius-md))",
+        borderWidth: "var(--tooltip-border-width, 1px)",
+        boxShadow: "var(--tooltip-shadow, none)",
+        ...style,
+      }}
       {...props}
     >
       {children}
@@ -1279,6 +1316,7 @@ export function PopoverContent({
   sideOffset = 4, 
   align = "center",
   children, 
+  style,
   ...props 
 }: PopoverContentProps) {
   const context = React.useContext(PopoverContext);
@@ -1360,10 +1398,17 @@ export function PopoverContent({
     <div
       ref={contentRef}
       className={cn(
-        "fixed z-50 w-72 rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-none animate-in fade-in-0 zoom-in-95",
+        "fixed z-50 w-72 border bg-popover p-4 text-popover-foreground shadow-md outline-none animate-in fade-in-0 zoom-in-95",
         className
       )}
-      style={{ top: position.top, left: position.left }}
+      style={{
+        top: position.top,
+        left: position.left,
+        borderRadius: "var(--popover-radius, var(--radius-lg))",
+        borderWidth: "var(--popover-border-width, 1px)",
+        boxShadow: "var(--popover-shadow, none)",
+        ...style,
+      }}
       {...props}
     >
       {children}
@@ -1380,7 +1425,7 @@ export interface Toast {
   id: string;
   title?: string;
   description?: string;
-  variant?: "default" | "destructive";
+  variant?: "default" | "success" | "warning" | "info" | "destructive";
   duration?: number;
 }
 
@@ -1443,23 +1488,32 @@ export function useToast() {
 
 // Individual Toast component
 export interface ToastProps extends React.HTMLAttributes<HTMLDivElement> {
-  variant?: "default" | "destructive";
+  variant?: "default" | "success" | "warning" | "info" | "destructive";
   onClose?: () => void;
 }
 
-export function ToastComponent({ className, variant = "default", onClose, children, ...props }: ToastProps) {
+export function ToastComponent({ className, variant = "default", onClose, children, style, ...props }: ToastProps) {
   const variants = {
     default: "bg-background text-foreground border-border",
+    success: "bg-success text-success-foreground border-success",
+    warning: "bg-warning text-warning-foreground border-warning",
+    info: "bg-info text-info-foreground border-info",
     destructive: "bg-destructive text-destructive-foreground border-destructive",
   };
 
   return (
     <div
       className={cn(
-        "group pointer-events-auto relative flex w-full items-center justify-between space-x-4 overflow-hidden rounded-md border p-6 pr-8 shadow-lg transition-all",
+        "group pointer-events-auto relative flex w-full items-center justify-between space-x-4 overflow-hidden border p-6 pr-8 shadow-md transition-all",
         variants[variant],
         className
       )}
+      style={{
+        borderRadius: "var(--toast-radius, var(--radius-lg))",
+        borderWidth: "var(--toast-border-width, 1px)",
+        boxShadow: "var(--toast-shadow, none)",
+        ...style,
+      }}
       {...props}
     >
       {children}
@@ -1479,12 +1533,12 @@ export function ToastComponent({ className, variant = "default", onClose, childr
 
 // Toast Title
 export function ToastTitle({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("text-sm font-semibold", className)} {...props} />;
+  return <div className={cn("text-body", className)} {...props} />;
 }
 
 // Toast Description
 export function ToastDescription({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("text-sm opacity-90", className)} {...props} />;
+  return <div className={cn("text-body-sm opacity-90", className)} {...props} />;
 }
 
 // Toaster - renders all toasts
@@ -1599,11 +1653,16 @@ export function DatePicker({ value, onChange, placeholder = "Pick a date", class
         type="button"
         onClick={() => setOpen(!open)}
         className={cn(
-          "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm",
+          "flex h-10 w-full items-center justify-between border border-input bg-background px-3 py-2 text-body",
           "ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
           "disabled:cursor-not-allowed disabled:opacity-50",
           !value && "text-muted-foreground"
         )}
+        style={{
+          borderRadius: "var(--input-radius, var(--radius-md))",
+          borderWidth: "var(--input-border-width, 1px)",
+          boxShadow: "var(--input-shadow, none)",
+        }}
       >
         <span>{value ? formatDate(value) : placeholder}</span>
         <svg className="h-4 w-4 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1612,7 +1671,14 @@ export function DatePicker({ value, onChange, placeholder = "Pick a date", class
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-auto min-w-[280px] rounded-md border bg-popover p-3 shadow-md">
+        <div
+          className="absolute left-0 top-full z-50 mt-1 w-auto min-w-[280px] border bg-popover p-3 shadow-md"
+          style={{
+            borderRadius: "var(--date-picker-radius, var(--radius-lg))",
+            borderWidth: "var(--date-picker-border-width, 1px)",
+            boxShadow: "var(--date-picker-shadow, none)",
+          }}
+        >
           {/* Header */}
           <div className="flex items-center justify-between mb-2">
             <button
@@ -1624,7 +1690,7 @@ export function DatePicker({ value, onChange, placeholder = "Pick a date", class
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
             </button>
-            <span className="text-sm font-medium">
+            <span className="text-body-sm">
               {MONTH_NAMES[month]} {year}
             </span>
             <button
@@ -1641,7 +1707,7 @@ export function DatePicker({ value, onChange, placeholder = "Pick a date", class
           {/* Day names */}
           <div className="grid grid-cols-7 gap-1 mb-1">
             {DAY_NAMES.map((day) => (
-              <div key={day} className="text-center text-xs text-muted-foreground font-medium py-1">
+              <div key={day} className="text-center text-caption text-muted-foreground py-1">
                 {day}
               </div>
             ))}
@@ -1656,7 +1722,7 @@ export function DatePicker({ value, onChange, placeholder = "Pick a date", class
                     type="button"
                     onClick={() => handleSelectDate(day)}
                     className={cn(
-                      "w-full h-full flex items-center justify-center rounded-md text-sm transition-colors",
+                      "w-full h-full flex items-center justify-center rounded-md text-body-sm transition-colors",
                       "hover:bg-accent hover:text-accent-foreground",
                       isSelected(day) && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
                       isToday(day) && !isSelected(day) && "border border-primary"

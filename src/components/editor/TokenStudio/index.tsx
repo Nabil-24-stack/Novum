@@ -47,6 +47,7 @@ export function TokenStudio({ tokenState }: TokenStudioProps) {
     updateGlobalFont,
     updateTypographyBaseSize,
     updateTypographyScaleRatio,
+    updateTypographyWeight,
     updateSpacingBaseUnit,
     availablePrimitiveRefs,
   } = tokenState;
@@ -149,10 +150,12 @@ export function TokenStudio({ tokenState }: TokenStudioProps) {
               <ComponentsTab
                 components={tokens.components}
                 onUpdateComponent={updateComponentSpec}
-                globalRadius={tokens.globals.radius.md}
+                globalRadius={tokens.globals.radius}
                 onUpdateGlobalRadius={updateGlobalRadius}
                 fontSans={tokens.globals.typography.fontSans}
+                fontMono={tokens.globals.typography.fontMono}
                 onUpdateFontSans={(value) => updateGlobalFont("fontSans", value)}
+                onUpdateFontMono={(value) => updateGlobalFont("fontMono", value)}
               />
             )}
 
@@ -160,8 +163,11 @@ export function TokenStudio({ tokenState }: TokenStudioProps) {
               <TypographyTab
                 baseSize={tokens.globals.typography.baseSize}
                 scaleRatio={tokens.globals.typography.scaleRatio}
+                weightRegular={tokens.globals.typography.weightRegular}
+                weightBold={tokens.globals.typography.weightBold}
                 onUpdateBaseSize={updateTypographyBaseSize}
                 onUpdateScaleRatio={updateTypographyScaleRatio}
+                onUpdateWeight={updateTypographyWeight}
               />
             )}
 

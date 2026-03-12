@@ -16,7 +16,11 @@ import { useChatContextStore, type PinnedElement } from "@/hooks/useChatContextS
 import { useStrategyStore } from "@/hooks/useStrategyStore";
 import { useProductBrainStore } from "@/hooks/useProductBrainStore";
 import { computeCoverage } from "@/lib/product-brain/coverage";
-import type { ProductBrainData } from "@/lib/product-brain/types";
+import type { CoverageDisplayState } from "@/lib/product-brain/types";
+import {
+  buildProductBrainFromEvaluation,
+  normalizeProductBrainSnapshot,
+} from "@/lib/product-brain/snapshot";
 import { useFlowNavigation } from "@/hooks/useFlowNavigation";
 import { SandpackWrapper } from "@/components/providers/SandpackWrapper";
 import { InfiniteCanvas, type ViewportState } from "@/components/canvas/InfiniteCanvas";
@@ -202,12 +206,10 @@ export default function ProjectEditor() {
         // Hydrate product brain
         if (project.product_brain) {
           const brain = project.product_brain;
-          // Normalize: ensure version + pages exist (DB may only have { insightsData })
-          const normalized = {
-            version: brain.version ?? 1,
-            pages: Array.isArray(brain.pages) ? brain.pages : [],
-          } as ProductBrainData;
-          useProductBrainStore.getState().setBrainData(normalized);
+          const normalized = normalizeProductBrainSnapshot(brain);
+          if (normalized) {
+            useProductBrainStore.getState().setBrainData(normalized);
+          }
           // Restore insightsData into document store (persisted under product_brain)
           if (brain.insightsData) {
             useDocumentStore.getState().setInsightsData(brain.insightsData);
@@ -307,15 +309,19 @@ export default function ProjectEditor() {
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
   const currentBuildingPages = useStrategyStore((s) => s.currentBuildingPages);
   const strategyUpdatedAfterBuild = useStrategyStore((s) => s.strategyUpdatedAfterBuild);
+  const persistedCoverageDisplayState = useStrategyStore((s) => s.coverageDisplayState);
   const repairChatIntent = useStreamingStore((s) => s.repairChatIntent);
   const verificationPausedErrorText = useStreamingStore((s) => s.verificationPausedErrorText);
   const verificationPausedErrorPath = useStreamingStore((s) => s.verificationPausedErrorPath);
+  const annotationEvaluation = useStreamingStore((s) => s.annotationEvaluation);
 
   // Document/Insights state
   const insightsData = useDocumentStore((s) => s.insightsData);
   const streamingInsights = useDocumentStore((s) => s.streamingInsights);
   const isDocUploading = useDocumentStore((s) => s.isUploading);
   const documentInputRef = useRef<HTMLInputElement>(null);
+  // Re-evaluate annotations state
+  const [isReEvaluating, setIsReEvaluating] = useState(false);
 
   // Product Brain state
   const brainData = useProductBrainStore((s) => s.brainData);
@@ -323,6 +329,27 @@ export default function ProjectEditor() {
     if (!brainData || !manifestoData || !personaData) return null;
     return computeCoverage(brainData, manifestoData, personaData, journeyMapData ?? []);
   }, [brainData, manifestoData, personaData, journeyMapData]);
+  const coverageDisplayState = useMemo<CoverageDisplayState>(() => {
+    if (
+      currentBuildingPages.length > 0 ||
+      isReEvaluating ||
+      annotationEvaluation.status === "evaluating"
+    ) {
+      return "pending";
+    }
+    if (brainData) return "ready";
+    if (persistedCoverageDisplayState === "unavailable") return "unavailable";
+    if (completedPages.length > 0 && strategyPhase !== "building") return "unavailable";
+    return "pending";
+  }, [
+    annotationEvaluation.status,
+    brainData,
+    completedPages.length,
+    currentBuildingPages.length,
+    isReEvaluating,
+    persistedCoverageDisplayState,
+    strategyPhase,
+  ]);
 
   // Annotation store + resolution
   const annotationActiveFrames = useAnnotationStore((s) => s.activeFrames);
@@ -331,9 +358,6 @@ export default function ProjectEditor() {
   const openAllAnnotations = useAnnotationStore((s) => s.openAll);
   const closeAllAnnotations = useAnnotationStore((s) => s.closeAll);
   useAnnotationResolution({ brainData });
-
-  // Re-evaluate annotations state
-  const [isReEvaluating, setIsReEvaluating] = useState(false);
 
   // Toast notification when strategy artifacts are updated after build
   useEffect(() => {
@@ -620,8 +644,8 @@ export default function ProjectEditor() {
     const brainJson = files["/product-brain.json"];
     if (brainJson && !useProductBrainStore.getState().brainData) {
       try {
-        const parsed = JSON.parse(brainJson);
-        if (parsed.version === 1 && Array.isArray(parsed.pages)) {
+        const parsed = normalizeProductBrainSnapshot(JSON.parse(brainJson));
+        if (parsed) {
           useProductBrainStore.getState().setBrainData(parsed);
         }
       } catch { /* ignore malformed brain data */ }
@@ -677,6 +701,7 @@ export default function ProjectEditor() {
     if (isReEvaluating || !manifestoData || !personaData || !flowManifest) return;
 
     setIsReEvaluating(true);
+    useStrategyStore.getState().setCoverageDisplayState("pending");
     useStreamingStore.getState().setAnnotationEvaluating();
 
     const mCtx = `Title: ${manifestoData.title}\nProblem: ${manifestoData.problemStatement}\nTarget User: ${manifestoData.targetUser}\nJTBDs:\n${manifestoData.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}`;
@@ -697,41 +722,43 @@ export default function ProjectEditor() {
     const result = await evaluateAnnotationsStandalone(files, mCtx, pCtx, insCtx, "gemini-2.5-pro", flowManifest.pages);
 
     if (result?.pages && Array.isArray(result.pages)) {
-      let totalNew = 0;
-      for (const page of result.pages) {
-        if (page.pageId && Array.isArray(page.connections)) {
-          useProductBrainStore.getState().addPageDecisions({
-            pageId: page.pageId,
-            pageName: page.pageName || page.pageId,
-            connections: page.connections,
-          });
-          totalNew += page.connections.length;
-        }
-      }
-
+      const nextBrain = buildProductBrainFromEvaluation(
+        result.pages,
+        flowManifest.pages.map((page) => ({
+          pageId: page.id,
+          pageName: page.name,
+        }))
+      );
+      useProductBrainStore.getState().setBrainData(nextBrain);
       const oldCount = oldBrain?.pages.reduce((sum, p) => sum + p.connections.length, 0) ?? 0;
+      useStrategyStore.getState().setCoverageDisplayState("ready");
+
+      // Auto-clean orphans in case the evaluator returned invalid persona/JTBD refs.
+      const validPageIds = flowManifest.pages.map((p: { id: string }) => p.id);
+      useProductBrainStore.getState().removeOrphanedConnections(
+        validPageIds,
+        manifestoData.jtbd.length,
+        personaData.map((p) => p.name),
+      );
+
+      const finalBrain = useProductBrainStore.getState().brainData ?? nextBrain;
+      const totalNew = finalBrain.pages.reduce((sum, page) => sum + page.connections.length, 0);
       const delta = totalNew - oldCount;
+
+      writeFile("/product-brain.json", JSON.stringify(finalBrain, null, 2));
       useStreamingStore.getState().setAnnotationDone(totalNew);
+      useStrategyStore.getState().setStrategyUpdatedAfterBuild(false);
 
       import("sonner").then(({ toast }) => {
         if (delta > 0) toast.success(`Annotations updated: ${totalNew} total (+${delta} new)`);
         else if (delta < 0) toast.success(`Annotations updated: ${totalNew} total (${delta} removed)`);
         else toast.success(`Annotations re-evaluated: ${totalNew} total (no changes)`);
       });
-
-      useStrategyStore.getState().setStrategyUpdatedAfterBuild(false);
-
-      // Auto-clean orphans
-      if (flowManifest && manifestoData && personaData) {
-        const validPageIds = flowManifest.pages.map((p: { id: string }) => p.id);
-        useProductBrainStore.getState().removeOrphanedConnections(
-          validPageIds,
-          manifestoData.jtbd.length,
-          personaData.map((p) => p.name),
-        );
-      }
     } else {
       useStreamingStore.getState().setAnnotationError("Re-evaluation failed");
+      if (!useProductBrainStore.getState().brainData) {
+        useStrategyStore.getState().setCoverageDisplayState("unavailable");
+      }
       import("sonner").then(({ toast }) => {
         toast.error("Failed to re-evaluate annotations");
       });
@@ -742,7 +769,7 @@ export default function ProjectEditor() {
     setTimeout(() => {
       useStreamingStore.getState().resetAnnotationEvaluation();
     }, 6000);
-  }, [isReEvaluating, manifestoData, personaData, files, flowManifest]);
+  }, [isReEvaluating, manifestoData, personaData, files, flowManifest, writeFile]);
 
   // --- Auto re-evaluate annotations after AI writes code ---
   const reEvaluateRef = useRef(handleReEvaluateAnnotations);
@@ -1618,6 +1645,15 @@ export default function ProjectEditor() {
       : focusSection === "ideas" ? ideaPositions.length
       : 0;
     const layoutKey = `${visibleIds}:${chatMode}:${strategyPhase}:${focusSection ?? "all"}:${focusCount}:${Math.round(containerDimensions.width)}:${Math.round(bboxW / 50)}x${Math.round(bboxH / 50)}`;
+    // Prototype view owns the viewport, so container resizes there should not
+    // re-run the canvas auto-fit animation. Keep the key in sync so collapsing
+    // prototype restores the saved viewport instead of immediately re-fitting.
+    if (isFrameExpanded) {
+      prevLayoutKeyRef.current = layoutKey;
+      cancelViewportAnimRef.current?.();
+      cancelViewportAnimRef.current = null;
+      return;
+    }
     if (layoutKey === prevLayoutKeyRef.current) return;
     prevLayoutKeyRef.current = layoutKey;
 
@@ -1681,6 +1717,7 @@ export default function ProjectEditor() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupPositions, groupRects, chatMode, containerDimensions, strategyPhase,
+      isFrameExpanded,
       focusSection, ideaPositions, personaPositions, journeyMapPositions,
       keyFeaturesPosition, userFlowPositions]);
 
@@ -2029,6 +2066,7 @@ export default function ProjectEditor() {
                   }}
                   jtbdCoverage={coverageSummary?.jtbdCoverage}
                   coverageSummary={coverageSummary}
+                  coverageDisplayState={coverageDisplayState}
                   onAddressGaps={() => {
                     if (!coverageSummary || coverageSummary.gaps.length === 0) return;
                     // Globally unaddressed JTBDs (for backward compat)

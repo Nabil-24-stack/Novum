@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import type { CoverageDisplayState } from "@/lib/product-brain/types";
 
 export type StrategyPhase = "hero" | "problem-overview" | "ideation" | "solution-design" | "building" | "editing" | "complete";
 
@@ -157,6 +158,9 @@ interface StrategyState {
   // Flag: strategy artifacts were updated after pages were already built (triggers re-evaluation prompt)
   strategyUpdatedAfterBuild: boolean;
 
+  // Coverage card state when no product-brain snapshot is available
+  coverageDisplayState: CoverageDisplayState;
+
   // Journey map auto-continuation (for incomplete multi-persona generations)
   journeyMapContinueAttempts: number;
   isJourneyMapContinuing: boolean;
@@ -191,6 +195,7 @@ interface StrategyState {
   setUserFlowsData: (data: UserFlow[]) => void;
   setStreamingUserFlows: (data: Partial<UserFlow>[] | null) => void;
   setStrategyUpdatedAfterBuild: (v: boolean) => void;
+  setCoverageDisplayState: (state: CoverageDisplayState) => void;
   setJourneyMapContinueAttempts: (n: number) => void;
   setIsJourneyMapContinuing: (v: boolean) => void;
   addVerifiedPage: (pageId: string) => void;
@@ -224,6 +229,7 @@ const initialState = {
   userFlowsData: null as UserFlow[] | null,
   streamingUserFlows: null as Partial<UserFlow>[] | null,
   strategyUpdatedAfterBuild: false,
+  coverageDisplayState: "pending" as CoverageDisplayState,
   journeyMapContinueAttempts: 0,
   isJourneyMapContinuing: false,
   verifiedPages: [] as string[],
@@ -341,6 +347,8 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   setStreamingUserFlows: (data) => set({ streamingUserFlows: data }),
 
   setStrategyUpdatedAfterBuild: (v) => set({ strategyUpdatedAfterBuild: v }),
+
+  setCoverageDisplayState: (coverageDisplayState) => set({ coverageDisplayState }),
 
   setJourneyMapContinueAttempts: (n) => set({ journeyMapContinueAttempts: n }),
 

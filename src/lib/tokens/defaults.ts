@@ -6,7 +6,7 @@ import { generateColorScale } from "./color-scale";
  * Cool, clean, technical calm. Teal brand with slate neutrals.
  */
 export const defaultTokenState: TokenState = {
-  version: "1.0",
+  version: "2.0",
   primitives: {
     colors: {
       brand: generateColorScale("#0E7490"),
@@ -41,6 +41,12 @@ export const defaultTokenState: TokenState = {
       "muted-foreground": { light: "neutral-600", dark: "neutral-400" },
       accent: { light: "brand-100", dark: "brand-900" },
       "accent-foreground": { light: "brand-800", dark: "brand-200" },
+      success: { light: "success-500", dark: "success-400" },
+      "success-foreground": { light: "neutral-50", dark: "neutral-950" },
+      warning: { light: "warning-500", dark: "warning-400" },
+      "warning-foreground": { light: "neutral-950", dark: "neutral-950" },
+      info: { light: "info-500", dark: "info-400" },
+      "info-foreground": { light: "neutral-50", dark: "neutral-950" },
       destructive: { light: "error-500", dark: "error-400" },
       "destructive-foreground": { light: "neutral-50", dark: "neutral-950" },
       border: { light: "neutral-200", dark: "neutral-700" },
@@ -53,8 +59,16 @@ export const defaultTokenState: TokenState = {
     card: { radius: "lg", border: 1, shadow: "sm" },
     input: { radius: "md", border: 1, shadow: "none" },
     badge: { radius: "md", border: 1, shadow: "none" },
+    select: { radius: "md", border: 1, shadow: "none" },
+    textarea: { radius: "md", border: 1, shadow: "none" },
     dialog: { radius: "lg", border: 1, shadow: "md" },
     tabs: { radius: "md", border: 1, shadow: "none" },
+    alert: { radius: "lg", border: 1, shadow: "none" },
+    popover: { radius: "lg", border: 1, shadow: "md" },
+    tooltip: { radius: "md", border: 1, shadow: "md" },
+    toast: { radius: "lg", border: 1, shadow: "md" },
+    "date-picker": { radius: "lg", border: 1, shadow: "md" },
+    toggle: { radius: "md", border: 1, shadow: "none" },
   },
   globals: {
     radius: {

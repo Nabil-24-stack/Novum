@@ -158,15 +158,34 @@ const PATTERN_RULES: PatternRule[] = [
     target: { componentName: "Alert", importPath: "./components/ui/alert" },
     detect: (ctx) => {
       if (ctx.attributes.get("role") !== "alert") return null;
-      const isDestructive = ctx.classes.has("bg-destructive") || ctx.classes.has("border-destructive");
+      let variant: string | undefined;
+      if (ctx.classes.has("bg-destructive") || ctx.classes.has("border-destructive")) {
+        variant = "destructive";
+      } else if (ctx.classes.has("bg-success") || ctx.classes.has("border-success")) {
+        variant = "success";
+      } else if (ctx.classes.has("bg-warning") || ctx.classes.has("border-warning")) {
+        variant = "warning";
+      } else if (ctx.classes.has("bg-info") || ctx.classes.has("border-info")) {
+        variant = "info";
+      }
       const classesToRemove = new Set<string>();
-      if (isDestructive) {
-        classesToRemove.add("bg-destructive");
-        classesToRemove.add("border-destructive");
+      for (const cls of [
+        "bg-destructive",
+        "border-destructive",
+        "bg-success",
+        "border-success",
+        "bg-warning",
+        "border-warning",
+        "bg-info",
+        "border-info",
+      ]) {
+        if (ctx.classes.has(cls)) {
+          classesToRemove.add(cls);
+        }
       }
       return {
         componentName: "Alert",
-        variant: isDestructive ? "destructive" : undefined,
+        variant,
         classesToRemove: classesToRemove.size > 0 ? classesToRemove : undefined,
       };
     },
@@ -256,6 +275,9 @@ const PATTERN_RULES: PatternRule[] = [
       // Determine variant from bg class
       let variant: string | undefined;
       if (ctx.classes.has("bg-destructive")) variant = "destructive";
+      else if (ctx.classes.has("bg-success")) variant = "success";
+      else if (ctx.classes.has("bg-warning")) variant = "warning";
+      else if (ctx.classes.has("bg-info")) variant = "info";
       else if (ctx.classes.has("bg-secondary")) variant = "secondary";
       else if (ctx.classes.has("bg-muted")) variant = "secondary";
 
@@ -267,10 +289,12 @@ const PATTERN_RULES: PatternRule[] = [
         "text-xs", "text-sm", "text-caption", "text-body-sm",
         "font-semibold", "font-medium", "font-bold",
         "rounded", "rounded-full", "rounded-md", "rounded-lg", "rounded-sm", "rounded-xl",
-        "bg-primary", "bg-secondary", "bg-destructive", "bg-muted", "bg-accent",
-        "text-primary-foreground", "text-secondary-foreground", "text-destructive-foreground",
+        "bg-primary", "bg-secondary", "bg-success", "bg-warning", "bg-info",
+        "bg-destructive", "bg-muted", "bg-accent",
+        "text-primary-foreground", "text-secondary-foreground", "text-success-foreground",
+        "text-warning-foreground", "text-info-foreground", "text-destructive-foreground",
         "text-muted-foreground", "text-accent-foreground",
-        "border", "border-border",
+        "border", "border-border", "border-success", "border-warning", "border-info", "border-destructive",
       ];
       for (const c of badgeAbsorbedClasses) {
         if (ctx.classes.has(c)) classesToRemove.add(c);

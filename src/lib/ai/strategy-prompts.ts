@@ -16,17 +16,28 @@ export const DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT = `## DESIGN SYSTEM ENFORCEME
 - For badges, prefer the \`Badge\` component's \`variant\` prop instead of custom color overrides:
   - Default status -> \`<Badge>\` or \`<Badge variant="default">\`
   - Secondary/subtle status -> \`<Badge variant="secondary">\`
+  - Success status -> \`<Badge variant="success">\`
+  - Warning status -> \`<Badge variant="warning">\`
+  - Informational status -> \`<Badge variant="info">\`
   - Destructive status -> \`<Badge variant="destructive">\`
   - Outline badge -> \`<Badge variant="outline">\`
 - Use \`className\` on \`Badge\` for spacing, sizing, alignment, and layout. Do NOT use \`className\` to recolor badges.
+- For alerts and toasts, use semantic variants instead of hand-authored status colors:
+  - \`<Alert variant="success" | "warning" | "info" | "destructive">\`
+  - \`<ToastComponent variant="success" | "warning" | "info" | "destructive">\`
 - For tabs, use \`Tabs\`, \`TabsList\`, \`TabsTrigger\`, and \`TabsContent\` directly. Preserve the built-in muted list styling and active trigger styling.
 - Use \`className\` on \`TabsList\` and \`TabsTrigger\` only for width, spacing, sizing, alignment, and layout. Do NOT override their background or text colors with semantic token classes.
+- Use semantic typography classes inside generated UI too: \`text-h1\`, \`text-h2\`, \`text-h3\`, \`text-h4\`, \`text-body\`, \`text-body-sm\`, \`text-caption\`.
+- Use explicit radius utilities (\`rounded-none\`, \`rounded-sm\`, \`rounded-md\`, \`rounded-lg\`, \`rounded-xl\`, \`rounded-full\`) instead of assuming a single derived radius.
 
 ## BACKGROUND + TEXT PAIRING RULE (CRITICAL)
 
 When you apply an opaque semantic background, ALWAYS pair it with its matching foreground in the SAME state bucket (\`base\`, \`hover:\`, \`focus:\`, etc.):
 - \`bg-primary\` -> \`text-primary-foreground\`
 - \`bg-secondary\` -> \`text-secondary-foreground\`
+- \`bg-success\` -> \`text-success-foreground\`
+- \`bg-warning\` -> \`text-warning-foreground\`
+- \`bg-info\` -> \`text-info-foreground\`
 - \`bg-destructive\` -> \`text-destructive-foreground\`
 - \`bg-accent\` -> \`text-accent-foreground\`
 - \`bg-muted\` -> \`text-muted-foreground\`

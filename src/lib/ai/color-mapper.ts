@@ -31,20 +31,21 @@ export interface ColorViolation {
 /** All semantic bg tokens the system supports */
 const SEMANTIC_BG_TOKENS = new Set([
   "background", "card", "popover", "primary", "secondary",
-  "muted", "accent", "destructive",
+  "muted", "accent", "success", "warning", "info", "destructive",
 ]);
 
 /** All semantic text tokens */
 const SEMANTIC_TEXT_TOKENS = new Set([
   "foreground", "primary-foreground", "secondary-foreground",
-  "muted-foreground", "accent-foreground", "destructive-foreground",
+  "muted-foreground", "accent-foreground", "success-foreground",
+  "warning-foreground", "info-foreground", "destructive-foreground",
   "card-foreground", "popover-foreground",
 ]);
 
 /** All semantic border tokens */
 const SEMANTIC_BORDER_TOKENS = new Set([
   "border", "input", "ring", "primary", "secondary",
-  "muted", "accent", "destructive",
+  "muted", "accent", "success", "warning", "info", "destructive",
 ]);
 
 // Prefixes that carry color semantics
@@ -263,9 +264,14 @@ function mapToSemanticToken(
   if (paletteName === "neutral") {
     return mapNeutralToken(shadeNum, prefix);
   }
-  // success, warning, info → accent (no dedicated semantic tokens for these)
-  if (paletteName === "success" || paletteName === "warning" || paletteName === "info") {
-    return mapAccentToken(shadeNum, prefix);
+  if (paletteName === "success") {
+    return mapStatusToken("success", shadeNum, prefix);
+  }
+  if (paletteName === "warning") {
+    return mapStatusToken("warning", shadeNum, prefix);
+  }
+  if (paletteName === "info") {
+    return mapStatusToken("info", shadeNum, prefix);
   }
 
   // For unknown palettes, check if they appear in the semantic map
@@ -305,17 +311,21 @@ function mapErrorToken(shade: number, prefix: string): string {
   return "destructive";
 }
 
-function mapAccentToken(shade: number, prefix: string): string {
+function mapStatusToken(
+  base: "success" | "warning" | "info",
+  shade: number,
+  prefix: string
+): string {
   if (prefix === "bg" || prefix === "from" || prefix === "via" || prefix === "to") {
-    return shade >= 800 ? "accent-foreground" : "accent";
+    return shade >= 800 ? `${base}-foreground` : base;
   }
   if (prefix === "text" || prefix === "decoration") {
-    return shade <= 200 ? "accent-foreground" : "accent";
+    return shade <= 200 ? `${base}-foreground` : base;
   }
   if (prefix === "border" || prefix === "ring" || prefix === "outline" || prefix === "divide") {
-    return "accent";
+    return base;
   }
-  return "accent";
+  return base;
 }
 
 function mapNeutralToken(shade: number, prefix: string): string {
@@ -520,7 +530,8 @@ export function mapColorClass(
 
 /** Semantic tokens that have a matching -foreground counterpart */
 const CONTRAST_PAIR_BASES = new Set([
-  "primary", "secondary", "destructive", "accent", "muted", "card", "popover",
+  "primary", "secondary", "accent", "success", "warning", "info",
+  "destructive", "muted", "card", "popover",
 ]);
 
 interface StatefulSemanticClass {
@@ -541,7 +552,9 @@ interface StatefulTextColorClass extends StatefulSemanticClass {
 function parseStatefulSemanticBgClass(cls: string): StatefulSemanticBgClass | null {
   const parts = cls.split(":");
   const utility = parts.pop()!;
-  const match = utility.match(/^bg-(primary|secondary|destructive|accent|muted|card|popover)(?:\/(\d+))?$/);
+  const match = utility.match(
+    /^bg-(primary|secondary|accent|success|warning|info|destructive|muted|card|popover)(?:\/(\d+))?$/
+  );
   if (!match) return null;
 
   return {

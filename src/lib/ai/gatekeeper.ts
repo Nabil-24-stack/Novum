@@ -278,7 +278,7 @@ export function runGatekeeper(
         }
 
         // Phase 3: Spacing normalization
-        const spacingResult = enforceSpacing(classString);
+        const spacingResult = enforceSpacing(classString, tokens);
         if (spacingResult.violations.length > 0) {
           classString = spacingResult.result;
           allSpacingViolations.push(...spacingResult.violations);

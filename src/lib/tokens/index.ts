@@ -18,7 +18,7 @@ export type {
   HSLString,
 } from "./types";
 
-export { COLOR_STEPS } from "./types";
+export { COLOR_STEPS, COMPONENT_NAMES, SEMANTIC_COLOR_NAMES } from "./types";
 
 // Defaults
 export { defaultTokenState, defaultBaseColors } from "./defaults";

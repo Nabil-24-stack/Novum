@@ -31,8 +31,39 @@ export type SemanticColorName =
   | "secondary" | "secondary-foreground"
   | "muted" | "muted-foreground"
   | "accent" | "accent-foreground"
+  | "success" | "success-foreground"
+  | "warning" | "warning-foreground"
+  | "info" | "info-foreground"
   | "destructive" | "destructive-foreground"
   | "border" | "input" | "ring";
+
+export const SEMANTIC_COLOR_NAMES: SemanticColorName[] = [
+  "background",
+  "foreground",
+  "card",
+  "card-foreground",
+  "popover",
+  "popover-foreground",
+  "primary",
+  "primary-foreground",
+  "secondary",
+  "secondary-foreground",
+  "muted",
+  "muted-foreground",
+  "accent",
+  "accent-foreground",
+  "success",
+  "success-foreground",
+  "warning",
+  "warning-foreground",
+  "info",
+  "info-foreground",
+  "destructive",
+  "destructive-foreground",
+  "border",
+  "input",
+  "ring",
+];
 
 // Semantic token with light/dark mode values
 // Values are references to primitives: "brand-600" or "neutral-50"
@@ -45,7 +76,38 @@ export interface SemanticColorValue {
 export type RadiusPreset = "none" | "sm" | "md" | "lg" | "xl" | "full";
 
 // Component spec names
-export type ComponentName = "button" | "card" | "input" | "badge" | "dialog" | "tabs";
+export type ComponentName =
+  | "button"
+  | "card"
+  | "input"
+  | "badge"
+  | "select"
+  | "textarea"
+  | "tabs"
+  | "dialog"
+  | "alert"
+  | "popover"
+  | "tooltip"
+  | "toast"
+  | "date-picker"
+  | "toggle";
+
+export const COMPONENT_NAMES: ComponentName[] = [
+  "button",
+  "card",
+  "input",
+  "badge",
+  "select",
+  "textarea",
+  "tabs",
+  "dialog",
+  "alert",
+  "popover",
+  "tooltip",
+  "toast",
+  "date-picker",
+  "toggle",
+];
 
 // Component-level customization
 export interface ComponentSpec {
@@ -75,7 +137,7 @@ export interface GlobalSettings {
  * This is the main data structure stored in /tokens.json
  */
 export interface TokenState {
-  version: "1.0";
+  version: "2.0";
   activePresetId?: string;
   primitives: {
     colors: Record<string, ColorScale>;

@@ -4,7 +4,11 @@ import { useCallback, useState, type PointerEvent } from "react";
 import { CheckCircle2, Circle, ShieldCheck, AlertTriangle, Sparkles } from "lucide-react";
 import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
 import type { ManifestoData } from "@/hooks/useStrategyStore";
-import type { JtbdCoverage, CoverageSummary } from "@/lib/product-brain/types";
+import type {
+  CoverageDisplayState,
+  JtbdCoverage,
+  CoverageSummary,
+} from "@/lib/product-brain/types";
 
 interface ManifestoCardProps {
   manifestoData: Partial<ManifestoData>;
@@ -13,10 +17,20 @@ interface ManifestoCardProps {
   onMove?: (x: number, y: number) => void;
   jtbdCoverage?: JtbdCoverage[];
   coverageSummary?: CoverageSummary | null;
+  coverageDisplayState: CoverageDisplayState;
   onAddressGaps?: () => void;
 }
 
-export function ManifestoCard({ manifestoData, x, y, onMove, jtbdCoverage, coverageSummary, onAddressGaps }: ManifestoCardProps) {
+export function ManifestoCard({
+  manifestoData,
+  x,
+  y,
+  onMove,
+  jtbdCoverage,
+  coverageSummary,
+  coverageDisplayState,
+  onAddressGaps,
+}: ManifestoCardProps) {
   const canvasScale = useCanvasScale();
   const [isDragging, setIsDragging] = useState(false);
 
@@ -116,7 +130,7 @@ export function ManifestoCard({ manifestoData, x, y, onMove, jtbdCoverage, cover
                     {isAddressed ? (
                       <CheckCircle2 className="w-5 h-5 text-emerald-500 fill-emerald-500 mt-0.5 shrink-0 transition-colors duration-500" />
                     ) : (
-                      <Circle className={`w-5 h-5 mt-0.5 shrink-0 ${jtbdCoverage ? "text-neutral-300" : "text-emerald-500"}`} />
+                      <Circle className={`w-5 h-5 mt-0.5 shrink-0 ${coverageDisplayState === "pending" ? "text-emerald-500" : "text-neutral-300"}`} />
                     )}
                     <span className={`text-base leading-relaxed transition-colors duration-500 ${isAddressed ? "text-neutral-400 line-through decoration-neutral-300" : "text-neutral-700"}`}>
                       {job}
@@ -169,7 +183,7 @@ export function ManifestoCard({ manifestoData, x, y, onMove, jtbdCoverage, cover
               </h3>
             </div>
 
-            {coverageSummary ? (
+            {coverageDisplayState === "ready" && coverageSummary ? (
               <>
                 <div className="text-center mb-5">
                   <span className={`text-5xl font-bold ${
@@ -253,6 +267,13 @@ export function ManifestoCard({ manifestoData, x, y, onMove, jtbdCoverage, cover
                   </div>
                 )}
               </>
+            ) : coverageDisplayState === "unavailable" ? (
+              <div className="text-center py-3">
+                <span className="text-2xl font-semibold text-amber-500">Unavailable</span>
+                <p className="text-sm text-neutral-500 mt-1">
+                  Coverage couldn&apos;t be calculated from the last annotation pass. Retry annotation generation to compute it.
+                </p>
+              </div>
             ) : (
               <div className="text-center py-3">
                 <span className="text-2xl font-semibold text-neutral-300">Pending</span>

@@ -13,6 +13,8 @@ import { generateAppTsx, toPascalCase } from "@/lib/vfs/app-generator";
 import { runVerificationLoop, detectErrors, sleep, POST_SETTLE_DELAY_MS, type VerificationStateCallbacks } from "@/lib/verification/verify-loop";
 import { isIframeAvailable } from "@/lib/verification/screenshot-capture";
 import { waitForSandpackSettle as waitForSandpackSettleStore } from "@/hooks/useSandpackErrorStore";
+import { buildProductBrainFromEvaluation } from "@/lib/product-brain/snapshot";
+import type { ProductBrainData } from "@/lib/product-brain/types";
 import { toast } from "sonner";
 
 export interface PageBuildConfig {
@@ -176,6 +178,10 @@ export async function evaluateAnnotationsStandalone(
   return null;
 }
 
+function countConnections(brainData: ProductBrainData): number {
+  return brainData.pages.reduce((sum, page) => sum + page.connections.length, 0);
+}
+
 export function useParallelBuild({
   writeFile,
   files,
@@ -264,6 +270,10 @@ export function useParallelBuild({
     if (!context) return;
 
     const pages = allPagesRef.current;
+    const expectedPages = pages.map((page) => ({
+      pageId: page.pageId,
+      pageName: page.pageName,
+    }));
 
     // Collect code for all completed pages using getLatestFile (bypasses stale React state)
     const pagesCode: { pageId: string; pageName: string; code: string }[] = [];
@@ -333,17 +343,14 @@ export function useParallelBuild({
         const evaluatedPages = result?.pages;
 
         if (Array.isArray(evaluatedPages)) {
-          let totalConnections = 0;
-          for (const page of evaluatedPages) {
-            if (page.pageId && Array.isArray(page.connections)) {
-              useProductBrainStore.getState().addPageDecisions({
-                pageId: page.pageId,
-                pageName: page.pageName || page.pageId,
-                connections: page.connections,
-              });
-              totalConnections += page.connections.length;
-            }
-          }
+          const brainData = buildProductBrainFromEvaluation(evaluatedPages, expectedPages);
+          useProductBrainStore.getState().setBrainData(brainData);
+          useStrategyStore.getState().setCoverageDisplayState("ready");
+          const serializedBrain = JSON.stringify(brainData, null, 2);
+          writeFile("/product-brain.json", serializedBrain);
+          latestBuildFilesRef.current["/product-brain.json"] = serializedBrain;
+
+          const totalConnections = countConnections(brainData);
           useStreamingStore.getState().setAnnotationDone(totalConnections);
           success = true;
           break; // Success — exit retry loop
@@ -358,6 +365,9 @@ export function useParallelBuild({
     if (!success) {
       console.warn("[Build] Annotation evaluation failed after all retries:", lastError);
       useStreamingStore.getState().setAnnotationError("Annotation evaluation failed — use the retry button to try again");
+      if (!useProductBrainStore.getState().brainData) {
+        useStrategyStore.getState().setCoverageDisplayState("unavailable");
+      }
       toast.error("Annotations could not be generated. Click the retry button to try again.");
     }
 
@@ -369,7 +379,7 @@ export function useParallelBuild({
     setTimeout(() => {
       useStreamingStore.getState().resetAnnotationEvaluation();
     }, 6000);
-  }, [getLatestFile]);
+  }, [getLatestFile, writeFile]);
 
   // Check if all pages are done and trigger evaluation (parallel fresh build path)
   const checkAllPagesComplete = useCallback(() => {
@@ -1482,6 +1492,7 @@ export function useParallelBuild({
       // Initialize stores — all pages visible immediately
       useStreamingStore.getState().startParallelStreaming(pageIds);
       useStrategyStore.getState().setBuildingPages(pageIds);
+      useStrategyStore.getState().setCoverageDisplayState("pending");
 
       // During rebuild, immediately pre-complete pages that have existing code
       // This prevents the StreamingOverlay from showing the black terminal for unchanged pages

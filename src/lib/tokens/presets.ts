@@ -3,7 +3,13 @@
  * Complete design system presets that can be applied with one click
  */
 
-import type { TokenState, SemanticColorName, SemanticColorValue } from "./types";
+import type {
+  TokenState,
+  SemanticColorName,
+  SemanticColorValue,
+  ComponentName,
+  ComponentSpec,
+} from "./types";
 import { generateColorScale, generateNeutralScale } from "./color-scale";
 
 /**
@@ -48,6 +54,12 @@ function createSemanticColors(
     "muted-foreground": { light: "neutral-500", dark: "neutral-400" },
     accent: { light: "neutral-100", dark: "neutral-800" },
     "accent-foreground": { light: "neutral-900", dark: "neutral-100" },
+    success: { light: "success-500", dark: "success-400" },
+    "success-foreground": { light: "neutral-50", dark: "neutral-950" },
+    warning: { light: "warning-500", dark: "warning-400" },
+    "warning-foreground": { light: "neutral-950", dark: "neutral-950" },
+    info: { light: "info-500", dark: "info-400" },
+    "info-foreground": { light: "neutral-50", dark: "neutral-950" },
     destructive: { light: "error-500", dark: "error-400" },
     "destructive-foreground": { light: "neutral-50", dark: "neutral-950" },
     border: { light: "neutral-200", dark: "neutral-800" },
@@ -56,6 +68,36 @@ function createSemanticColors(
   };
 
   return { ...defaults, ...overrides };
+}
+
+function createComponentSpecs(
+  overrides: Partial<Record<ComponentName, ComponentSpec>>
+): Record<ComponentName, ComponentSpec> {
+  const button = overrides.button ?? { radius: "md", border: 1, shadow: "sm" };
+  const input = overrides.input ?? { radius: "md", border: 1, shadow: "none" };
+  const card = overrides.card ?? { radius: "lg", border: 1, shadow: "sm" };
+  const dialog = overrides.dialog ?? { radius: "lg", border: 1, shadow: "md" };
+
+  return {
+    button,
+    card,
+    input,
+    badge: overrides.badge ?? { radius: "md", border: 1, shadow: "none" },
+    select: overrides.select ?? input,
+    textarea: overrides.textarea ?? input,
+    tabs: overrides.tabs ?? { radius: "md", border: 1, shadow: "none" },
+    dialog,
+    alert: overrides.alert ?? { ...card, shadow: "none" },
+    popover: overrides.popover ?? dialog,
+    tooltip: overrides.tooltip ?? { ...dialog, radius: "md" },
+    toast: overrides.toast ?? dialog,
+    "date-picker": overrides["date-picker"] ?? dialog,
+    toggle: overrides.toggle ?? {
+      radius: button.radius ?? "md",
+      border: button.border ?? 1,
+      shadow: "none",
+    },
+  };
 }
 
 // ============================================================================
@@ -74,7 +116,7 @@ const brutalistPreset: Preset = {
     foreground: "#000000",
   },
   tokens: {
-    version: "1.0",
+    version: "2.0",
     primitives: {
       colors: {
         brand: generateColorScale("#FF0000"),     // Pure red
@@ -106,14 +148,14 @@ const brutalistPreset: Preset = {
         ring: { light: "brand-500", dark: "brand-400" },
       }),
     },
-    components: {
+    components: createComponentSpecs({
       button: { radius: "none", border: 1, shadow: "none" },
       card: { radius: "none", border: 1, shadow: "none" },
       input: { radius: "none", border: 1, shadow: "none" },
       badge: { radius: "none", border: 1, shadow: "none" },
       dialog: { radius: "none", border: 1, shadow: "none" },
       tabs: { radius: "none", border: 1, shadow: "none" },
-    },
+    }),
     globals: {
       radius: {
         none: "0",
@@ -154,7 +196,7 @@ const softPreset: Preset = {
     foreground: "#44403C",
   },
   tokens: {
-    version: "1.0",
+    version: "2.0",
     primitives: {
       colors: {
         brand: generateColorScale("#8B5CF6"),     // Soft violet
@@ -192,14 +234,14 @@ const softPreset: Preset = {
         ring: { light: "brand-400", dark: "brand-500" },
       }),
     },
-    components: {
+    components: createComponentSpecs({
       button: { radius: "lg", border: 0, shadow: "sm" },
       card: { radius: "xl", border: 0, shadow: "md" },
       input: { radius: "lg", border: 1, shadow: "none" },
       badge: { radius: "full", border: 0, shadow: "none" },
       dialog: { radius: "xl", border: 0, shadow: "lg" },
       tabs: { radius: "lg", border: 0, shadow: "none" },
-    },
+    }),
     globals: {
       radius: {
         none: "0",
@@ -240,7 +282,7 @@ const neonPreset: Preset = {
     foreground: "#F1F5F9",
   },
   tokens: {
-    version: "1.0",
+    version: "2.0",
     primitives: {
       colors: {
         brand: generateColorScale("#22D3EE"),     // Electric cyan
@@ -278,14 +320,14 @@ const neonPreset: Preset = {
         ring: { light: "brand-400", dark: "brand-400" },
       }),
     },
-    components: {
+    components: createComponentSpecs({
       button: { radius: "md", border: 1, shadow: "sm" },
       card: { radius: "lg", border: 1, shadow: "md" },
       input: { radius: "md", border: 1, shadow: "none" },
       badge: { radius: "md", border: 1, shadow: "none" },
       dialog: { radius: "lg", border: 1, shadow: "lg" },
       tabs: { radius: "md", border: 1, shadow: "none" },
-    },
+    }),
     globals: {
       radius: {
         none: "0",
@@ -326,7 +368,7 @@ const editorialPreset: Preset = {
     foreground: "#1F2937",
   },
   tokens: {
-    version: "1.0",
+    version: "2.0",
     primitives: {
       colors: {
         brand: generateColorScale("#1E3A8A"),
@@ -366,14 +408,14 @@ const editorialPreset: Preset = {
         ring: { light: "brand-500", dark: "brand-400" },
       }),
     },
-    components: {
+    components: createComponentSpecs({
       button: { radius: "sm", border: 1, shadow: "none" },
       card: { radius: "md", border: 1, shadow: "sm" },
       input: { radius: "sm", border: 1, shadow: "none" },
       badge: { radius: "sm", border: 1, shadow: "none" },
       dialog: { radius: "md", border: 1, shadow: "md" },
       tabs: { radius: "sm", border: 1, shadow: "none" },
-    },
+    }),
     globals: {
       radius: {
         none: "0",
@@ -384,7 +426,7 @@ const editorialPreset: Preset = {
         full: "9999px",
       },
       typography: {
-        fontSans: "'Playfair Display', serif",
+        fontSans: "'Lora', serif",
         fontMono: "'JetBrains Mono', monospace",
         baseSize: 17,
         scaleRatio: 1.25,
@@ -414,7 +456,7 @@ const terraPreset: Preset = {
     foreground: "#3F3A36",
   },
   tokens: {
-    version: "1.0",
+    version: "2.0",
     primitives: {
       colors: {
         brand: generateColorScale("#2F6B4F"),
@@ -454,14 +496,14 @@ const terraPreset: Preset = {
         ring: { light: "brand-500", dark: "brand-400" },
       }),
     },
-    components: {
+    components: createComponentSpecs({
       button: { radius: "lg", border: 0, shadow: "sm" },
       card: { radius: "xl", border: 0, shadow: "md" },
       input: { radius: "lg", border: 1, shadow: "none" },
       badge: { radius: "full", border: 0, shadow: "none" },
       dialog: { radius: "xl", border: 0, shadow: "lg" },
       tabs: { radius: "lg", border: 0, shadow: "none" },
-    },
+    }),
     globals: {
       radius: {
         none: "0",
@@ -502,7 +544,7 @@ const arcticPreset: Preset = {
     foreground: "#0F172A",
   },
   tokens: {
-    version: "1.0",
+    version: "2.0",
     primitives: {
       colors: {
         brand: generateColorScale("#0E7490"),
@@ -542,14 +584,14 @@ const arcticPreset: Preset = {
         ring: { light: "brand-500", dark: "brand-400" },
       }),
     },
-    components: {
+    components: createComponentSpecs({
       button: { radius: "md", border: 1, shadow: "sm" },
       card: { radius: "lg", border: 1, shadow: "sm" },
       input: { radius: "md", border: 1, shadow: "none" },
       badge: { radius: "md", border: 1, shadow: "none" },
       dialog: { radius: "lg", border: 1, shadow: "md" },
       tabs: { radius: "md", border: 1, shadow: "none" },
-    },
+    }),
     globals: {
       radius: {
         none: "0",
@@ -575,6 +617,94 @@ const arcticPreset: Preset = {
 };
 
 // ============================================================================
+// MONOCHROME PRESET
+// Minimal, clean, modern. Monochrome surfaces with restrained blue focus cues.
+// ============================================================================
+
+const monochromePreset: Preset = {
+  id: "monochrome",
+  name: "Monochrome",
+  description: "Minimal, clean, modern",
+  preview: {
+    background: "#FAFAFA",
+    primary: "#111111",
+    accent: "#F4F4F5",
+    foreground: "#0A0A0A",
+  },
+  tokens: {
+    version: "2.0",
+    primitives: {
+      colors: {
+        brand: generateColorScale("#111111"),
+        neutral: generateColorScale("#71717A"),
+        success: generateColorScale("#16A34A"),
+        warning: generateColorScale("#D97706"),
+        error: generateColorScale("#DC2626"),
+        info: generateColorScale("#2563EB"),
+      },
+      baseColors: {
+        brand: "#111111",
+        neutral: "#71717A",
+        success: "#16A34A",
+        warning: "#D97706",
+        error: "#DC2626",
+        info: "#2563EB",
+      },
+    },
+    semantics: {
+      colors: createSemanticColors({
+        background: { light: "neutral-50", dark: "neutral-950" },
+        foreground: { light: "neutral-950", dark: "neutral-50" },
+        card: { light: "neutral-50", dark: "neutral-900" },
+        "card-foreground": { light: "neutral-950", dark: "neutral-50" },
+        popover: { light: "neutral-50", dark: "neutral-900" },
+        "popover-foreground": { light: "neutral-950", dark: "neutral-50" },
+        primary: { light: "brand-500", dark: "brand-50" },
+        "primary-foreground": { light: "neutral-50", dark: "neutral-950" },
+        secondary: { light: "neutral-100", dark: "neutral-900" },
+        "secondary-foreground": { light: "neutral-900", dark: "neutral-100" },
+        muted: { light: "neutral-100", dark: "neutral-900" },
+        "muted-foreground": { light: "neutral-500", dark: "neutral-400" },
+        accent: { light: "neutral-100", dark: "neutral-900" },
+        "accent-foreground": { light: "neutral-900", dark: "neutral-100" },
+        border: { light: "neutral-200", dark: "neutral-800" },
+        input: { light: "neutral-200", dark: "neutral-800" },
+        ring: { light: "info-500", dark: "info-400" },
+      }),
+    },
+    components: createComponentSpecs({
+      button: { radius: "md", border: 1, shadow: "none" },
+      card: { radius: "lg", border: 1, shadow: "none" },
+      input: { radius: "md", border: 1, shadow: "none" },
+      badge: { radius: "full", border: 1, shadow: "none" },
+      dialog: { radius: "lg", border: 1, shadow: "md" },
+      tabs: { radius: "md", border: 1, shadow: "none" },
+    }),
+    globals: {
+      radius: {
+        none: "0",
+        sm: "0.25rem",
+        md: "0.5rem",
+        lg: "0.75rem",
+        xl: "1rem",
+        full: "9999px",
+      },
+      typography: {
+        fontSans: "'Geist', 'Inter', sans-serif",
+        fontMono: "'Geist Mono', 'JetBrains Mono', monospace",
+        baseSize: 14,
+        scaleRatio: 1.2,
+        weightRegular: 400,
+        weightBold: 600,
+      },
+      spacing: {
+        baseUnit: 4,
+      },
+    },
+  },
+};
+
+// ============================================================================
 // SUNSET POP PRESET
 // Warm, energetic, expressive. Orange-forward with vivid magenta accents.
 // ============================================================================
@@ -590,7 +720,7 @@ const sunsetPopPreset: Preset = {
     foreground: "#431407",
   },
   tokens: {
-    version: "1.0",
+    version: "2.0",
     primitives: {
       colors: {
         brand: generateColorScale("#EA580C"),
@@ -630,14 +760,14 @@ const sunsetPopPreset: Preset = {
         ring: { light: "brand-500", dark: "brand-400" },
       }),
     },
-    components: {
+    components: createComponentSpecs({
       button: { radius: "md", border: 0, shadow: "md" },
       card: { radius: "lg", border: 0, shadow: "md" },
       input: { radius: "md", border: 1, shadow: "none" },
       badge: { radius: "full", border: 0, shadow: "none" },
       dialog: { radius: "lg", border: 0, shadow: "lg" },
       tabs: { radius: "md", border: 0, shadow: "none" },
-    },
+    }),
     globals: {
       radius: {
         none: "0",
@@ -678,7 +808,7 @@ const noirLuxePreset: Preset = {
     foreground: "#F8FAFC",
   },
   tokens: {
-    version: "1.0",
+    version: "2.0",
     primitives: {
       colors: {
         brand: generateColorScale("#D4A017"),
@@ -718,14 +848,14 @@ const noirLuxePreset: Preset = {
         ring: { light: "brand-500", dark: "brand-400" },
       }),
     },
-    components: {
+    components: createComponentSpecs({
       button: { radius: "sm", border: 1, shadow: "none" },
       card: { radius: "md", border: 1, shadow: "md" },
       input: { radius: "sm", border: 1, shadow: "none" },
       badge: { radius: "sm", border: 1, shadow: "none" },
       dialog: { radius: "md", border: 1, shadow: "lg" },
       tabs: { radius: "sm", border: 1, shadow: "none" },
-    },
+    }),
     globals: {
       radius: {
         none: "0",
@@ -736,7 +866,7 @@ const noirLuxePreset: Preset = {
         full: "9999px",
       },
       typography: {
-        fontSans: "'Cormorant Garamond', serif",
+        fontSans: "'Playfair Display', serif",
         fontMono: "'JetBrains Mono', monospace",
         baseSize: 17,
         scaleRatio: 1.3,
@@ -760,6 +890,7 @@ export const PRESETS: Preset[] = [
   editorialPreset,
   terraPreset,
   arcticPreset,
+  monochromePreset,
   sunsetPopPreset,
   noirLuxePreset,
 ];

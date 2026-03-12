@@ -8,6 +8,7 @@ import {
   SemanticColorValue,
   ComponentName,
   ComponentSpec,
+  RadiusPreset,
   defaultTokenState,
   generateColorScale,
   generateCSS,
@@ -48,7 +49,7 @@ export interface UseTokensReturn {
   ) => void;
 
   // Global operations
-  updateGlobalRadius: (value: string) => void;
+  updateGlobalRadius: (radiusName: RadiusPreset, value: string) => void;
   updateGlobalFont: (font: "fontSans" | "fontMono", value: string) => void;
 
   // Typography operations
@@ -74,22 +75,7 @@ function initializeTokens(files: Record<string, string>): TokenState {
   if (tokensJson) {
     const parsed = parseTokens(tokensJson);
     if (parsed) {
-      // Migration: ensure new typography/spacing fields have defaults
-      return {
-        ...parsed,
-        globals: {
-          ...parsed.globals,
-          typography: {
-            fontSans: parsed.globals.typography?.fontSans ?? "'Inter', sans-serif",
-            fontMono: parsed.globals.typography?.fontMono ?? "'JetBrains Mono', monospace",
-            baseSize: parsed.globals.typography?.baseSize ?? 16,
-            scaleRatio: parsed.globals.typography?.scaleRatio ?? 1.25,
-            weightRegular: parsed.globals.typography?.weightRegular ?? 400,
-            weightBold: parsed.globals.typography?.weightBold ?? 700,
-          },
-          spacing: parsed.globals.spacing ?? { baseUnit: 4 },
-        },
-      };
+      return parsed;
     }
   }
   return defaultTokenState;
@@ -343,7 +329,7 @@ export function useTokens({ files, writeFile }: UseTokensProps): UseTokensReturn
 
   // Update global radius
   const updateGlobalRadius = useCallback(
-    (value: string) => {
+    (radiusName: RadiusPreset, value: string) => {
       setTokens((prev) => {
         const updated: TokenState = {
           ...prev,
@@ -351,11 +337,7 @@ export function useTokens({ files, writeFile }: UseTokensProps): UseTokensReturn
             ...prev.globals,
             radius: {
               ...prev.globals.radius,
-              md: value,
-              // Also update relative values
-              sm: `calc(${value} - 0.125rem)`,
-              lg: `calc(${value} + 0.25rem)`,
-              xl: `calc(${value} + 0.5rem)`,
+              [radiusName]: value,
             },
           },
         };

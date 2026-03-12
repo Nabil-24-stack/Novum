@@ -3,7 +3,15 @@
  * Converts TokenState to CSS with :root and .dark blocks
  */
 
-import type { TokenState, ColorScale } from "./types";
+import { defaultTokenState } from "./defaults";
+import {
+  COMPONENT_NAMES,
+  SEMANTIC_COLOR_NAMES,
+  type TokenState,
+  type ColorScale,
+  type ComponentName,
+  type SemanticColorName,
+} from "./types";
 
 const STEPS: (keyof ColorScale)[] = ["50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950"];
 
@@ -53,10 +61,13 @@ function generateGlobalVars(globals: TokenState["globals"]): string {
   const lines: string[] = [];
 
   // Radius
-  lines.push(`    --radius: ${globals.radius.md};`);
+  lines.push(`    --radius-none: ${globals.radius.none};`);
   lines.push(`    --radius-sm: ${globals.radius.sm};`);
+  lines.push(`    --radius-md: ${globals.radius.md};`);
   lines.push(`    --radius-lg: ${globals.radius.lg};`);
   lines.push(`    --radius-xl: ${globals.radius.xl};`);
+  lines.push(`    --radius-full: ${globals.radius.full};`);
+  lines.push(`    --radius: ${globals.radius.md};`);
 
   // Typography - fonts
   lines.push(`    --font-sans: ${globals.typography.fontSans};`);
@@ -111,16 +122,7 @@ function mapShadow(shadow: TokenState["components"]["button"]["shadow"]): string
 
 function generateComponentVars(tokens: TokenState): string {
   const lines: string[] = [];
-  const names: Array<keyof TokenState["components"]> = [
-    "button",
-    "card",
-    "input",
-    "badge",
-    "dialog",
-    "tabs",
-  ];
-
-  for (const name of names) {
+  for (const name of COMPONENT_NAMES) {
     const spec = tokens.components[name] ?? {};
     const radiusKey = spec.radius ?? "md";
     const radius = tokens.globals.radius[radiusKey] ?? tokens.globals.radius.md;
@@ -135,11 +137,162 @@ function generateComponentVars(tokens: TokenState): string {
   return lines.join("\n");
 }
 
+type ParsedTokenInput = Partial<TokenState> & {
+  version?: string;
+  primitives?: Partial<TokenState["primitives"]>;
+  semantics?: {
+    colors?: Partial<
+      Record<
+        SemanticColorName,
+        Partial<TokenState["semantics"]["colors"][SemanticColorName]>
+      >
+    >;
+  };
+  components?: Partial<Record<ComponentName, TokenState["components"][ComponentName]>>;
+  globals?: Partial<TokenState["globals"]>;
+};
+
+function normalizeSemanticColor(
+  tokenName: SemanticColorName,
+  parsed: ParsedTokenInput
+): TokenState["semantics"]["colors"][SemanticColorName] {
+  const current = parsed?.semantics?.colors?.[tokenName];
+  if (current?.light && current?.dark) {
+    return {
+      light: current.light,
+      dark: current.dark,
+    };
+  }
+
+  if (tokenName === "success") {
+    return { light: "success-500", dark: "success-400" };
+  }
+  if (tokenName === "success-foreground") {
+    return { light: "neutral-50", dark: "neutral-950" };
+  }
+  if (tokenName === "warning") {
+    return { light: "warning-500", dark: "warning-400" };
+  }
+  if (tokenName === "warning-foreground") {
+    return { light: "neutral-950", dark: "neutral-950" };
+  }
+  if (tokenName === "info") {
+    return { light: "info-500", dark: "info-400" };
+  }
+  if (tokenName === "info-foreground") {
+    return { light: "neutral-50", dark: "neutral-950" };
+  }
+
+  return defaultTokenState.semantics.colors[tokenName];
+}
+
+function normalizeComponentSpec(
+  componentName: ComponentName,
+  parsed: ParsedTokenInput
+): TokenState["components"][ComponentName] {
+  const current = parsed?.components?.[componentName];
+  if (current) {
+    return current;
+  }
+
+  if (componentName === "select" || componentName === "textarea") {
+    return parsed?.components?.input ?? defaultTokenState.components.input;
+  }
+
+  if (
+    componentName === "popover" ||
+    componentName === "toast" ||
+    componentName === "date-picker"
+  ) {
+    return parsed?.components?.dialog ?? defaultTokenState.components.dialog;
+  }
+
+  if (componentName === "tooltip") {
+    return {
+      ...(parsed?.components?.dialog ?? defaultTokenState.components.dialog),
+      radius: parsed?.components?.tooltip?.radius ?? "md",
+    };
+  }
+
+  if (componentName === "alert") {
+    return parsed?.components?.card ?? defaultTokenState.components.alert;
+  }
+
+  if (componentName === "toggle") {
+    return parsed?.components?.toggle ?? defaultTokenState.components.toggle;
+  }
+
+  return defaultTokenState.components[componentName];
+}
+
+function normalizeTokens(parsed: unknown): TokenState | null {
+  if (typeof parsed !== "object" || parsed === null) {
+    return null;
+  }
+
+  const candidate = parsed as ParsedTokenInput;
+  if (candidate.version !== "1.0" && candidate.version !== "2.0") {
+    return null;
+  }
+
+  const normalizedSemantics = Object.fromEntries(
+    SEMANTIC_COLOR_NAMES.map((tokenName) => [
+      tokenName,
+      normalizeSemanticColor(tokenName, candidate),
+    ])
+  ) as TokenState["semantics"]["colors"];
+
+  const normalizedComponents = Object.fromEntries(
+    COMPONENT_NAMES.map((componentName) => [
+      componentName,
+      normalizeComponentSpec(componentName, candidate),
+    ])
+  ) as TokenState["components"];
+
+  return {
+    ...defaultTokenState,
+    ...candidate,
+    version: "2.0",
+    primitives: {
+      ...defaultTokenState.primitives,
+      ...candidate.primitives,
+      colors: {
+        ...defaultTokenState.primitives.colors,
+        ...(candidate.primitives?.colors ?? {}),
+      },
+      baseColors: {
+        ...defaultTokenState.primitives.baseColors,
+        ...(candidate.primitives?.baseColors ?? {}),
+      },
+    },
+    semantics: {
+      colors: normalizedSemantics,
+    },
+    components: normalizedComponents,
+    globals: {
+      ...defaultTokenState.globals,
+      ...candidate.globals,
+      radius: {
+        ...defaultTokenState.globals.radius,
+        ...(candidate.globals?.radius ?? {}),
+      },
+      typography: {
+        ...defaultTokenState.globals.typography,
+        ...(candidate.globals?.typography ?? {}),
+      },
+      spacing: {
+        ...defaultTokenState.globals.spacing,
+        ...(candidate.globals?.spacing ?? {}),
+      },
+    },
+  };
+}
+
 /**
  * Generate complete CSS from TokenState
  */
 export function generateCSS(tokens: TokenState): string {
-  const fontImport = `@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Lora:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&family=Playfair+Display:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');`;
+  const fontImport = `@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Lora:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&family=Playfair+Display:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');`;
 
   const tailwindDirectives = `@tailwind base;
 @tailwind components;
@@ -194,10 +347,7 @@ ${darkSemanticVars}
 export function parseTokens(content: string): TokenState | null {
   try {
     const parsed = JSON.parse(content);
-    if (parsed.version === "1.0") {
-      return parsed as TokenState;
-    }
-    return null;
+    return normalizeTokens(parsed);
   } catch {
     return null;
   }

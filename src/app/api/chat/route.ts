@@ -257,10 +257,13 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
    - \`bg-secondary\`, \`text-secondary-foreground\`
    - \`bg-muted\`, \`text-muted-foreground\`
    - \`bg-accent\`, \`text-accent-foreground\`
+   - \`bg-success\`, \`text-success-foreground\`
+   - \`bg-warning\`, \`text-warning-foreground\`
+   - \`bg-info\`, \`text-info-foreground\`
    - \`bg-destructive\`, \`text-destructive-foreground\`
    - \`bg-background\`, \`text-foreground\`
    - \`border-border\`, \`border-input\`
-   - \`rounded-md\`, \`rounded-lg\` (uses --radius variable)
+   - \`rounded-none\`, \`rounded-sm\`, \`rounded-md\`, \`rounded-lg\`, \`rounded-xl\`, \`rounded-full\` (mapped to explicit radius tokens)
 
    **DO NOT use (hardcoded):**
    - \`bg-blue-500\`, \`text-gray-700\`, etc. (hardcoded Tailwind colors)
@@ -282,6 +285,9 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     - bg-secondary (secondary elements)
     - bg-muted (subtle backgrounds, disabled states)
     - bg-accent (hover states, highlights)
+    - bg-success (success callouts, positive status)
+    - bg-warning (warning callouts, caution status)
+    - bg-info (informational callouts, neutral status)
     - bg-destructive (delete buttons, errors)
     - bg-popover (dropdowns, tooltips)
 
@@ -290,6 +296,9 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     - text-muted-foreground (secondary/subtle text, descriptions)
     - text-primary-foreground (text ON primary backgrounds)
     - text-secondary-foreground (text ON secondary backgrounds)
+    - text-success-foreground (text ON success backgrounds)
+    - text-warning-foreground (text ON warning backgrounds)
+    - text-info-foreground (text ON info backgrounds)
     - text-destructive-foreground (text ON destructive backgrounds)
     - text-card-foreground (text inside cards)
 
@@ -304,8 +313,8 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
 
     ✅ CORRECT (themed - will update when user changes tokens):
     <div className="bg-card border border-border rounded-lg p-4">
-      <h2 className="text-foreground font-semibold">Title</h2>
-      <p className="text-muted-foreground text-sm">Description</p>
+      <h2 className="text-h4 text-card-foreground">Title</h2>
+      <p className="text-body-sm text-muted-foreground">Description</p>
       <button className="bg-primary text-primary-foreground px-4 py-2 rounded-md">Action</button>
     </div>
 
@@ -329,7 +338,9 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     - Need gray text? → text-muted-foreground
     - Need a white card? → bg-card
     - Need subtle gray background? → bg-muted
-    - Need green/success? → Use bg-primary with success message text
+    - Need green/success? → bg-success + text-success-foreground
+    - Need amber/warning? → bg-warning + text-warning-foreground
+    - Need blue/info? → bg-info + text-info-foreground
     - Need borders? → border-border
 
     ## BACKGROUND + TEXT PAIRING RULE (CRITICAL):
@@ -337,6 +348,9 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     When you apply a semantic background, ALWAYS pair it with its matching foreground:
     - bg-primary → text-primary-foreground
     - bg-secondary → text-secondary-foreground
+    - bg-success → text-success-foreground
+    - bg-warning → text-warning-foreground
+    - bg-info → text-info-foreground
     - bg-destructive → text-destructive-foreground
     - bg-accent → text-accent-foreground
     - bg-muted → text-muted-foreground
@@ -344,7 +358,7 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
 
     NEVER use text-primary on bg-primary (same color = invisible text).
 
-    **MISSING TEXT COLOR RULE:** When you apply bg-primary, bg-secondary, bg-destructive, bg-accent, or bg-muted to ANY element,
+    **MISSING TEXT COLOR RULE:** When you apply bg-primary, bg-secondary, bg-success, bg-warning, bg-info, bg-destructive, bg-accent, or bg-muted to ANY element,
     you MUST ALSO add the matching text-X-foreground class. Without it, text inherits dark text-foreground which is unreadable on dark backgrounds.
     Exception: Low-opacity tints like bg-primary/10 are fine without a text color — the inherited text-foreground is readable.
 
@@ -371,8 +385,11 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
     - \`<Table>\` for tabular data (with TableHeader, TableBody, TableRow, TableHead, TableCell)
     - \`<Select>\` for dropdown selects (NOT raw \`<select>\`)
     - \`<Progress>\` for progress bars (NOT raw divs with width percentages)
+    - \`<Badge variant="success" | "warning" | "info" | "destructive" | "secondary" | "outline">\` for status chips
+    - \`<Alert variant="success" | "warning" | "info" | "destructive">\` for semantic callouts
+    - \`<ToastComponent variant="success" | "warning" | "info" | "destructive">\` for semantic toasts
 
-    **Radius:** Use rounded-sm, rounded-md, rounded-lg, rounded-xl (mapped to --radius CSS variable)
+    **Radius:** Use rounded-none, rounded-sm, rounded-md, rounded-lg, rounded-xl, rounded-full. These map to explicit radius tokens, not a derived single base radius.
 
     **Dark Mode:** Handled automatically by the token system. Do NOT add dark: prefixes.
 
@@ -390,6 +407,7 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
 
     NEVER USE: text-xs, text-sm, text-base, text-lg, text-xl, text-2xl, text-3xl, etc.
     Font weight and line-height are built into semantic classes — do NOT add font-bold/font-semibold alongside text-h1.
+    Use semantic typography inside built-in components too unless a component already owns that styling internally.
 
 11. **MULTI-PAGE APPS & FLOW MANIFEST (CRITICAL):**
 

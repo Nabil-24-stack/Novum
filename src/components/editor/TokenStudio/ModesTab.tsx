@@ -41,6 +41,17 @@ const TOKEN_GROUPS: { label: string; tokens: SemanticColorName[] }[] = [
     tokens: ["muted", "muted-foreground", "accent", "accent-foreground"],
   },
   {
+    label: "Status",
+    tokens: [
+      "success",
+      "success-foreground",
+      "warning",
+      "warning-foreground",
+      "info",
+      "info-foreground",
+    ],
+  },
+  {
     label: "Destructive",
     tokens: ["destructive", "destructive-foreground"],
   },

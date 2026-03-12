@@ -254,7 +254,7 @@ Deterministic transpiler enforcing the design system on AI-generated code before
 **Three-tier architecture:** Primitives (raw color palettes 50-950), Semantics (meaningful mappings with light/dark modes), Components (token-aware specs per component).
 
 **Token Studio (`src/components/editor/TokenStudio/`):**
-- **Presets View** (default): 8 one-click presets — Brutalist, Soft, Neon, Editorial, Terra, Arctic Glass (default), Sunset Pop, Noir Luxe. Each provides complete `TokenState` (palettes, semantics, components, typography, spacing). Key file: `src/lib/tokens/presets.ts`
+- **Presets View** (default): 9 one-click presets — Brutalist, Soft, Neon, Editorial, Terra, Arctic Glass (default), Monochrome, Sunset Pop, Noir Luxe. Each provides complete `TokenState` (palettes, semantics, components, typography, spacing). Key file: `src/lib/tokens/presets.ts`
 - **Customise View**: Tabs for palettes, semantic mappings, component specs, typography scale, spacing density
 
 **Typography Scale:** Modular scale from `baseSize` (px) × `scaleRatio`. 7 levels: `text-h1` (+4), `text-h2` (+3), `text-h3` (+2), `text-h4` (+1), `text-body` (0), `text-body-sm` (-1), `text-caption` (-2). Sets font-size, line-height, font-weight only — NOT color.
@@ -335,7 +335,7 @@ All VFS components use semantic tokens only, are pure React (no Radix — the ho
 - **Phase 9** ✅ Flow View (Multi-page visualization, orthogonal routing, draggable nodes)
 - **Phase 10** ✅ AST Architecture (GPS source mapping, surgical editing, optimistic text, prop inspector)
 - **Phase 11** ✅ Keyboard Reordering (Arrow key element swapping with FLIP animation)
-- **Phase 12** ✅ Token Studio Presets (8 one-click style presets with Customise flow)
+- **Phase 12** ✅ Token Studio Presets (9 one-click style presets with Customise flow)
 - **Phase 13** ✅ Flow View Navigation Interception (Viewport animation to target frame)
 - **Phase 14** ✅ AI Chat Enhancements (Right-click context menu, pinned elements, persistent chat)
 - **Phase 15** ✅ Flow View Full Editing (Drawing tools, multi-frame drop detection, always-mounted iframes)

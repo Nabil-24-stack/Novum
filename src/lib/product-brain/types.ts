@@ -25,6 +25,8 @@ export interface ProductBrainData {
   pages: PageDecisions[];
 }
 
+export type CoverageDisplayState = "pending" | "ready" | "unavailable";
+
 // --- Computed coverage types ---
 
 export interface JtbdCoverage {

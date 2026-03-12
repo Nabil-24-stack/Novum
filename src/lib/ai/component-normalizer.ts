@@ -18,7 +18,14 @@ const traverse = (
 const CLASSNAME_HELPERS = new Set(["cn", "clsx", "twMerge"]);
 
 type SolidButtonVariant = "default" | "secondary" | "destructive";
-type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
+type BadgeVariant =
+  | "default"
+  | "secondary"
+  | "destructive"
+  | "success"
+  | "warning"
+  | "info"
+  | "outline";
 type TabsComponentName = "TabsList" | "TabsTrigger";
 
 const SOLID_BG_TO_BUTTON_VARIANT: Record<string, SolidButtonVariant> = {
@@ -31,11 +38,16 @@ const SOLID_BG_TO_BADGE_VARIANT: Record<string, Exclude<BadgeVariant, "outline">
   primary: "default",
   secondary: "secondary",
   muted: "secondary",
+  success: "success",
+  warning: "warning",
+  info: "info",
   destructive: "destructive",
 };
 
-const SEMANTIC_BG_PATTERN = /^(background|card|popover|primary|secondary|muted|accent|destructive)$/;
-const SEMANTIC_TEXT_PATTERN = /^(foreground|primary-foreground|secondary-foreground|muted-foreground|accent-foreground|destructive-foreground|card-foreground|popover-foreground)$/;
+const SEMANTIC_BG_PATTERN =
+  /^(background|card|popover|primary|secondary|muted|accent|success|warning|info|destructive)$/;
+const SEMANTIC_TEXT_PATTERN =
+  /^(foreground|primary-foreground|secondary-foreground|muted-foreground|accent-foreground|success-foreground|warning-foreground|info-foreground|destructive-foreground|card-foreground|popover-foreground)$/;
 
 const BUTTON_REMOVABLE_COLOR_CLASSES = [
   /^bg-(primary|secondary|destructive)(?:\/\d+)?$/,

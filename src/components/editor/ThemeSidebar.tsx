@@ -26,6 +26,7 @@ interface ThemeSettings {
 }
 
 const FONT_OPTIONS = [
+  { value: "'Geist', 'Inter', sans-serif", label: "Geist" },
   { value: "'Inter', sans-serif", label: "Inter" },
   { value: "'Plus Jakarta Sans', sans-serif", label: "Plus Jakarta Sans" },
   { value: "'DM Sans', sans-serif", label: "DM Sans" },

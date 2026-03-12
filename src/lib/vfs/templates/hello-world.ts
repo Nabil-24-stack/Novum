@@ -91,7 +91,7 @@ export function App() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-body-sm text-muted-foreground">
             Edit the files in the virtual file system to see live changes.
           </p>
           <Button onClick={() => alert("Hello from Novum!")}>
@@ -179,9 +179,9 @@ class ErrorBoundary extends React.Component<
     if (this.state.hasError) {
       return (
         <div className="p-8 text-center">
-          <h2 className="text-xl font-bold text-red-600 mb-2">Component Error</h2>
-          <p className="text-gray-600 mb-4">{this.state.error?.message}</p>
-          <p className="text-sm text-gray-500">Check the console for details. The Design System page may have import errors.</p>
+          <h2 className="mb-2 text-h3 text-destructive">Component Error</h2>
+          <p className="mb-4 text-body text-foreground">{this.state.error?.message}</p>
+          <p className="text-body-sm text-muted-foreground">Check the console for details. The Design System page may have import errors.</p>
         </div>
       );
     }
@@ -263,7 +263,7 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant = "default", size = "default", ...props }, ref) => {
-    const baseStyles = "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border-solid border-input";
+    const baseStyles = "inline-flex items-center justify-center whitespace-nowrap text-body-sm ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border-solid border-input";
 
     const variants = {
       default: "bg-primary text-primary-foreground hover:bg-primary/90",
@@ -285,7 +285,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       <button
         className={cn(baseStyles, variants[variant], sizes[size], className)}
         style={{
-          borderRadius: "var(--button-radius, var(--radius))",
+          borderRadius: "var(--button-radius, var(--radius-md))",
           borderWidth: "var(--button-border-width, 0px)",
           boxShadow: "var(--button-shadow, none)",
         }}
@@ -337,7 +337,7 @@ const CardTitle = React.forwardRef<HTMLParagraphElement, React.HTMLAttributes<HT
   ({ className, ...props }, ref) => (
     <h3
       ref={ref}
-      className={cn("text-2xl font-semibold leading-none tracking-tight text-card-foreground", className)}
+      className={cn("text-h4 text-card-foreground", className)}
       {...props}
     />
   )
@@ -348,7 +348,7 @@ const CardDescription = React.forwardRef<HTMLParagraphElement, React.HTMLAttribu
   ({ className, ...props }, ref) => (
     <p
       ref={ref}
-      className={cn("text-sm text-muted-foreground", className)}
+      className={cn("text-body-sm text-muted-foreground", className)}
       {...props}
     />
   )
@@ -419,6 +419,7 @@ module.exports = {
     extend: {
       fontFamily: {
         sans: ["var(--font-sans)"],
+        mono: ["var(--font-mono)"],
       },
       colors: {
         border: "hsl(var(--border))",
@@ -446,6 +447,18 @@ module.exports = {
           DEFAULT: "hsl(var(--accent))",
           foreground: "hsl(var(--accent-foreground))",
         },
+        success: {
+          DEFAULT: "hsl(var(--success))",
+          foreground: "hsl(var(--success-foreground))",
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning))",
+          foreground: "hsl(var(--warning-foreground))",
+        },
+        info: {
+          DEFAULT: "hsl(var(--info))",
+          foreground: "hsl(var(--info-foreground))",
+        },
         popover: {
           DEFAULT: "hsl(var(--popover))",
           foreground: "hsl(var(--popover-foreground))",
@@ -456,9 +469,17 @@ module.exports = {
         },
       },
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        none: "var(--radius-none)",
+        sm: "var(--radius-sm)",
+        DEFAULT: "var(--radius-md)",
+        md: "var(--radius-md)",
+        lg: "var(--radius-lg)",
+        xl: "var(--radius-xl)",
+        full: "var(--radius-full)",
+      },
+      fontFamily: {
+        sans: ["var(--font-sans)"],
+        mono: ["var(--font-mono)"],
       },
     },
   },

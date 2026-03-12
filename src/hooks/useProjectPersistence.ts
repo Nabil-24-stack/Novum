@@ -5,6 +5,7 @@ import { useStrategyStore } from "./useStrategyStore";
 import { useProductBrainStore } from "./useProductBrainStore";
 import { useDocumentStore } from "./useDocumentStore";
 import type { CanvasLayout } from "@/lib/canvas/canvas-layout-types";
+import { buildPersistedProductBrainRecord } from "@/lib/product-brain/snapshot";
 
 interface PersistenceConfig {
   files: Record<string, string>;
@@ -32,6 +33,7 @@ function getStrategySnapshot() {
     userFlowsData: s.userFlowsData,
     isDeepDive: s.isDeepDive,
     strategyUpdatedAfterBuild: s.strategyUpdatedAfterBuild,
+    coverageDisplayState: s.coverageDisplayState,
   };
 }
 
@@ -121,7 +123,9 @@ export function useProjectPersistence(
     const unsub = useProductBrainStore.subscribe(() => {
       const brain = useProductBrainStore.getState().brainData;
       const insightsData = useDocumentStore.getState().insightsData;
-      scheduleSave({ product_brain: { ...brain, insightsData: insightsData ?? undefined } });
+      scheduleSave({
+        product_brain: buildPersistedProductBrainRecord(brain, insightsData),
+      });
     });
     return unsub;
   }, [projectId, scheduleSave]);
@@ -134,7 +138,9 @@ export function useProjectPersistence(
       scheduleSave({ documents: documents.map(({ id, name, text, uploadedAt }) => ({ id, name, text, uploadedAt })) });
       // Always save merged product_brain so insightsData and pages are never lost
       const brain = useProductBrainStore.getState().brainData;
-      scheduleSave({ product_brain: { ...brain, insightsData: insightsData ?? undefined } });
+      scheduleSave({
+        product_brain: buildPersistedProductBrainRecord(brain, insightsData),
+      });
     });
     return unsub;
   }, [projectId, scheduleSave]);

@@ -3,8 +3,11 @@
 interface TypographyTabProps {
   baseSize: number;
   scaleRatio: number;
+  weightRegular: number;
+  weightBold: number;
   onUpdateBaseSize: (size: number) => void;
   onUpdateScaleRatio: (ratio: number) => void;
+  onUpdateWeight: (type: "weightRegular" | "weightBold", value: number) => void;
 }
 
 const SCALE_NAMES: Record<string, string> = {
@@ -40,8 +43,11 @@ const LEVELS: { name: string; label: string; step: number }[] = [
 export function TypographyTab({
   baseSize,
   scaleRatio,
+  weightRegular,
+  weightBold,
   onUpdateBaseSize,
   onUpdateScaleRatio,
+  onUpdateWeight,
 }: TypographyTabProps) {
   const scaleLabel = getScaleLabel(scaleRatio);
 
@@ -100,6 +106,46 @@ export function TypographyTab({
             <span className="text-sm text-neutral-400">1.5</span>
           </div>
         </div>
+
+        <div className="mt-3 bg-neutral-50 rounded-lg p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-base text-neutral-700">Regular Weight</span>
+            <span className="text-sm font-mono text-neutral-500">
+              {weightRegular}
+            </span>
+          </div>
+          <input
+            type="range"
+            min="300"
+            max="500"
+            step="50"
+            value={weightRegular}
+            onChange={(e) =>
+              onUpdateWeight("weightRegular", parseInt(e.target.value, 10))
+            }
+            className="w-full h-2 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-neutral-800"
+          />
+        </div>
+
+        <div className="mt-3 bg-neutral-50 rounded-lg p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-base text-neutral-700">Bold Weight</span>
+            <span className="text-sm font-mono text-neutral-500">
+              {weightBold}
+            </span>
+          </div>
+          <input
+            type="range"
+            min="500"
+            max="800"
+            step="50"
+            value={weightBold}
+            onChange={(e) =>
+              onUpdateWeight("weightBold", parseInt(e.target.value, 10))
+            }
+            className="w-full h-2 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-neutral-800"
+          />
+        </div>
       </div>
 
       {/* Preview */}
@@ -126,7 +172,11 @@ export function TypographyTab({
                 </span>
                 <span
                   className="text-neutral-800 truncate"
-                  style={{ fontSize: `${sizePx}px`, lineHeight: 1.3 }}
+                  style={{
+                    fontSize: `${sizePx}px`,
+                    lineHeight: 1.3,
+                    fontWeight: step > 0 ? weightBold : weightRegular,
+                  }}
                 >
                   {label}
                 </span>

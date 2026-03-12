@@ -30,6 +30,34 @@ interface PageInput {
   code: string;
 }
 
+function tryParseResponseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Fall through
+  }
+
+  const jsonMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[1].trim());
+    } catch {
+      // Fall through
+    }
+  }
+
+  const braceMatch = text.match(/\{[\s\S]*\}/);
+  if (braceMatch) {
+    try {
+      return JSON.parse(braceMatch[0]);
+    } catch {
+      // Fall through
+    }
+  }
+
+  return null;
+}
+
 export async function POST(req: Request) {
   const auth = await requireAuth();
   if (auth.response) return auth.response;
@@ -77,37 +105,22 @@ export async function POST(req: Request) {
 
     const text = result.text.trim();
 
-    // Try to parse as JSON directly
-    try {
-      const parsed = JSON.parse(text);
+    const parsed = tryParseResponseJson(text);
+    if (parsed !== null) {
       return Response.json(parsed);
-    } catch {
-      // Try to extract JSON from markdown fences
-      const jsonMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-      if (jsonMatch) {
-        try {
-          const parsed = JSON.parse(jsonMatch[1].trim());
-          return Response.json(parsed);
-        } catch {
-          // Fall through
-        }
-      }
-
-      // Try to find JSON object in the text
-      const braceMatch = text.match(/\{[\s\S]*\}/);
-      if (braceMatch) {
-        try {
-          const parsed = JSON.parse(braceMatch[0]);
-          return Response.json(parsed);
-        } catch {
-          // Fall through
-        }
-      }
-
-      // Couldn't parse — fail-safe: return empty
-      console.warn("[evaluate-annotations] Could not parse AI response as JSON:", text.slice(0, 200));
-      return Response.json({ pages: [] });
     }
+
+    // Couldn't parse — treat as a real failure so callers retry instead of
+    // accepting an accidental zero-annotation success.
+    console.warn("[evaluate-annotations] Could not parse AI response as JSON:", text.slice(0, 200));
+    return Response.json(
+      {
+        error: "Annotation evaluation failed",
+        detail: "Model response was not valid JSON",
+        pages: [],
+      },
+      { status: 502 }
+    );
   } catch (err) {
     console.error("[evaluate-annotations] Error:", err);
     const message = err instanceof Error ? err.message : "Unknown error";

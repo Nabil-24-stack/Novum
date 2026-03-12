@@ -2,6 +2,10 @@
 
 import { create } from "zustand";
 import type { ProductBrainData, PageDecisions } from "@/lib/product-brain/types";
+import {
+  createEmptyProductBrain,
+  normalizeProductBrainSnapshot,
+} from "@/lib/product-brain/snapshot";
 
 interface ProductBrainState {
   brainData: ProductBrainData | null;
@@ -17,12 +21,12 @@ export const useProductBrainStore = create<ProductBrainState>((set, get) => ({
   brainData: null,
 
   setBrainData: (data) => {
-    set({ brainData: data });
+    set({ brainData: normalizeProductBrainSnapshot(data) });
   },
 
   addPageDecisions: (page) => {
     const raw = get().brainData;
-    const current = raw ? { ...raw, pages: raw.pages ?? [] } : { version: 1 as const, pages: [] };
+    const current = normalizeProductBrainSnapshot(raw) ?? createEmptyProductBrain();
     const existingIdx = current.pages.findIndex((p) => p.pageId === page.pageId);
     const updatedPages =
       existingIdx >= 0
