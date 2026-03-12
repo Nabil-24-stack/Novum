@@ -70,6 +70,7 @@ function VerificationBadge({ pageId }: { pageId?: string }) {
 export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; forceShow?: boolean }) {
   const isStreaming = useStreamingStore((s) => s.isStreaming);
   const targetPageId = useStreamingStore((s) => s.targetPageId);
+  const targetPageIds = useStreamingStore((s) => s.targetPageIds);
   const currentFile = useStreamingStore((s) => s.currentFile);
   const parallelMode = useStreamingStore((s) => s.parallelMode);
   const pageBuild = useStreamingStore((s) =>
@@ -121,7 +122,10 @@ export function StreamingOverlay({ pageId, forceShow }: { pageId?: string; force
       || buildStage === "generated"
       || buildStage === "queued_verification"
       || buildStage === "verify_failed"
-    : isStreaming && (targetPageId === null || targetPageId === pageId || forceShow === true);
+    : isStreaming && (
+      forceShow === true ||
+      (pageId !== undefined && (targetPageIds.includes(pageId) || targetPageId === pageId))
+    );
 
   // Select the display file based on mode
   const displayFile = parallelMode ? pageBuild?.currentFile : currentFile;

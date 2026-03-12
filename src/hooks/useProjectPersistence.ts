@@ -18,7 +18,7 @@ const DEBOUNCE_MS = 5000;
 function getStrategySnapshot() {
   const s = useStrategyStore.getState();
   return {
-    phase: s.phase,
+    phase: s.phase === "editing" ? "complete" : s.phase,
     userPrompt: s.userPrompt,
     manifestoData: s.manifestoData,
     personaData: s.personaData,

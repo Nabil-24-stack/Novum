@@ -109,6 +109,9 @@ interface RightPanelProps {
   onHeroSubmit?: () => void;
   /** Read the latest file content synchronously (includes writes not yet in React state) */
   getLatestFile: (path: string) => string | undefined;
+  activePageId?: string | null;
+  activePageName?: string | null;
+  activeRoute?: string | null;
   /** Restore previous chat messages */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   initialMessages?: any[];
@@ -156,6 +159,9 @@ export function RightPanel({
   floatingAnimate,
   onHeroSubmit,
   getLatestFile,
+  activePageId,
+  activePageName,
+  activeRoute,
   initialMessages,
   onMessagesChange,
   initialInput,
@@ -570,7 +576,7 @@ export function RightPanel({
             Chat
           </button>
           {/* Hide Design tab during early strategy phases */}
-          {(!strategyPhase || strategyPhase === "building" || strategyPhase === "complete") && (
+          {(!strategyPhase || strategyPhase === "building" || strategyPhase === "editing" || strategyPhase === "complete") && (
             <button
               onClick={() => handleTabChange("design")}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-base font-medium rounded-md transition-colors ${
@@ -631,9 +637,12 @@ export function RightPanel({
               writeFile={writeFile}
               files={files}
               getLatestFile={getLatestFile}
-            strategyPhase={strategyPhase}
-            onPhaseAction={onPhaseAction}
-            onHeroSubmit={onHeroSubmit}
+              strategyPhase={strategyPhase}
+              activePageId={activePageId}
+              activePageName={activePageName}
+              activeRoute={activeRoute}
+              onPhaseAction={onPhaseAction}
+              onHeroSubmit={onHeroSubmit}
               initialMessages={initialMessages}
               onMessagesChange={onMessagesChange}
               initialInput={initialInput}

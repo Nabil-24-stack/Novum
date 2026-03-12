@@ -2,7 +2,36 @@
 
 import { create } from "zustand";
 
-export type StrategyPhase = "hero" | "problem-overview" | "ideation" | "solution-design" | "building" | "complete";
+export type StrategyPhase = "hero" | "problem-overview" | "ideation" | "solution-design" | "building" | "editing" | "complete";
+
+export type EditContextSource = "follow-up-edit" | "address-gaps" | "repair";
+
+export type EditChangeMode =
+  | "follow-up-edit"
+  | "address-gaps"
+  | "strategy-rebuild"
+  | "untracked";
+
+export interface EditContext {
+  source: EditContextSource;
+  activePageId: string | null;
+  activePageName: string | null;
+  activeRoute: string | null;
+  pinnedPageIds: string[];
+  gapContext?: string;
+}
+
+export interface EditScope {
+  aligned: boolean;
+  targetPageIds: string[];
+  unchangedPageIds: string[];
+  addedPageIds: string[];
+  removedPageIds: string[];
+  requiresClarification: boolean;
+  requiresArtifactUpdateDecision: boolean;
+  concerns: string[];
+  changeMode: EditChangeMode;
+}
 
 export interface ConfidenceDimension {
   score: number;    // 0-100
@@ -111,6 +140,9 @@ interface StrategyState {
   completedPages: string[];
   currentBuildingPage: string | null;
   currentBuildingPages: string[];
+  editContext: EditContext | null;
+  editScope: EditScope | null;
+  activeEditingPageIds: string[];
   // Deep-dive mode (re-enter questioning phase after initial overview generation)
   isDeepDive: boolean;
 
@@ -149,6 +181,10 @@ interface StrategyState {
   addCompletedPage: (pageId: string) => void;
   setBuildingPage: (pageId: string | null) => void;
   setBuildingPages: (pageIds: string[]) => void;
+  setEditContext: (context: EditContext | null) => void;
+  setEditScope: (scope: EditScope | null) => void;
+  setActiveEditingPageIds: (pageIds: string[]) => void;
+  clearEditSession: () => void;
   setDeepDive: (v: boolean) => void;
   setKeyFeaturesData: (data: KeyFeaturesData) => void;
   setStreamingKeyFeatures: (data: Partial<KeyFeaturesData> | null) => void;
@@ -179,6 +215,9 @@ const initialState = {
   completedPages: [] as string[],
   currentBuildingPage: null as string | null,
   currentBuildingPages: [] as string[],
+  editContext: null as EditContext | null,
+  editScope: null as EditScope | null,
+  activeEditingPageIds: [] as string[],
   isDeepDive: false,
   keyFeaturesData: null as KeyFeaturesData | null,
   streamingKeyFeatures: null as Partial<KeyFeaturesData> | null,
@@ -273,6 +312,23 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   setBuildingPage: (pageId) => set({ currentBuildingPage: pageId }),
 
   setBuildingPages: (pageIds) => set({ currentBuildingPages: pageIds, currentBuildingPage: null }),
+
+  setEditContext: (context) => set({ editContext: context }),
+
+  setEditScope: (scope) =>
+    set({
+      editScope: scope,
+      activeEditingPageIds: scope?.targetPageIds ?? [],
+    }),
+
+  setActiveEditingPageIds: (pageIds) => set({ activeEditingPageIds: pageIds }),
+
+  clearEditSession: () =>
+    set({
+      editContext: null,
+      editScope: null,
+      activeEditingPageIds: [],
+    }),
 
   setDeepDive: (v) => set({ isDeepDive: v }),
 

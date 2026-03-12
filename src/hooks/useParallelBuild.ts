@@ -1270,6 +1270,7 @@ export function useParallelBuild({
           if (isRebuild && page.existingCode) {
             // During rebuild, pages without code blocks are unchanged — mark as completed
             useStreamingStore.getState().completePageBuild(page.pageId);
+            useStreamingStore.getState().setPageBuildStage(page.pageId, "unchanged");
             useStrategyStore.getState().addCompletedPage(page.pageId);
             rebuildAppTsx();
           } else {
@@ -1479,6 +1480,7 @@ export function useParallelBuild({
         for (const page of pages) {
           if (page.existingCode) {
             useStreamingStore.getState().completePageBuild(page.pageId);
+            useStreamingStore.getState().setPageBuildStage(page.pageId, "unchanged");
             useStrategyStore.getState().addCompletedPage(page.pageId);
           }
         }

@@ -5,6 +5,7 @@ import { create } from "zustand";
 export type BuildStage =
   | "pending"              // waiting for semaphore slot
   | "streaming"            // AI generating code
+  | "unchanged"            // page preserved as-is during a scoped rebuild/edit
   | "generated"            // streaming done, file written to VFS
   | "queued_verification"  // in verification queue, waiting its turn
   | "verifying"            // currently being verified by Sandpack
@@ -60,12 +61,14 @@ interface StreamingState {
   currentFile: { path: string; content: string } | null;
   completedFilePaths: string[];
   targetPageId: string | null;
+  targetPageIds: string[];
 
-  startStreaming: (targetPageId?: string | null) => void;
+  startStreaming: (targetPageIds?: string[] | null) => void;
   setStatusText: (text: string) => void;
   setCurrentFile: (path: string, content: string) => void;
   markFileComplete: (path: string) => void;
   setTargetPageId: (pageId: string | null) => void;
+  setTargetPageIds: (pageIds: string[]) => void;
   endStreaming: () => void;
 
   // --- Parallel-build mode ---
@@ -139,14 +142,17 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
   currentFile: null,
   completedFilePaths: [],
   targetPageId: null,
+  targetPageIds: [],
 
-  startStreaming: (targetPageId?: string | null) => {
+  startStreaming: (targetPageIds?: string[] | null) => {
+    const normalizedPageIds = targetPageIds?.filter(Boolean) ?? [];
     set({
       isStreaming: true,
       statusText: "",
       currentFile: null,
       completedFilePaths: [],
-      targetPageId: targetPageId ?? null,
+      targetPageId: normalizedPageIds[0] ?? null,
+      targetPageIds: normalizedPageIds,
     });
   },
 
@@ -166,7 +172,15 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
   },
 
   setTargetPageId: (pageId) => {
-    set({ targetPageId: pageId });
+    set({ targetPageId: pageId, targetPageIds: pageId ? [pageId] : [] });
+  },
+
+  setTargetPageIds: (pageIds) => {
+    const normalizedPageIds = pageIds.filter(Boolean);
+    set({
+      targetPageId: normalizedPageIds[0] ?? null,
+      targetPageIds: normalizedPageIds,
+    });
   },
 
   endStreaming: () => {
@@ -174,6 +188,7 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
       isStreaming: false,
       currentFile: null,
       targetPageId: null,
+      targetPageIds: [],
     });
   },
 
@@ -223,6 +238,7 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
       // Also set isStreaming so overlays know something is happening
       isStreaming: true,
       targetPageId: null,
+      targetPageIds: [],
     });
   },
 
@@ -304,7 +320,7 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
     let legacyStatus = existing.status;
     if (stage === "pending") legacyStatus = "pending";
     else if (stage === "streaming") legacyStatus = "streaming";
-    else if (stage === "generated" || stage === "queued_verification" || stage === "verifying" || stage === "verified") legacyStatus = "completed";
+    else if (stage === "unchanged" || stage === "generated" || stage === "queued_verification" || stage === "verifying" || stage === "verified") legacyStatus = "completed";
     else if (stage === "build_failed") legacyStatus = "error";
     else if (stage === "verify_failed") legacyStatus = "completed";
     set({
@@ -406,6 +422,7 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
       isStreaming: false,
       currentFile: null,
       targetPageId: null,
+      targetPageIds: [],
       refreshSignals: {},
     });
   },

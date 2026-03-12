@@ -36,6 +36,7 @@ export function BuildProgressCards({
   const queuedCount = entries.filter(([, s]) => s.buildStage === "queued_verification" || s.buildStage === "generated").length;
   const verifyingCount = entries.filter(([, s]) => s.buildStage === "verifying").length;
   const verifiedCount = entries.filter(([, s]) => s.buildStage === "verified").length;
+  const unchangedCount = entries.filter(([, s]) => s.buildStage === "unchanged").length;
   const buildFailedCount = entries.filter(([, s]) => s.buildStage === "build_failed").length;
   const verifyFailedCount = entries.filter(([, s]) => s.buildStage === "verify_failed").length;
   const pendingCount = entries.filter(([, s]) => s.buildStage === "pending").length;
@@ -43,7 +44,7 @@ export function BuildProgressCards({
   const failedCount = buildFailedCount + verifyFailedCount;
   const allTerminal = entries.every(([, s]) => {
     const st = s.buildStage;
-    return st === "verified" || st === "build_failed" || st === "verify_failed";
+    return st === "verified" || st === "unchanged" || st === "build_failed" || st === "verify_failed";
   });
 
   // Build a rich status line
@@ -52,13 +53,16 @@ export function BuildProgressCards({
   if (verifyingCount > 0) statusParts.push(`${verifyingCount} verifying`);
   if (queuedCount > 0) statusParts.push(`${queuedCount} queued`);
   if (pendingCount > 0) statusParts.push(`${pendingCount} pending`);
-  const statusSuffix = statusParts.length > 0 ? ` (${statusParts.join(", ")}, ${verifiedCount}/${totalCount} verified)` : "";
+  if (unchangedCount > 0) statusParts.push(`${unchangedCount} unchanged`);
+  const completedCount = verifiedCount + unchangedCount;
+  const statusSuffix = statusParts.length > 0 ? ` (${statusParts.join(", ")}, ${completedCount}/${totalCount} ready)` : "";
 
   // Card background color based on buildStage
   function cardClasses(build: PageBuildState): string {
     const stage = build.buildStage;
     if (stage === "verifying") return "bg-blue-50 border-blue-200";
     if (stage === "verified") return "bg-emerald-50 border-emerald-200";
+    if (stage === "unchanged") return "bg-neutral-50 border-neutral-200";
     if (stage === "build_failed") return "bg-red-50 border-red-200";
     if (stage === "verify_failed") return "bg-amber-50 border-amber-200";
     if (stage === "streaming") return "bg-blue-50 border-blue-200";
@@ -148,6 +152,9 @@ export function BuildProgressCards({
               {stage === "verified" && (
                 <ShieldCheck className="w-4 h-4 text-emerald-600" />
               )}
+              {stage === "unchanged" && (
+                <Check className="w-4 h-4 text-neutral-500" />
+              )}
               {stage === "build_failed" && (
                 <AlertTriangle className="w-4 h-4 text-red-500" />
               )}
@@ -191,6 +198,11 @@ export function BuildProgressCards({
               {stage === "verified" && (
                 <span className="text-xs text-emerald-600">
                   Verified
+                </span>
+              )}
+              {stage === "unchanged" && (
+                <span className="text-xs text-neutral-500">
+                  Unchanged
                 </span>
               )}
               {stage === "verify_failed" && (
@@ -278,6 +290,7 @@ export function BuildProgressCards({
               Building pages...
               <span className="text-neutral-400">
                 ({verifiedCount}/{totalCount})
+                {unchangedCount > 0 && <span className="text-neutral-400">, {unchangedCount} unchanged</span>}
               </span>
             </span>
           ) : failedCount > 0 ? (

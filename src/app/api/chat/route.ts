@@ -2,7 +2,7 @@ import { streamText, convertToModelMessages } from "ai";
 import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
-import { PROBLEM_OVERVIEW_SYSTEM_PROMPT, buildIdeationSystemPrompt, buildSolutionDesignSystemPrompt, buildBuildSystemPrompt, buildDeepDiveSystemPrompt } from "@/lib/ai/strategy-prompts";
+import { PROBLEM_OVERVIEW_SYSTEM_PROMPT, buildIdeationSystemPrompt, buildSolutionDesignSystemPrompt, buildBuildSystemPrompt, buildDeepDiveSystemPrompt, buildEditingSystemPrompt } from "@/lib/ai/strategy-prompts";
 import { INSIGHTS_PROMPT_FRAGMENT } from "@/lib/ai/insights-prompt";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 
@@ -505,6 +505,7 @@ export async function POST(req: Request) {
     buildAnyway,
     isSubsequentEdit,
     repairContext,
+    editContext,
   } = await req.json();
 
   // Convert UIMessage[] to ModelMessage[] format
@@ -538,6 +539,21 @@ export async function POST(req: Request) {
         { isSubsequentEdit, buildAnyway },
       ) + "\n\n" + SYSTEM_PROMPT;
       break;
+    case "editing":
+      basePrompt = buildEditingSystemPrompt(
+        vfsContext?.manifestoContext || "",
+        vfsContext?.flowContext || "",
+        vfsContext?.personaContext || "",
+        vfsContext?.userFlowContext || undefined,
+        {
+          buildAnyway,
+          insightsContext: vfsContext?.insightsContext,
+          existingConnections: vfsContext?.existingConnections,
+          editContext: vfsContext?.editContext,
+          gapContext: vfsContext?.gapContext,
+        },
+      ) + "\n\n" + SYSTEM_PROMPT;
+      break;
     default:
       basePrompt = SYSTEM_PROMPT;
       break;
@@ -554,8 +570,12 @@ export async function POST(req: Request) {
     dynamicSystemPrompt += `\n\n---\n\n${documentContext}`;
   }
 
-  if (strategyPhase === "building" && repairContext) {
+  if ((strategyPhase === "building" || strategyPhase === "editing") && repairContext) {
     dynamicSystemPrompt += `\n\n---\n\n## Active Repair Context\n\nYou are fixing a preview error the user is attaching as a screenshot.\n- Page ID: ${repairContext.pageId}\n- Page name: ${repairContext.pageName}\n- Route: ${repairContext.route}\n- Error path: ${repairContext.errorPath || "unknown"}\n- Error text:\n${repairContext.errorText}\n\nPrioritize fixing the file/path referenced here. If you change code, return full-file replacements only.`;
+  }
+
+  if (strategyPhase === "editing" && editContext) {
+    dynamicSystemPrompt += `\n\n---\n\n## Active Edit Context\n\n${JSON.stringify(editContext, null, 2)}`;
   }
 
   const result = streamText({

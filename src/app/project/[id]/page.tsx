@@ -841,6 +841,11 @@ export default function ProjectEditor() {
     return page?.id ?? flowManifest.pages[0]?.id ?? null;
   }, [flowManifest.pages, activeRoute]);
 
+  const activeContextPage = useMemo(() => {
+    const pageId = activeFrameId ?? activePageId;
+    return flowManifest.pages.find((page) => page.id === pageId) ?? null;
+  }, [flowManifest.pages, activeFrameId, activePageId]);
+
   // Callback to auto-switch to Design tab when element is selected
   // (FlowFrame auto-opens layers internally via selectedPageId prop)
   const handleElementSelected = useCallback(() => {
@@ -1035,7 +1040,7 @@ export default function ProjectEditor() {
   // (the guard checks flowLayoutOffset !== 0). Otherwise recomputes from strategy card positions.
   useEffect(() => {
     if (isProjectLoading) return;
-    const needsOffset = strategyPhase === "building" || strategyPhase === "complete";
+    const needsOffset = strategyPhase === "building" || strategyPhase === "editing" || strategyPhase === "complete";
     if (!needsOffset) return;
     if (flowLayoutOffset.x !== 0 || flowLayoutOffset.y !== 0) return;
     if (groupPositions.size === 0) return;
@@ -2347,6 +2352,9 @@ export default function ProjectEditor() {
           floatingAnimate={floatingAnimate}
           onHeroSubmit={handleHeroSubmit}
           getLatestFile={getLatestFile}
+          activePageId={activeContextPage?.id ?? null}
+          activePageName={activeContextPage?.name ?? null}
+          activeRoute={activeContextPage?.route ?? activeRoute}
           initialMessages={initialMessages}
           onMessagesChange={handleMessagesChange}
           initialInput={initialInput}

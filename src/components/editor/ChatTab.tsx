@@ -4,14 +4,28 @@ import { useChat } from "@ai-sdk/react";
 import { useEffect, useRef, useState, useCallback, useMemo, DragEvent, ClipboardEvent, FormEvent } from "react";
 import { Send, Loader2, X, ImagePlus, ChevronDown, ArrowRight, Check, AlertTriangle, Square, FileText } from "lucide-react";
 import { toast } from "sonner";
-import { useChatContextStore } from "@/hooks/useChatContextStore";
+import { useChatContextStore, type PinnedElement, type AddressGapsPayload } from "@/hooks/useChatContextStore";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
 import { useProductBrainStore } from "@/hooks/useProductBrainStore";
-import { useStrategyStore, type StrategyPhase, type ConfidenceData, type PersonaData, type IdeaData, type KeyFeaturesData, type JourneyMapData, type JourneyStage, type UserFlow, type FlowData } from "@/hooks/useStrategyStore";
+import {
+  useStrategyStore,
+  type StrategyPhase,
+  type ConfidenceData,
+  type PersonaData,
+  type IdeaData,
+  type KeyFeaturesData,
+  type JourneyMapData,
+  type JourneyStage,
+  type UserFlow,
+  type FlowData,
+  type EditContext,
+  type EditScope,
+} from "@/hooks/useStrategyStore";
 import { useDocumentStore, type InsightData, type InsightsCardData } from "@/hooks/useDocumentStore";
 import { buildInsightsContext } from "@/lib/ai/insights-prompt";
 import { useParallelBuild } from "@/hooks/useParallelBuild";
 import { toPascalCase } from "@/lib/vfs/app-generator";
+import type { ProductBrainData } from "@/lib/product-brain/types";
 import { ConfidenceBar } from "./ConfidenceBar";
 import { BuildProgressCards } from "./BuildProgressCards";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
@@ -53,6 +67,9 @@ interface ChatTabProps {
   files: Record<string, string>;
   getLatestFile: (path: string) => string | undefined;
   strategyPhase?: StrategyPhase;
+  activePageId?: string | null;
+  activePageName?: string | null;
+  activeRoute?: string | null;
   onPhaseAction?: (action: "approve-problem-overview" | "approve-ideation" | "approve-solution-design") => void;
   /** Called when user sends their first message in hero phase (phase transition to manifesto) */
   onHeroSubmit?: () => void;
@@ -234,6 +251,268 @@ function buildExistingArtifactsContext(): string {
 
   if (sections.length === 0) return "";
   return `## EXISTING ARTIFACTS (evaluate each against new insights)\n\n${sections.join("\n\n")}`;
+}
+
+function findPageNodeByComponentName(
+  componentName: string,
+  flowData: FlowData | null | undefined,
+) {
+  return flowData?.nodes.find(
+    (node) => node.type === "page" && toPascalCase(node.label) === componentName
+  );
+}
+
+function findPageIdForFilePath(
+  filePath: string | undefined,
+  flowData: FlowData | null | undefined,
+): string | null {
+  if (!filePath) return null;
+  const match = filePath.match(/^\/pages\/([^/]+)\.tsx$/);
+  if (!match) return null;
+  return findPageNodeByComponentName(match[1], flowData)?.id ?? null;
+}
+
+function resolvePinnedPageIds(
+  pinnedElements: PinnedElement[],
+  flowData: FlowData | null | undefined,
+): string[] {
+  const pageIds = new Set<string>();
+  for (const element of pinnedElements) {
+    const pageId = findPageIdForFilePath(element.source.fileName, flowData);
+    if (pageId) pageIds.add(pageId);
+  }
+  return [...pageIds];
+}
+
+function inferExplicitPageIdsFromPrompt(
+  text: string,
+  flowData: FlowData | null | undefined,
+): string[] {
+  const normalized = text.toLowerCase();
+  if (!flowData) return [];
+
+  const matches = new Set<string>();
+  for (const node of flowData.nodes) {
+    if (node.type !== "page") continue;
+    const label = node.label.toLowerCase();
+    const id = node.id.toLowerCase();
+    const route = id === "home" ? "/" : `/${id}`;
+    if (
+      normalized.includes(label) ||
+      normalized.includes(id) ||
+      (route !== "/" && normalized.includes(route))
+    ) {
+      matches.add(node.id);
+    }
+  }
+  return [...matches];
+}
+
+function inferPageIdsFromIaOrUserFlows(
+  text: string,
+  flowData: FlowData | null | undefined,
+  userFlowsData: UserFlow[] | null | undefined,
+): string[] {
+  const normalized = text.toLowerCase();
+  const matches = new Set<string>();
+
+  flowData?.nodes.forEach((node) => {
+    if (node.type !== "page" || !node.description) return;
+    const description = node.description.toLowerCase();
+    if (description.length >= 8 && normalized.includes(description)) {
+      matches.add(node.id);
+    }
+  });
+
+  userFlowsData?.forEach((flow) => {
+    flow.steps.forEach((step) => {
+      if (step.action && normalized.includes(step.action.toLowerCase())) {
+        matches.add(step.nodeId);
+      }
+    });
+  });
+
+  return [...matches];
+}
+
+function inferInitialEditTargetPageIds(
+  messageText: string,
+  flowData: FlowData | null | undefined,
+  userFlowsData: UserFlow[] | null | undefined,
+  editContext: EditContext,
+): string[] {
+  if (editContext.pinnedPageIds.length > 0) return editContext.pinnedPageIds;
+  if (editContext.activePageId) return [editContext.activePageId];
+
+  const explicitMatches = inferExplicitPageIdsFromPrompt(messageText, flowData);
+  if (explicitMatches.length > 0) return explicitMatches;
+
+  return inferPageIdsFromIaOrUserFlows(messageText, flowData, userFlowsData);
+}
+
+function inferGapTargetPageIds(
+  payload: AddressGapsPayload,
+  userFlowsData: UserFlow[] | null | undefined,
+  brainData: ProductBrainData | null | undefined,
+): string[] {
+  const pageIds = new Set<string>();
+  const jtbdIndices = new Set(payload.unaddressedJtbds.map((jtbd) => jtbd.index));
+  const jtbdTexts = new Set(
+    payload.unaddressedJtbds.map((jtbd) => jtbd.text.trim().toLowerCase()).filter(Boolean)
+  );
+  const personaNames = new Set<string>();
+
+  payload.gaps?.forEach((gap) => {
+    const personaMatch = gap.match(/^([^:]+):\s*JTBD\s*#/i);
+    if (personaMatch?.[1]) {
+      personaNames.add(personaMatch[1].trim());
+    }
+
+    const jtbdMatch = gap.match(/"([^"]+)"/);
+    if (jtbdMatch?.[1]) {
+      jtbdTexts.add(jtbdMatch[1].trim().toLowerCase());
+    }
+  });
+
+  userFlowsData?.forEach((flow) => {
+    const matchesJtbd =
+      jtbdIndices.has(flow.jtbdIndex) ||
+      jtbdTexts.has(flow.jtbdText.trim().toLowerCase());
+    const matchesPersona =
+      personaNames.size > 0 &&
+      flow.personaNames.some((personaName) => personaNames.has(personaName));
+
+    if (!matchesJtbd && !matchesPersona) return;
+
+    flow.steps.forEach((step) => {
+      if (step.nodeId) {
+        pageIds.add(step.nodeId);
+      }
+    });
+  });
+
+  brainData?.pages.forEach((page) => {
+    const matchesJtbd = page.connections.some((connection) =>
+      connection.jtbdIndices.some((index) => jtbdIndices.has(index))
+    );
+    const matchesPersona =
+      personaNames.size > 0 &&
+      page.connections.some((connection) =>
+        connection.personaNames.some((personaName) => personaNames.has(personaName))
+      );
+
+    if (matchesJtbd || matchesPersona) {
+      pageIds.add(page.pageId);
+    }
+  });
+
+  return [...pageIds];
+}
+
+function normalizeAlignmentCheck(parsed: unknown): EditScope | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const data = parsed as Record<string, unknown>;
+  if (typeof data.aligned !== "boolean") return null;
+
+  const normalizeStringArray = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+
+  const rawChangeMode = data.changeMode;
+  const changeMode =
+    rawChangeMode === "address-gaps" ||
+    rawChangeMode === "strategy-rebuild" ||
+    rawChangeMode === "untracked"
+      ? rawChangeMode
+      : "follow-up-edit";
+
+  return {
+    aligned: data.aligned,
+    targetPageIds: normalizeStringArray(data.targetPageIds),
+    unchangedPageIds: normalizeStringArray(data.unchangedPageIds),
+    addedPageIds: normalizeStringArray(data.addedPageIds),
+    removedPageIds: normalizeStringArray(data.removedPageIds),
+    requiresClarification: data.requiresClarification === true,
+    requiresArtifactUpdateDecision: data.requiresArtifactUpdateDecision === true,
+    concerns: normalizeStringArray(data.concerns),
+    changeMode,
+  };
+}
+
+function classifyArtifactEditPhase(messageText: string): StrategyPhase | null {
+  const normalized = messageText.toLowerCase();
+  if (
+    /\b(ia|information architecture|user flow|user flows|architecture|key feature|key features)\b/.test(normalized)
+  ) {
+    return "solution-design";
+  }
+  if (
+    /\b(persona|personas|jtbd|jobs to be done|jobs-to-be-done|journey map|journey maps|problem overview|problem statement|manifesto|target user|hmw|how might we|insight|insights|strategy)\b/.test(normalized)
+  ) {
+    return "problem-overview";
+  }
+  return null;
+}
+
+function buildCanonicalFlowForEdit(
+  files: Record<string, string>,
+  flowData: FlowData | null | undefined,
+  editScope: EditScope | null,
+): { pages: Array<{ id: string; name: string; route: string }>; connections: Array<{ from: string; to: string; label?: string }> } | null {
+  if (!editScope) return null;
+  if (editScope.addedPageIds.length === 0 && editScope.removedPageIds.length === 0) {
+    return null;
+  }
+
+  let currentFlow: { pages: Array<{ id: string; name: string; route: string }>; connections: Array<{ from: string; to: string; label?: string }> };
+  try {
+    currentFlow = files["/flow.json"]
+      ? JSON.parse(files["/flow.json"])
+      : { pages: [], connections: [] };
+  } catch {
+    currentFlow = { pages: [], connections: [] };
+  }
+
+  const removedIds = new Set(editScope.removedPageIds);
+  const pages = (currentFlow.pages || []).filter((page) => !removedIds.has(page.id));
+  const connections = (currentFlow.connections || []).filter(
+    (connection) => !removedIds.has(connection.from) && !removedIds.has(connection.to)
+  );
+
+  for (const pageId of editScope.addedPageIds) {
+    if (pages.some((page) => page.id === pageId)) continue;
+    const strategyNode = flowData?.nodes.find((node) => node.type === "page" && node.id === pageId);
+    if (!strategyNode) continue;
+
+    pages.push({
+      id: pageId,
+      name: strategyNode.label,
+      route: pageId === "home" ? "/" : `/${pageId}`,
+    });
+
+    flowData?.connections
+      .filter((connection) => connection.from === pageId || connection.to === pageId)
+      .forEach((connection) => {
+        if (removedIds.has(connection.from) || removedIds.has(connection.to)) return;
+        if (!pages.some((page) => page.id === connection.from) || !pages.some((page) => page.id === connection.to)) {
+          return;
+        }
+        const exists = connections.some(
+          (item) =>
+            item.from === connection.from &&
+            item.to === connection.to &&
+            item.label === connection.label
+        );
+        if (!exists) {
+          connections.push({
+            from: connection.from,
+            to: connection.to,
+            label: connection.label,
+          });
+        }
+      });
+  }
+
+  return { pages, connections };
 }
 
 interface OptionBlock {
@@ -987,7 +1266,24 @@ function getMessageText(message: any): string {
   return "";
 }
 
-export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhaseAction, onHeroSubmit, initialMessages, onMessagesChange, initialInput, autoSubmit, pendingRepairDraft, onBuildingResponseComplete, projectId }: ChatTabProps) {
+export function ChatTab({
+  writeFile,
+  files,
+  getLatestFile,
+  strategyPhase,
+  activePageId,
+  activePageName,
+  activeRoute,
+  onPhaseAction,
+  onHeroSubmit,
+  initialMessages,
+  onMessagesChange,
+  initialInput,
+  autoSubmit,
+  pendingRepairDraft,
+  onBuildingResponseComplete,
+  projectId,
+}: ChatTabProps) {
   const [input, setInput] = useState(initialInput ?? "");
   const [selectedModel, setSelectedModel] = useState<ModelId>("claude-sonnet-4-6");
   const [stagedImages, setStagedImages] = useState<FileUIPart[]>([]);
@@ -1010,7 +1306,11 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   const pendingReanalysis = useDocumentStore((s) => s.pendingReanalysis);
   const docFileInputRef = useRef<HTMLInputElement>(null);
   const completedPages = useStrategyStore((s) => s.completedPages);
+  const userFlowsData = useStrategyStore((s) => s.userFlowsData);
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
+  const editScope = useStrategyStore((s) => s.editScope);
+  const activeEditingPageIds = useStrategyStore((s) => s.activeEditingPageIds);
+  const brainData = useProductBrainStore((s) => s.brainData);
   const isJourneyMapContinuing = useStrategyStore((s) => s.isJourneyMapContinuing);
   const journeyMapContinueAttempts = useStrategyStore((s) => s.journeyMapContinueAttempts);
   const parallelMode = useStreamingStore((s) => s.parallelMode);
@@ -1096,8 +1396,25 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   const pendingSubmitRef = useRef<string | null>(null);
   const didAutoSubmitRef = useRef(false);
   const lastRepairDraftNonceRef = useRef<number | null>(null);
+  const requestPhaseRef = useRef<StrategyPhase | null>(null);
 
   const isLoading = status === "submitted" || status === "streaming";
+
+  const beginEditingRequest = useCallback((
+    context: EditContext,
+    messageText: string,
+    seededPageIds?: string[],
+  ) => {
+    const strategyStore = useStrategyStore.getState();
+    strategyStore.setEditContext(context);
+    strategyStore.setEditScope(null);
+    strategyStore.setActiveEditingPageIds(
+      seededPageIds && seededPageIds.length > 0
+        ? seededPageIds
+        : inferInitialEditTargetPageIds(messageText, flowData, userFlowsData, context)
+    );
+    strategyStore.setPhase("editing");
+  }, [flowData, userFlowsData]);
 
   useEffect(() => {
     if (!pendingRepairDraft) return;
@@ -1252,18 +1569,35 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
 
     const text = `Address the following unaddressed jobs-to-be-done by enhancing existing pages or adding minimal new ones. Do NOT rewrite or significantly change existing pages — only add what's needed to cover these gaps.\n\n${gapList}\n\nFor each change, output a decision-connections block mapping the new/modified components to the JTBD indices they address.`;
 
+    const editContext: EditContext = {
+      source: "address-gaps",
+      activePageId: activePageId ?? null,
+      activePageName: activePageName ?? null,
+      activeRoute: activeRoute ?? null,
+      pinnedPageIds: resolvePinnedPageIds(pinnedElements, flowData),
+      gapContext: gapList,
+    };
+    const gapTargetPageIds = inferGapTargetPageIds(
+      pendingAddressGaps,
+      userFlowsData,
+      brainData,
+    );
+    beginEditingRequest(editContext, text, gapTargetPageIds);
+
     // Build VFS context using shared helper (includes all pages, brain, insights, user flows)
     const vfsContext = buildBuildingPhaseVfsContext(files, {
       extra: {
         gapContext: `## Unaddressed Jobs-To-Be-Done (GAPS)\n\nThese JTBDs are not yet covered for all personas. Address them by enhancing existing pages or adding new features.\n\n${gapList}`,
+        editContext: `## Edit Context\n\nSource: address-gaps\nActive Page ID: ${editContext.activePageId || "unknown"}\nActive Page Name: ${editContext.activePageName || "unknown"}\nActive Route: ${editContext.activeRoute || "unknown"}\nPinned Page IDs: ${editContext.pinnedPageIds.join(", ") || "none"}`,
       },
     });
 
+    requestPhaseRef.current = "editing";
     sendMessage(
       { text },
-      { body: { vfsContext, modelId: selectedModel, strategyPhase: "building" } }
+      { body: { vfsContext, modelId: selectedModel, strategyPhase: "editing", editContext } }
     );
-  }, [pendingAddressGaps, isLoading, sendMessage, selectedModel, files]);
+  }, [pendingAddressGaps, isLoading, sendMessage, selectedModel, files, activePageId, activePageName, activeRoute, pinnedElements, flowData, beginEditingRequest, userFlowsData, brainData]);
 
   // --- Question Tabs State ---
   const [questionAnswers, setQuestionAnswers] = useState<Record<number, string>>({});
@@ -1351,7 +1685,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     if (partial) {
       useStrategyStore.getState().setStreamingOverview(partial);
     }
-  }, [messages, isLoading]);
+  }, [messages, isLoading, flowData]);
 
   // --- Stream partial insights data to the canvas in real-time ---
   useEffect(() => {
@@ -1388,7 +1722,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     if (partialInsights) {
       useDocumentStore.getState().setStreamingInsights(partialInsights);
     }
-  }, [messages, isLoading]);
+  }, [messages, isLoading, flowData]);
 
   // --- Stream partial persona data to the canvas in real-time ---
   useEffect(() => {
@@ -1738,6 +2072,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
   // Sync flow.json after AI writes: remove pages whose files were deleted
   useEffect(() => {
     if (isLoading) return; // Wait until streaming completes
+    if (editScope) return; // Scoped editing owns App/flow sync deterministically
     messages.forEach((message) => {
       if (message.role !== "assistant") return;
       if (flowJsonSyncedMessages.has(message.id)) return;
@@ -1792,7 +2127,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
         // Fail-safe: don't break on bad flow.json
       }
     });
-  }, [messages, isLoading, writeFile, files]);
+  }, [messages, isLoading, writeFile, files, editScope]);
 
   // Route consistency: ensure App.tsx + flow.json include all page files
   useEffect(() => {
@@ -1818,7 +2153,14 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
       routeConsistencySyncedMessages.add(message.id);
 
       try {
-        const result = checkRouteConsistency(files);
+        const canonicalFlow = buildCanonicalFlowForEdit(files, flowData, editScope);
+        if (editScope && !canonicalFlow) {
+          return;
+        }
+
+        const result = canonicalFlow
+          ? checkRouteConsistency(files, { canonicalFlow })
+          : checkRouteConsistency(files);
         if (result.fixes.length > 0) {
           for (const fix of result.fixes) {
             writeFile(fix.path, fix.content);
@@ -1831,7 +2173,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
         // Fail-safe
       }
     });
-  }, [messages, isLoading, writeFile, files]);
+  }, [messages, isLoading, writeFile, files, flowData, editScope]);
 
   // Extract strategy JSON (manifesto/flow) from AI responses
   useEffect(() => {
@@ -2048,8 +2390,11 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
         if (!processedStrategyBlocksSet.has(blockKey)) {
           processedStrategyBlocksSet.add(blockKey);
           try {
-            const parsed = JSON.parse(match[1]);
-            if (parsed.aligned === false) {
+            const parsed = normalizeAlignmentCheck(JSON.parse(match[1]));
+            if (parsed) {
+              useStrategyStore.getState().setEditScope(parsed);
+            }
+            if (parsed?.aligned === false) {
               setAlignmentCheckPending(true);
             }
           } catch (e) {
@@ -2095,8 +2440,13 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
 
     // Start streaming on first code block detection
     if (!store.isStreaming && (parsed.currentFile || parsed.completedBlocks.length > 0)) {
-      const buildingPage = useStrategyStore.getState().currentBuildingPage;
-      store.startStreaming(buildingPage);
+      const strategyStore = useStrategyStore.getState();
+      const targetPageIds = strategyStore.activeEditingPageIds.length > 0
+        ? strategyStore.activeEditingPageIds
+        : strategyStore.currentBuildingPage
+          ? [strategyStore.currentBuildingPage]
+          : [];
+      store.startStreaming(targetPageIds);
     }
 
     // Update status text (first sentence of pre-code text)
@@ -2110,25 +2460,48 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     // Update current streaming file
     if (parsed.currentFile) {
       store.setCurrentFile(parsed.currentFile.path, parsed.currentFile.content);
+      const filePageId = findPageIdForFilePath(parsed.currentFile.path, flowData);
+      if (filePageId) {
+        store.setTargetPageIds([filePageId]);
+      }
     }
 
     // Track completed files
     parsed.completedBlocks.forEach((block) => store.markFileComplete(block.path));
-  }, [messages, isLoading]);
+  }, [messages, isLoading, flowData]);
 
-  // Sync targetPageId when currentBuildingPage changes mid-stream
+  // Sync targeted page scope when build/edit targets change mid-stream
   useEffect(() => {
     const store = useStreamingStore.getState();
-    if (store.isStreaming && currentBuildingPage) {
-      store.setTargetPageId(currentBuildingPage);
+    if (!store.isStreaming) return;
+
+    if (activeEditingPageIds.length > 0) {
+      store.setTargetPageIds(activeEditingPageIds);
+      return;
     }
-  }, [currentBuildingPage]);
+
+    if (currentBuildingPage) {
+      store.setTargetPageIds([currentBuildingPage]);
+    }
+  }, [activeEditingPageIds, currentBuildingPage]);
 
   // Auto-scroll to bottom
   useEffect(() => {
     const behavior = status === "streaming" ? "instant" : "smooth";
     messagesEndRef.current?.scrollIntoView({ behavior });
   }, [messages, status, currentOptionBlocks.length, strategyPhase, annotationEvaluation.status]);
+
+  useEffect(() => {
+    if (isLoading) return;
+    if (requestPhaseRef.current === "editing") {
+      const strategyStore = useStrategyStore.getState();
+      strategyStore.setPhase("complete");
+      if (!alignmentCheckPending) {
+        strategyStore.clearEditSession();
+      }
+    }
+    requestPhaseRef.current = null;
+  }, [alignmentCheckPending, isLoading]);
 
   // --- Self-healing verification loop ---
   const prevStatusRef = useRef(status);
@@ -2478,35 +2851,41 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
     // Build VFS context (same as building phase)
     const vfsContext = buildBuildingPhaseVfsContext(files);
 
-    // Include current building page info
-    const buildingStore = useStrategyStore.getState();
-    const buildingPageId = buildingStore.currentBuildingPage;
-    const buildingPageName = buildingPageId
-      ? buildingStore.flowData?.nodes.find((n) => n.id === buildingPageId)?.label
-      : undefined;
+    const strategyStore = useStrategyStore.getState();
+    const currentEditContext = strategyStore.editContext ?? {
+      source: "follow-up-edit" as const,
+      activePageId: activePageId ?? null,
+      activePageName: activePageName ?? null,
+      activeRoute: activeRoute ?? null,
+      pinnedPageIds: resolvePinnedPageIds(pinnedElements, flowData),
+    };
+    beginEditingRequest(currentEditContext, originalRequest);
 
     // Build document context if documents are uploaded
     const docStore = useDocumentStore.getState();
     const hasUploadedDocuments = docStore.documents.length > 0;
     const documentContext = hasUploadedDocuments ? buildInsightsContext(docStore.documents) : undefined;
 
+    requestPhaseRef.current = "editing";
     sendMessage(
       { text: `Build it anyway, mark as untracked. Original request: ${originalRequest}` },
       {
         body: {
-          vfsContext,
+          vfsContext: {
+            ...vfsContext,
+            editContext: `## Edit Context\n\nSource: ${currentEditContext.source}\nActive Page ID: ${currentEditContext.activePageId || "unknown"}\nActive Page Name: ${currentEditContext.activePageName || "unknown"}\nActive Route: ${currentEditContext.activeRoute || "unknown"}\nPinned Page IDs: ${currentEditContext.pinnedPageIds.join(", ") || "none"}`,
+          },
           modelId: selectedModel,
-          strategyPhase: "building",
-          currentPageId: buildingPageId,
-          currentPageName: buildingPageName,
+          strategyPhase: "editing",
           documentContext,
           hasUploadedDocuments,
           buildAnyway: true,
           isSubsequentEdit: true,
+          editContext: currentEditContext,
         },
       }
     );
-  }, [isLoading, files, sendMessage, selectedModel]);
+  }, [isLoading, files, sendMessage, selectedModel, activePageId, activePageName, activeRoute, pinnedElements, flowData, beginEditingRequest]);
 
   // --- "Finish discussion" handler ---
 
@@ -2622,6 +3001,15 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
       useStrategyStore.getState().setPhase("problem-overview");
       effectivePhase = "problem-overview";
       onHeroSubmit?.();
+    } else if ((strategyPhase === "complete" || strategyPhase === "editing") && completedPages.length > 0) {
+      const artifactPhase = classifyArtifactEditPhase(messageText);
+      if (artifactPhase) {
+        useStrategyStore.getState().clearEditSession();
+        useStrategyStore.getState().setPhase(artifactPhase);
+        effectivePhase = artifactPhase;
+      } else {
+        effectivePhase = "editing";
+      }
     }
 
     // Build context based on strategy phase
@@ -2650,7 +3038,7 @@ export function ChatTab({ writeFile, files, getLatestFile, strategyPhase, onPhas
         parts.push(`## Current Flow Architecture\n\n${JSON.stringify(storeState.flowData, null, 2)}`);
       }
       vfsContext = parts.join("\n\n");
-    } else if (effectivePhase === "building") {
+    } else if (effectivePhase === "building" || effectivePhase === "editing") {
       // In build phase, send full VFS context plus strategy context
       vfsContext = buildBuildingPhaseVfsContext(files);
     } else {
@@ -2700,12 +3088,32 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
     if (hasText) messagePayload.text = messageText;
     if (hasImages) messagePayload.files = imagesToSend;
 
+    const pinnedPageIds = resolvePinnedPageIds(pinnedElements, flowData);
+    const editContext: EditContext | undefined = effectivePhase === "editing"
+      ? {
+          source: activeRepairContext ? "repair" : "follow-up-edit",
+          activePageId: activePageId ?? null,
+          activePageName: activePageName ?? null,
+          activeRoute: activeRoute ?? null,
+          pinnedPageIds,
+        }
+      : undefined;
+
+    if (editContext) {
+      beginEditingRequest(editContext, messageText);
+      if (typeof vfsContext === "object") {
+        vfsContext.editContext = `## Edit Context\n\nSource: ${editContext.source}\nActive Page ID: ${editContext.activePageId || "unknown"}\nActive Page Name: ${editContext.activePageName || "unknown"}\nActive Route: ${editContext.activeRoute || "unknown"}\nPinned Page IDs: ${editContext.pinnedPageIds.join(", ") || "none"}`;
+      }
+    }
+
     // Include current building page info for the build prompt
     const buildingStore = useStrategyStore.getState();
-    const buildingPageId = buildingStore.currentBuildingPage;
-    const buildingPageName = buildingPageId
-      ? buildingStore.flowData?.nodes.find((n) => n.id === buildingPageId)?.label
-      : undefined;
+    const buildingPageId = editContext?.activePageId ?? buildingStore.currentBuildingPage;
+    const buildingPageName = editContext?.activePageName ?? (
+      buildingPageId
+        ? buildingStore.flowData?.nodes.find((n) => n.id === buildingPageId)?.label
+        : undefined
+    );
 
     // Build document context if documents are uploaded
     const docStore = useDocumentStore.getState();
@@ -2720,7 +3128,8 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
     }
 
     // Determine if this is a subsequent edit (for strategy alignment check)
-    const isSubsequentEdit = effectivePhase === "building" && completedPages.length > 0;
+    const isSubsequentEdit =
+      (effectivePhase === "building" || effectivePhase === "editing") && completedPages.length > 0;
 
     // Store original request for potential "Build Anyway" re-send
     if (isSubsequentEdit) {
@@ -2739,9 +3148,24 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         }
       : undefined;
 
+    requestPhaseRef.current = effectivePhase ?? null;
+
     await sendMessage(
       messagePayload as { text: string; files?: FileUIPart[] },
-      { body: { vfsContext, modelId: selectedModel, strategyPhase: effectivePhase, currentPageId: buildingPageId, currentPageName: buildingPageName, documentContext, hasUploadedDocuments, isSubsequentEdit, repairContext } }
+      {
+        body: {
+          vfsContext,
+          modelId: selectedModel,
+          strategyPhase: effectivePhase,
+          currentPageId: buildingPageId,
+          currentPageName: buildingPageName,
+          documentContext,
+          hasUploadedDocuments,
+          isSubsequentEdit,
+          repairContext,
+          editContext,
+        },
+      }
     );
     trackEvent("chat_message_sent", projectId, { model: selectedModel, phase: effectivePhase });
 
@@ -2993,7 +3417,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         )}
 
         {/* Strategy alignment check: "Build Anyway" override */}
-        {strategyPhase === "building" && alignmentCheckPending && !isLoading && (
+        {(strategyPhase === "building" || strategyPhase === "editing" || strategyPhase === "complete") && alignmentCheckPending && !isLoading && (
           <div className="flex justify-center pt-2">
             <button
               onClick={handleBuildAnyway}
@@ -3731,6 +4155,8 @@ function StreamingMessageContent({ content }: { content: string }) {
       : phase === "solution-design"
         ? userFlowsData ? "Refining solution design..."
         : "Designing solution..."
+      : phase === "editing"
+        ? "Preparing a targeted edit..."
       : phase === "building"
         ? currentBuildingPage ? `Preparing to build ${currentBuildingPage}...`
         : "Writing code..."
@@ -3859,6 +4285,7 @@ function StreamingStatus() {
       : "Analyzing your problem..."
     : phase === "ideation" ? "Generating ideas..."
     : phase === "solution-design" ? "Designing solution..."
+    : phase === "editing" ? "Preparing a targeted edit..."
     : phase === "building"
       ? currentBuildingPage ? `Preparing to build ${currentBuildingPage}...`
       : "Preparing to build..."

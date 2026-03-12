@@ -9,7 +9,7 @@
  * Fail-safe: wrapped in try/catch — returns empty fixes on any error.
  */
 
-import { generateAppTsx } from "@/lib/vfs/app-generator";
+import { generateAppTsx, toPascalCase } from "@/lib/vfs/app-generator";
 
 // ============================================================================
 // Types
@@ -23,6 +23,15 @@ export interface ConsistencyFix {
 
 export interface ConsistencyResult {
   fixes: ConsistencyFix[];
+}
+
+export interface CanonicalFlowManifest {
+  pages: Array<{ id: string; name: string; route: string }>;
+  connections: Array<{ from: string; to: string; label?: string }>;
+}
+
+export interface ConsistencyOptions {
+  canonicalFlow?: CanonicalFlowManifest | null;
 }
 
 // ============================================================================
@@ -70,6 +79,19 @@ function discoverPages(files: Record<string, string>): DiscoveredPage[] {
   return pages;
 }
 
+function discoverPagesFromCanonicalFlow(
+  canonicalFlow: CanonicalFlowManifest,
+): DiscoveredPage[] {
+  return canonicalFlow.pages.map((page) => ({
+    fileName: toPascalCase(page.name),
+    filePath: `/pages/${toPascalCase(page.name)}.tsx`,
+    componentName: toPascalCase(page.name),
+    id: page.id,
+    route: page.route,
+    name: page.name,
+  }));
+}
+
 // ============================================================================
 // App.tsx Consistency
 // ============================================================================
@@ -77,11 +99,32 @@ function discoverPages(files: Record<string, string>): DiscoveredPage[] {
 function checkAppTsx(
   files: Record<string, string>,
   discoveredPages: DiscoveredPage[],
+  options?: ConsistencyOptions,
 ): ConsistencyFix | null {
   if (discoveredPages.length === 0) return null;
 
   const appTsx = files["/App.tsx"];
   if (!appTsx) return null;
+
+  if (options?.canonicalFlow) {
+    const canonicalAppTsx = generateAppTsx(
+      discoveredPages.map((page) => ({
+        id: page.id,
+        label: page.name,
+        route: page.route,
+      }))
+    );
+
+    if (appTsx.trim() === canonicalAppTsx.trim()) {
+      return null;
+    }
+
+    return {
+      path: "/App.tsx",
+      content: canonicalAppTsx,
+      reason: "Synced routing to the canonical flow manifest",
+    };
+  }
 
   // Check if all pages are routed in App.tsx
   const missingPages = discoveredPages.filter((page) => {
@@ -120,10 +163,28 @@ interface FlowManifest {
 function checkFlowJson(
   files: Record<string, string>,
   discoveredPages: DiscoveredPage[],
+  options?: ConsistencyOptions,
 ): ConsistencyFix | null {
   if (discoveredPages.length === 0) return null;
 
   const flowRaw = files["/flow.json"];
+  if (options?.canonicalFlow) {
+    const canonicalFlow = options.canonicalFlow;
+    let normalizedCurrent = "";
+    try {
+      normalizedCurrent = flowRaw ? JSON.stringify(JSON.parse(flowRaw)) : "";
+    } catch {
+      normalizedCurrent = "";
+    }
+    const normalizedCanonical = JSON.stringify(canonicalFlow);
+    if (normalizedCurrent === normalizedCanonical) return null;
+    return {
+      path: "/flow.json",
+      content: JSON.stringify(canonicalFlow, null, 2),
+      reason: "Synced flow manifest to the canonical page set",
+    };
+  }
+
   let flow: FlowManifest;
 
   try {
@@ -190,15 +251,18 @@ function checkFlowJson(
  */
 export function checkRouteConsistency(
   files: Record<string, string>,
+  options?: ConsistencyOptions,
 ): ConsistencyResult {
   try {
-    const discoveredPages = discoverPages(files);
+    const discoveredPages = options?.canonicalFlow
+      ? discoverPagesFromCanonicalFlow(options.canonicalFlow)
+      : discoverPages(files);
     const fixes: ConsistencyFix[] = [];
 
-    const appFix = checkAppTsx(files, discoveredPages);
+    const appFix = checkAppTsx(files, discoveredPages, options);
     if (appFix) fixes.push(appFix);
 
-    const flowFix = checkFlowJson(files, discoveredPages);
+    const flowFix = checkFlowJson(files, discoveredPages, options);
     if (flowFix) fixes.push(flowFix);
 
     return { fixes };
