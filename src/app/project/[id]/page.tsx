@@ -48,6 +48,8 @@ import { calculateHorizontalLayout, type GroupId, type GroupConfig, type GroupOr
 import { calculateStrategyLayout } from "@/lib/strategy/strategy-layout";
 import { initializeTestAPI, updateTestAPI } from "@/lib/ast/test-utils";
 import { PublishDialog } from "@/components/editor/PublishDialog";
+import { BillingBadge } from "@/components/billing/BillingBadge";
+import { BillingLimitModal } from "@/components/billing/BillingLimitModal";
 import { AnnotatedDeleteModal, type AnnotatedDeleteInfo } from "@/components/canvas/AnnotatedDeleteModal";
 import { evaluateAnnotationsStandalone } from "@/hooks/useParallelBuild";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
@@ -791,7 +793,6 @@ export default function ProjectEditor() {
         mCtx,
         pCtx,
         insCtx,
-        "gemini-2.5-pro",
         [{ id: page.id, name: page.name, route: page.route }],
         { initialDelayMs: completedPageCount + failedPageIds.length === 0 ? 500 : 0 }
       );
@@ -2003,6 +2004,9 @@ export default function ProjectEditor() {
                 </span>
               </div>
             )}
+            <div className="ml-2">
+              <BillingBadge />
+            </div>
           </div>
 
           {/* Action buttons on far right */}
@@ -2539,6 +2543,9 @@ export default function ProjectEditor() {
           manifestoJtbd={manifestoData?.jtbd}
         />
       )}
+
+      {/* Billing limit modal */}
+      <BillingLimitModal />
     </main>
   );
 }

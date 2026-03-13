@@ -8,6 +8,7 @@ import { getTailwindConfigDataUrl } from "@/lib/tailwind-config";
 interface PublishedAppViewerProps {
   name: string;
   files: Record<string, string>;
+  showBranding?: boolean;
 }
 
 function parseDependencies(files: Record<string, string>): Record<string, string> {
@@ -26,7 +27,7 @@ function parseDependencies(files: Record<string, string>): Record<string, string
   return defaultPackageJson.dependencies;
 }
 
-export function PublishedAppViewer({ files }: PublishedAppViewerProps) {
+export function PublishedAppViewer({ files, showBranding = true }: PublishedAppViewerProps) {
   const dependencies = useMemo(() => parseDependencies(files), [files]);
 
   const sandpackFiles = useMemo(() => {
@@ -70,19 +71,21 @@ export function PublishedAppViewer({ files }: PublishedAppViewerProps) {
       </div>
 
       {/* Built with Novum banner */}
-      <div className="h-8 bg-neutral-900 flex items-center justify-center shrink-0">
-        <span className="text-xs text-neutral-400">
-          Built with{" "}
-          <a
-            href="/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-white font-medium hover:underline"
-          >
-            Novum
-          </a>
-        </span>
-      </div>
+      {showBranding && (
+        <div className="h-8 bg-neutral-900 flex items-center justify-center shrink-0">
+          <span className="text-xs text-neutral-400">
+            Built with{" "}
+            <a
+              href="/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-white font-medium hover:underline"
+            >
+              Novum
+            </a>
+          </span>
+        </div>
+      )}
     </div>
   );
 }

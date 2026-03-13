@@ -143,7 +143,6 @@ export async function evaluateAnnotationsStandalone(
   manifestoContext: string,
   personaContext: string,
   insightsContext: string | undefined,
-  modelId: string,
   flowManifestPages?: { id: string; name: string; route: string }[],
   options?: AnnotationRetryOptions,
 ): Promise<AnnotationEvaluationResult> {
@@ -191,7 +190,6 @@ export async function evaluateAnnotationsStandalone(
           manifestoContext,
           personaContext,
           insightsContext,
-          modelId,
         }),
       });
 
@@ -256,7 +254,7 @@ export function useParallelBuild({
   projectId?: string;
 }) {
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
-  const modelIdRef = useRef<string>("gemini-2.5-pro");
+  const operationIdRef = useRef<string | null>(null);
   const allPagesRef = useRef<PageBuildConfig[]>([]);
   const sharedContextRef = useRef<SharedContext | null>(null);
   const evaluationTriggeredRef = useRef(false);
@@ -359,7 +357,6 @@ export function useParallelBuild({
       context.manifestoContext,
       context.personaContext,
       buildInsightsContext(),
-      modelIdRef.current,
       [{ id: page.pageId, name: page.pageName, route: page.pageRoute }],
       options,
     );
@@ -534,6 +531,16 @@ export function useParallelBuild({
     }
   }, [applySinglePageAnnotationResult, evaluateSinglePageAnnotations]);
 
+  const finalizeBillingOperation = useCallback(() => {
+    if (operationIdRef.current) {
+      fetch("/api/billing/finalize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operationId: operationIdRef.current }),
+      }).catch(() => {});
+    }
+  }, []);
+
   const checkAllPagesComplete = useCallback(() => {
     if (evaluationTriggeredRef.current) return;
 
@@ -580,6 +587,10 @@ export function useParallelBuild({
 
       if (hasBuildFailures) {
         syncAnnotationEvaluationFromPageBuilds();
+        // Do NOT finalize — failed builds should not consume a free generation slot.
+        useStrategyStore.getState().setPhase("complete");
+        useStreamingStore.getState().endParallelStreaming();
+        useStrategyStore.getState().setBuildingPages([]);
         return;
       }
 
@@ -591,6 +602,7 @@ export function useParallelBuild({
       useStrategyStore.getState().setPhase("complete");
       useStreamingStore.getState().endParallelStreaming();
       useStrategyStore.getState().setBuildingPages([]);
+      finalizeBillingOperation();
       return;
     }
 
@@ -605,6 +617,7 @@ export function useParallelBuild({
     );
 
     if (hasFailedVerification) {
+      // Do NOT finalize — failed builds should not consume a free generation slot.
       useStrategyStore.getState().setPhase("complete");
       useStreamingStore.getState().endParallelStreaming();
       useStrategyStore.getState().setBuildingPages([]);
@@ -612,11 +625,12 @@ export function useParallelBuild({
     }
 
     void evaluateAnnotations().finally(() => {
+      finalizeBillingOperation();
       useStrategyStore.getState().setPhase("complete");
       useStreamingStore.getState().endParallelStreaming();
       useStrategyStore.getState().setBuildingPages([]);
     });
-  }, [evaluateAnnotations, syncAnnotationEvaluationFromPageBuilds]);
+  }, [evaluateAnnotations, finalizeBillingOperation, syncAnnotationEvaluationFromPageBuilds]);
 
   // Map a file path like "/pages/Dashboard.tsx" to the matching PageBuildConfig
   const findPageForPath = useCallback((filePath: string): PageBuildConfig | undefined => {
@@ -695,7 +709,6 @@ export function useParallelBuild({
         completedFiles: expandedPaths,
         allFiles: latestFiles,
         writeFile: wrappedWriteFile,
-        modelId: modelIdRef.current,
         pageId: page.pageId,
         signal,
         stateCallbacks: makeVerificationCallbacks(page.pageId),
@@ -793,7 +806,6 @@ export function useParallelBuild({
     sharedContext: SharedContext,
     pages: PageBuildConfig[],
     signal: AbortSignal,
-    modelId: string,
   ): Promise<FoundationArtifact[]> => {
     const store = useStreamingStore.getState();
     store.setFoundationBuild({ status: "streaming" });
@@ -807,7 +819,8 @@ export function useParallelBuild({
           manifestoContext: sharedContext.manifestoContext,
           personaContext: sharedContext.personaContext,
           flowContext: sharedContext.flowContext,
-          modelId,
+          operationId: operationIdRef.current,
+          projectId,
           pages: pages.map((p) => ({ pageName: p.pageName, pageRoute: p.pageRoute })),
         }),
         signal,
@@ -962,14 +975,13 @@ export function useParallelBuild({
     pages: PageBuildConfig[],
     sharedContext: SharedContext,
     signal: AbortSignal,
-    modelId: string,
     foundationArtifacts: FoundationArtifact[],
   ) => {
     await runWithSemaphore(pages, MAX_CONCURRENCY, signal, async (page) => {
       if (signal.aborted) return;
       useStreamingStore.getState().setPageBuildStage(page.pageId, "streaming");
       useStreamingStore.getState().updatePageBuild(page.pageId, { status: "streaming" });
-      await buildSinglePageParallel(page, sharedContext, signal, modelId, foundationArtifacts);
+      await buildSinglePageParallel(page, sharedContext, signal, foundationArtifacts);
     });
   };
 
@@ -1008,7 +1020,6 @@ export function useParallelBuild({
     page: PageBuildConfig,
     sharedContext: SharedContext,
     signal: AbortSignal,
-    modelId: string,
     foundationArtifacts: FoundationArtifact[],
   ) => {
     const { updatePageBuild } = useStreamingStore.getState();
@@ -1026,7 +1037,8 @@ export function useParallelBuild({
           personaContext: sharedContext.personaContext,
           flowContext: sharedContext.flowContext,
           userFlowContext: sharedContext.userFlowContext || "",
-          modelId,
+          operationId: operationIdRef.current,
+          projectId,
           foundationArtifacts: foundationArtifacts.length > 0 ? foundationArtifacts : undefined,
           knownFailures: knownFailuresRef.current.length > 0 ? knownFailuresRef.current : undefined,
         }),
@@ -1471,7 +1483,6 @@ export function useParallelBuild({
     pages: PageBuildConfig[],
     sharedContext: SharedContext,
     signal: AbortSignal,
-    modelId: string,
   ) => {
     const isRebuild = sharedContext.isRebuild || false;
 
@@ -1499,7 +1510,8 @@ export function useParallelBuild({
           personaContext: sharedContext.personaContext,
           flowContext: sharedContext.flowContext,
           userFlowContext: sharedContext.userFlowContext || "",
-          modelId,
+          operationId: operationIdRef.current,
+          projectId,
           ...(isRebuild ? { isRebuild: true, existingPages } : {}),
         }),
         signal,
@@ -1635,7 +1647,6 @@ export function useParallelBuild({
     page: PageBuildConfig,
     sharedContext: SharedContext,
     signal: AbortSignal,
-    modelId: string,
   ) => {
     const { updatePageBuild, completePageBuild, failPageBuild } =
       useStreamingStore.getState();
@@ -1655,7 +1666,8 @@ export function useParallelBuild({
           personaContext: sharedContext.personaContext,
           flowContext: sharedContext.flowContext,
           userFlowContext: sharedContext.userFlowContext || "",
-          modelId,
+          operationId: operationIdRef.current,
+          projectId,
         }),
         signal,
       });
@@ -1748,8 +1760,9 @@ export function useParallelBuild({
   // ─── startBuild ─────────────────────────────────────────────────────
 
   const startBuild = useCallback(
-    (pages: PageBuildConfig[], sharedContext: SharedContext, modelId: string) => {
-      modelIdRef.current = modelId;
+    (pages: PageBuildConfig[], sharedContext: SharedContext) => {
+      // Store operationId for downstream requests
+      operationIdRef.current = null;
       allPagesRef.current = pages;
       sharedContextRef.current = sharedContext;
       evaluationTriggeredRef.current = false;
@@ -1762,68 +1775,93 @@ export function useParallelBuild({
 
       const pageIds = pages.map((p) => p.pageId);
 
-      // Pre-add common dependencies to /package.json so pages can import them
-      try {
-        const pkgRaw = files["/package.json"];
-        const pkg = pkgRaw ? JSON.parse(pkgRaw) : { name: "novum-app", version: "1.0.0", dependencies: {} };
-        let changed = false;
-        const commonDeps: Record<string, string> = {
-          "lucide-react": "^0.460.0",
-          "recharts": "^2.12.0",
-          "date-fns": "^3.6.0",
-        };
-        for (const [dep, ver] of Object.entries(commonDeps)) {
-          if (!pkg.dependencies[dep]) {
-            pkg.dependencies[dep] = ver;
-            changed = true;
+      // Wrap the build in an async IIFE so we can await the billing pre-flight
+      (async () => {
+        // ── Billing pre-flight: authorize initial_generation (fresh) or build_usage (rebuild) ──
+        const actionType = sharedContext.isRebuild ? "build_usage" : "initial_generation";
+        try {
+          const res = await fetch("/api/billing/authorize-action", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ actionType, projectId }),
+          });
+          if (res.status === 402) {
+            const body = await res.json().catch(() => ({ message: "Usage limit reached" }));
+            const { useBillingStore } = await import("@/hooks/useBillingStore");
+            useBillingStore.getState().showLimitModal(body.message || "Usage limit reached");
+            return; // Abort — do not start the build
           }
-        }
-        if (changed) {
-          writeFile("/package.json", JSON.stringify(pkg, null, 2));
-          latestBuildFilesRef.current["/package.json"] = JSON.stringify(pkg, null, 2);
-        }
-      } catch {
-        // Fail-safe: if parsing fails, continue without pre-populating
-      }
-
-      // Initialize stores — all pages visible immediately
-      useStreamingStore.getState().startParallelStreaming(pageIds);
-      useStrategyStore.getState().setBuildingPages(pageIds);
-      useStrategyStore.getState().setCoverageDisplayState("pending");
-
-      // During rebuild, immediately pre-complete pages that have existing code
-      // This prevents the StreamingOverlay from showing the black terminal for unchanged pages
-      if (sharedContext.isRebuild) {
-        for (const page of pages) {
-          if (page.existingCode) {
-            useStreamingStore.getState().completePageBuild(page.pageId);
-            useStreamingStore.getState().setPageBuildStage(page.pageId, "unchanged");
-            useStrategyStore.getState().addCompletedPage(page.pageId);
+          if (res.ok) {
+            const data = await res.json();
+            operationIdRef.current = data.operationId ?? null;
+          } else if (actionType === "initial_generation") {
+            // Non-402 server error on fresh build — abort to enforce the cap
+            console.error("[Build] Billing pre-flight returned", res.status, "— aborting fresh build");
+            return;
           }
+        } catch (err) {
+          // For initial_generation (fresh builds), billing is mandatory — abort on failure.
+          // For rebuilds (build_usage), allow proceeding so the UX isn't blocked.
+          if (actionType === "initial_generation") {
+            console.error("[Build] Billing pre-flight failed, aborting fresh build:", err);
+            return;
+          }
+          console.warn("[Build] Billing pre-flight failed, proceeding with rebuild:", err);
         }
-        rebuildAppTsx();
-      }
 
-      const controller = new AbortController();
-      abortControllersRef.current.set("__build__", controller);
+        // Pre-add common dependencies to /package.json so pages can import them
+        try {
+          const pkgRaw = files["/package.json"];
+          const pkg = pkgRaw ? JSON.parse(pkgRaw) : { name: "novum-app", version: "1.0.0", dependencies: {} };
+          let changed = false;
+          const commonDeps: Record<string, string> = {
+            "lucide-react": "^0.460.0",
+            "recharts": "^2.12.0",
+            "date-fns": "^3.6.0",
+          };
+          for (const [dep, ver] of Object.entries(commonDeps)) {
+            if (!pkg.dependencies[dep]) {
+              pkg.dependencies[dep] = ver;
+              changed = true;
+            }
+          }
+          if (changed) {
+            writeFile("/package.json", JSON.stringify(pkg, null, 2));
+            latestBuildFilesRef.current["/package.json"] = JSON.stringify(pkg, null, 2);
+          }
+        } catch {
+          // Fail-safe: if parsing fails, continue without pre-populating
+        }
 
-      if (sharedContext.isRebuild) {
-        // Rebuilds use single API call (buildAllPages) since pages may be unchanged
-        buildAllPages(pages, sharedContext, controller.signal, modelId);
-      } else {
-        // Fresh builds: 3-phase parallel pipeline
-        // NOTE: We do NOT delete the __build__ controller here. It must stay alive
-        // so that cancelAll() can abort the verification queue (Phase 3) which runs
-        // asynchronously after buildPagesInParallel returns. The controller is cleaned
-        // up by cancelAll() or endParallelStreaming() at the end of the build lifecycle.
-        (async () => {
+        // Initialize stores — all pages visible immediately
+        useStreamingStore.getState().startParallelStreaming(pageIds);
+        useStrategyStore.getState().setBuildingPages(pageIds);
+        useStrategyStore.getState().setCoverageDisplayState("pending");
+
+        // During rebuild, immediately pre-complete pages that have existing code
+        if (sharedContext.isRebuild) {
+          for (const page of pages) {
+            if (page.existingCode) {
+              useStreamingStore.getState().completePageBuild(page.pageId);
+              useStreamingStore.getState().setPageBuildStage(page.pageId, "unchanged");
+              useStrategyStore.getState().addCompletedPage(page.pageId);
+            }
+          }
+          rebuildAppTsx();
+        }
+
+        const controller = new AbortController();
+        abortControllersRef.current.set("__build__", controller);
+
+        if (sharedContext.isRebuild) {
+          buildAllPages(pages, sharedContext, controller.signal);
+        } else {
           try {
             // Phase 1: Foundation
             const foundationArtifacts = await buildFoundation(
               sharedContext,
               pages,
               controller.signal,
-              modelId,
             );
 
             if (controller.signal.aborted) return;
@@ -1833,19 +1871,15 @@ export function useParallelBuild({
               pages,
               sharedContext,
               controller.signal,
-              modelId,
               foundationArtifacts,
             );
-
-            // Phase 3 verification may still be processing — the queue processor
-            // will call checkAllPagesComplete when done, which triggers evaluateAnnotations
-            // -> endParallelStreaming, cleaning up the controller.
           } catch (err) {
             if (controller.signal.aborted) return;
             console.error("[Build] Pipeline error:", err);
           }
-        })();
-      }
+        }
+
+      })();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [writeFile, files]
@@ -1887,14 +1921,14 @@ export function useParallelBuild({
           try {
             useStreamingStore.getState().setPageBuildStage(pageId, "streaming");
             useStreamingStore.getState().updatePageBuild(pageId, { status: "streaming" });
-            await buildSinglePageParallel(page, sharedContext, controller.signal, modelIdRef.current, artifacts);
+            await buildSinglePageParallel(page, sharedContext, controller.signal, artifacts);
           } finally {
             abortControllersRef.current.delete(pageId);
           }
         })();
       } else {
         // Legacy retry path
-        buildSinglePage(page, sharedContext, controller.signal, modelIdRef.current);
+        buildSinglePage(page, sharedContext, controller.signal);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1943,7 +1977,6 @@ export function useParallelBuild({
         completedFiles: completedFilePaths,
         allFiles: latestFiles,
         writeFile,
-        modelId: modelIdRef.current,
         pageId,
         signal: controller.signal,
         stateCallbacks: makeVerificationCallbacks(pageId),

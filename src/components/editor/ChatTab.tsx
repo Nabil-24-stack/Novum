@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import { useEffect, useRef, useState, useCallback, useMemo, DragEvent, ClipboardEvent, FormEvent } from "react";
-import { Send, Loader2, X, ImagePlus, ChevronDown, ArrowRight, Check, AlertTriangle, Square, FileText, RotateCcw } from "lucide-react";
+import { Send, Loader2, X, ImagePlus, ArrowRight, Check, AlertTriangle, Square, FileText, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { useChatContextStore, type PinnedElement, type AddressGapsPayload } from "@/hooks/useChatContextStore";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
@@ -30,6 +30,7 @@ import { ConfidenceBar } from "./ConfidenceBar";
 import { BuildProgressCards } from "./BuildProgressCards";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
 import { trackEvent } from "@/lib/analytics/track-event";
+import { useBillingStore } from "@/hooks/useBillingStore";
 import { checkRouteConsistency } from "@/lib/ai/route-consistency";
 import { parseStreamingContent } from "@/lib/streaming-parser";
 import { runVerificationLoop } from "@/lib/verification/verify-loop";
@@ -53,14 +54,6 @@ const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/web
 const MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024; // 4MB
 const MAX_IMAGES_PER_MESSAGE = 5;
 
-type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6" | "gpt-5.2";
-
-const MODEL_OPTIONS: { id: ModelId; label: string; provider: string }[] = [
-  { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", provider: "Google" },
-  { id: "gemini-3-pro-preview", label: "Gemini 3 Pro", provider: "Google" },
-  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", provider: "Anthropic" },
-  { id: "gpt-5.2", label: "GPT 5.2", provider: "OpenAI" },
-];
 
 interface ChatTabProps {
   writeFile: (path: string, content: string) => void;
@@ -1285,8 +1278,8 @@ export function ChatTab({
   projectId,
 }: ChatTabProps) {
   const [input, setInput] = useState(initialInput ?? "");
-  const [selectedModel, setSelectedModel] = useState<ModelId>("claude-sonnet-4-6");
   const [stagedImages, setStagedImages] = useState<FileUIPart[]>([]);
+  const showLimitModal = useBillingStore((s) => s.showLimitModal);
   const [isDragOver, setIsDragOver] = useState(false);
   const [activeRepairContext, setActiveRepairContext] = useState<RepairChatDraft | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1351,6 +1344,16 @@ export function ChatTab({
     messages: initialMessages,
     onError: (err) => {
       console.error("Chat error:", err);
+      const errObj = err as Error & { status?: number };
+      if (errObj.status === 402) {
+        try {
+          const body = JSON.parse(errObj.message || '{}');
+          showLimitModal(body.message || 'Usage limit reached');
+        } catch {
+          showLimitModal('Usage limit reached');
+        }
+        return;
+      }
       toast.error("AI response failed — please try again");
       trackEvent("ai_response_error", projectId, { error: String(err).slice(0, 500) });
     },
@@ -1549,14 +1552,14 @@ export function ChatTab({
       {
         body: {
           vfsContext: existingArtifactsContext ? { vfs: existingArtifactsContext } : "",
-          modelId: selectedModel,
+
           strategyPhase: "problem-overview",
           documentContext: docContext,
           hasUploadedDocuments: true,
         },
       }
     );
-  }, [pendingReanalysis, isLoading, sendMessage, selectedModel]);
+  }, [pendingReanalysis, isLoading, sendMessage]);
 
   // --- Pending address gaps: auto-send message when "Address Gaps with AI" clicked ---
   useEffect(() => {
@@ -1607,9 +1610,9 @@ export function ChatTab({
     requestPhaseRef.current = "editing";
     sendMessage(
       { text },
-      { body: { vfsContext, modelId: selectedModel, strategyPhase: "editing", editContext } }
+      { body: { vfsContext, strategyPhase: "editing", editContext } }
     );
-  }, [pendingAddressGaps, isLoading, sendMessage, selectedModel, files, activePageId, activePageName, activeRoute, pinnedElements, flowData, beginEditingRequest, userFlowsData, brainData]);
+  }, [pendingAddressGaps, isLoading, sendMessage, files, activePageId, activePageName, activeRoute, pinnedElements, flowData, beginEditingRequest, userFlowsData, brainData]);
 
   // --- Question Tabs State ---
   const [questionAnswers, setQuestionAnswers] = useState<Record<number, string>>({});
@@ -1876,7 +1879,7 @@ export function ChatTab({
         {
           body: {
             vfsContext,
-            modelId: selectedModel,
+  
             strategyPhase: "problem-overview",
           },
         }
@@ -1884,7 +1887,7 @@ export function ChatTab({
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [isLoading, strategyPhase, personaData, journeyMapData, isJourneyMapContinuing, sendMessage, selectedModel]);
+  }, [isLoading, strategyPhase, personaData, journeyMapData, isJourneyMapContinuing, sendMessage]);
 
   // --- Stream partial idea data to the canvas in real-time ---
   useEffect(() => {
@@ -2537,7 +2540,7 @@ export function ChatTab({
       const store = useStreamingStore.getState();
       if (store.completedFilePaths.length === 0) return; // No code written
       if (store.parallelMode) return; // Skip during parallel builds
-      trackEvent("ai_response_complete", projectId, { model: selectedModel, filesWritten: store.completedFilePaths.length });
+      trackEvent("ai_response_complete", projectId, { filesWritten: store.completedFilePaths.length });
 
       const completedFiles = [...store.completedFilePaths];
       const targetPageId = store.targetPageId ?? undefined;
@@ -2553,7 +2556,7 @@ export function ChatTab({
           completedFiles,
           allFiles: files,
           writeFile,
-          modelId: selectedModel,
+
           pageId: targetPageId,
           signal: controller.signal,
         }).then((result) => {
@@ -2570,7 +2573,7 @@ export function ChatTab({
               const errorContext = buildBuildingPhaseVfsContext(files);
               sendMessage(
                 { text: `The code you just wrote has this runtime error:\n\n"${result.lastError}"\n\nPlease fix the error. Write the corrected file(s) with full content.` },
-                { body: { vfsContext: Object.values(errorContext).filter(Boolean).join("\n\n"), modelId: selectedModel, strategyPhase: "building" } }
+                { body: { vfsContext: Object.values(errorContext).filter(Boolean).join("\n\n"), strategyPhase: "building" } }
               );
             } else {
               toast.warning("Could not auto-fix all issues");
@@ -2589,7 +2592,7 @@ export function ChatTab({
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- files/writeFile read at call-time
-  }, [status, selectedModel]);
+  }, [status]);
 
   // --- Deep-dive round completion detection ---
   // When AI finishes streaming during deep-dive, check if it output updated blocks.
@@ -2663,7 +2666,7 @@ export function ChatTab({
           completedFiles: writtenFiles,
           allFiles: latestFiles,
           writeFile,
-          modelId: selectedModel,
+
           signal: controller.signal,
         }).then((result) => {
           if (result.status === "fixed") {
@@ -2681,7 +2684,7 @@ export function ChatTab({
         });
       }
     }
-  }, [messages, isLoading, onBuildingResponseComplete, files, getLatestFile, writeFile, selectedModel, parallelMode, verificationPaused, verificationPausedPageId, parallelBuild]);
+  }, [messages, isLoading, onBuildingResponseComplete, files, getLatestFile, writeFile, parallelMode, verificationPaused, verificationPausedPageId, parallelBuild]);
 
   // --- Image upload helpers ---
 
@@ -2817,10 +2820,10 @@ export function ChatTab({
 
       sendMessage(
         { text },
-        { body: { vfsContext, modelId: selectedModel, strategyPhase, isDeepDive: useStrategyStore.getState().isDeepDive } }
+        { body: { vfsContext, strategyPhase, isDeepDive: useStrategyStore.getState().isDeepDive } }
       );
     },
-    [isLoading, sendMessage, selectedModel, strategyPhase]
+    [isLoading, sendMessage, strategyPhase]
   );
 
   // --- "Discuss the problem more" handler ---
@@ -2847,9 +2850,9 @@ export function ChatTab({
 
     sendMessage(
       { text: "I'd like to discuss the problem more before moving on. What areas should we go deeper on?" },
-      { body: { vfsContext, modelId: selectedModel, strategyPhase: "problem-overview", isDeepDive: true } }
+      { body: { vfsContext, strategyPhase: "problem-overview", isDeepDive: true } }
     );
-  }, [isLoading, sendMessage, selectedModel]);
+  }, [isLoading, sendMessage]);
 
   // --- "Build Anyway" handler (strategy alignment override) ---
 
@@ -2890,7 +2893,7 @@ export function ChatTab({
             ...vfsContext,
             editContext: `## Edit Context\n\nSource: ${currentEditContext.source}\nActive Page ID: ${currentEditContext.activePageId || "unknown"}\nActive Page Name: ${currentEditContext.activePageName || "unknown"}\nActive Route: ${currentEditContext.activeRoute || "unknown"}\nPinned Page IDs: ${currentEditContext.pinnedPageIds.join(", ") || "none"}`,
           },
-          modelId: selectedModel,
+
           strategyPhase: "editing",
           documentContext,
           hasUploadedDocuments,
@@ -2900,7 +2903,7 @@ export function ChatTab({
         },
       }
     );
-  }, [isLoading, files, sendMessage, selectedModel, activePageId, activePageName, activeRoute, pinnedElements, flowData, beginEditingRequest]);
+  }, [isLoading, files, sendMessage, activePageId, activePageName, activeRoute, pinnedElements, flowData, beginEditingRequest]);
 
   // --- "Finish discussion" handler ---
 
@@ -2927,9 +2930,9 @@ export function ChatTab({
 
     sendMessage(
       { text: "Let's wrap up this discussion. Based on everything we've discussed, update the overview, personas, and journey maps where needed." },
-      { body: { vfsContext, modelId: selectedModel, strategyPhase: "problem-overview", isDeepDive: true } }
+      { body: { vfsContext, strategyPhase: "problem-overview", isDeepDive: true } }
     );
-  }, [isLoading, stop, sendMessage, selectedModel]);
+  }, [isLoading, stop, sendMessage]);
 
   // --- "I'm ready" / "Finish discussion" override for confidence gating ---
 
@@ -3170,7 +3173,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
       {
         body: {
           vfsContext,
-          modelId: selectedModel,
+
           strategyPhase: effectivePhase,
           currentPageId: buildingPageId,
           currentPageName: buildingPageName,
@@ -3182,7 +3185,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         },
       }
     );
-    trackEvent("chat_message_sent", projectId, { model: selectedModel, phase: effectivePhase });
+    trackEvent("chat_message_sent", projectId, { phase: effectivePhase });
 
     if (repairContext) {
       setActiveRepairContext(null);
@@ -3401,7 +3404,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 const context = parts.join("\n\n");
                 sendMessage(
                   { text: "The overview, personas, and journey maps are approved. Generate 8 Crazy 8's ideas for solving this problem." },
-                  { body: { vfsContext: context, modelId: selectedModel, strategyPhase: "ideation" } }
+                  { body: { vfsContext: context, strategyPhase: "ideation" } }
                 );
               }}
               className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
@@ -3480,7 +3483,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                   : "";
                 sendMessage(
                   { text: `I've selected the idea "${selectedIdea?.title}". Now design the Information Architecture AND map user flows for each job-to-be-done based on this idea.` },
-                  { body: { vfsContext: { vfs: context, selectedIdeaContext }, modelId: selectedModel, strategyPhase: "solution-design" } }
+                  { body: { vfsContext: { vfs: context, selectedIdeaContext }, strategyPhase: "solution-design" } }
                 );
               }}
               className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
@@ -3560,7 +3563,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 parallelPageNamesRef.current = nameMap;
 
                 // Fire build
-                parallelBuild.startBuild(pages, enrichedSharedContext, selectedModel);
+                parallelBuild.startBuild(pages, enrichedSharedContext);
               }}
               className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
             >
@@ -3802,24 +3805,6 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           >
             <Send className="w-4 h-4" />
           </button>
-        </div>
-        {/* Model selector */}
-        <div className="mt-2 flex items-center">
-          <div className="relative">
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value as ModelId)}
-              disabled={isLoading}
-              className="appearance-none text-xs text-neutral-500 bg-neutral-50 border border-neutral-200 rounded-md pl-2 pr-6 py-1 cursor-pointer hover:bg-neutral-100 focus:outline-none focus:ring-1 focus:ring-neutral-400 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {MODEL_OPTIONS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-neutral-400 pointer-events-none" />
-          </div>
         </div>
       </form>
     </div>

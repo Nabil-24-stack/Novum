@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useProjects } from "@/hooks/useProjects";
 import { useDocumentStore } from "@/hooks/useDocumentStore";
 import { ProjectCard } from "@/components/dashboard/ProjectCard";
+import { BillingCard } from "@/components/billing/BillingCard";
 import { createClient } from "@/lib/supabase/client";
 
 export default function Dashboard() {
@@ -227,6 +228,11 @@ export default function Dashboard() {
             </div>
           </form>
         </div>
+      </section>
+
+      {/* Billing card */}
+      <section className="px-4 max-w-6xl mx-auto mb-6">
+        <BillingCard />
       </section>
 
       {/* Projects section — peeks 80px above fold */}

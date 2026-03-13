@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 import { logServerEvent } from "@/lib/analytics/log-server-event";
+import { getOrCreateBillingAccount } from "@/lib/billing/billing";
 
 export async function POST(request: Request) {
   try {
@@ -26,11 +27,21 @@ export async function POST(request: Request) {
 
     const slug = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
 
+    // Determine branding based on plan tier
+    let showNovumBranding = true;
+    try {
+      const account = await getOrCreateBillingAccount(auth.user.id);
+      showNovumBranding = account.plan_tier !== "pro";
+    } catch {
+      // Default to showing branding if billing check fails
+    }
+
     const { error } = await auth.supabase.from("published_apps").insert({
       slug,
       name: name.slice(0, 200),
       files,
       user_id: auth.user.id,
+      show_novum_branding: showNovumBranding,
     });
 
     if (error) {

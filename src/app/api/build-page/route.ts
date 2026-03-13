@@ -1,30 +1,12 @@
 import { streamText } from "ai";
-import { google } from "@ai-sdk/google";
-import { anthropic } from "@ai-sdk/anthropic";
-import { openai } from "@ai-sdk/openai";
 import {
   DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT,
   buildParallelPagePrompt,
   buildFoundationPrompt,
 } from "@/lib/ai/strategy-prompts";
 import { requireAuth } from "@/lib/supabase/auth-guard";
-
-type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6" | "gpt-5.2";
-
-function getModel(modelId: ModelId) {
-  switch (modelId) {
-    case "gemini-2.5-pro":
-      return google("gemini-2.5-pro");
-    case "gemini-3-pro-preview":
-      return google("gemini-3-pro-preview");
-    case "claude-sonnet-4-6":
-      return anthropic("claude-sonnet-4-6");
-    case "gpt-5.2":
-      return openai("gpt-5.2");
-    default:
-      return google("gemini-2.5-pro");
-  }
-}
+import { getModel } from "@/lib/ai/model";
+import { requireBillingAuth, fireAndForgetRecordUsage } from "@/lib/billing/route-helpers";
 
 export const maxDuration = 120;
 
@@ -105,13 +87,18 @@ export async function POST(req: Request) {
     personaContext,
     flowContext,
     userFlowContext,
-    modelId,
     previousErrors,
     isFoundation,
     foundationArtifacts,
     knownFailures,
     pages, // for foundation builds: list of pages
+    operationId,
+    projectId,
   } = body;
+
+  const billingCheck = await requireBillingAuth(auth.user.id, "build_usage", operationId, projectId);
+  if (!billingCheck.allowed) return billingCheck.response;
+  const finalOperationId = billingCheck.operationId;
 
   // Foundation build mode: generate shared layout components
   if (isFoundation) {
@@ -126,7 +113,7 @@ export async function POST(req: Request) {
       DESIGN_SYSTEM_RULES;
 
     const result = streamText({
-      model: getModel(modelId || "claude-sonnet-4-6"),
+      model: getModel(),
       system: systemPrompt,
       messages: [
         {
@@ -136,6 +123,16 @@ export async function POST(req: Request) {
       ],
       providerOptions: {
         openai: { store: false },
+      },
+      onFinish: ({ usage }) => {
+        fireAndForgetRecordUsage({
+          operationId: finalOperationId,
+          userId: auth.user.id,
+          route: "/api/build-page",
+          inputTokens: usage.inputTokens ?? 0,
+          outputTokens: usage.outputTokens ?? 0,
+          projectId,
+        });
       },
     });
 
@@ -170,7 +167,7 @@ export async function POST(req: Request) {
   }
 
   const result = streamText({
-    model: getModel(modelId || "claude-sonnet-4-6"),
+    model: getModel(),
     system: systemPrompt,
     messages: [
       {
@@ -180,6 +177,16 @@ export async function POST(req: Request) {
     ],
     providerOptions: {
       openai: { store: false },
+    },
+    onFinish: ({ usage }) => {
+      fireAndForgetRecordUsage({
+        operationId: finalOperationId,
+        userId: auth.user.id,
+        route: "/api/build-page",
+        inputTokens: usage.inputTokens ?? 0,
+        outputTokens: usage.outputTokens ?? 0,
+        projectId,
+      });
     },
   });
 

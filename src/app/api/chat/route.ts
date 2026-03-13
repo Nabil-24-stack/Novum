@@ -1,7 +1,4 @@
 import { streamText, convertToModelMessages } from "ai";
-import { google } from "@ai-sdk/google";
-import { anthropic } from "@ai-sdk/anthropic";
-import { openai } from "@ai-sdk/openai";
 import {
   DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT,
   PROBLEM_OVERVIEW_SYSTEM_PROMPT,
@@ -13,23 +10,9 @@ import {
 } from "@/lib/ai/strategy-prompts";
 import { INSIGHTS_PROMPT_FRAGMENT } from "@/lib/ai/insights-prompt";
 import { requireAuth } from "@/lib/supabase/auth-guard";
-
-type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6" | "gpt-5.2";
-
-function getModel(modelId: ModelId) {
-  switch (modelId) {
-    case "gemini-2.5-pro":
-      return google("gemini-2.5-pro");
-    case "gemini-3-pro-preview":
-      return google("gemini-3-pro-preview");
-    case "claude-sonnet-4-6":
-      return anthropic("claude-sonnet-4-6");
-    case "gpt-5.2":
-      return openai("gpt-5.2");
-    default:
-      return google("gemini-2.5-pro");
-  }
-}
+import { getModel } from "@/lib/ai/model";
+import { requireBillingAuth, fireAndForgetRecordUsage } from "@/lib/billing/route-helpers";
+import { authorizeAction } from "@/lib/billing/billing";
 
 export const maxDuration = 120;
 
@@ -524,7 +507,6 @@ export async function POST(req: Request) {
   const {
     messages,
     vfsContext,
-    modelId,
     strategyPhase,
     currentPageId,
     currentPageName,
@@ -534,7 +516,27 @@ export async function POST(req: Request) {
     isSubsequentEdit,
     repairContext,
     editContext,
+    operationId,
+    projectId,
   } = await req.json();
+
+  // Determine billing action type
+  const actionType = (strategyPhase === "building" || strategyPhase === "editing")
+    ? "build_usage" as const
+    : "strategy_ai" as const;
+
+  let finalOperationId: string | undefined;
+
+  if (actionType === "build_usage") {
+    const billingCheck = await requireBillingAuth(auth.user.id, actionType, operationId, projectId);
+    if (!billingCheck.allowed) return billingCheck.response;
+    finalOperationId = billingCheck.operationId;
+  } else {
+    const stratResult = await authorizeAction(auth.user.id, "strategy_ai", operationId, projectId);
+    if (stratResult.allowed) {
+      finalOperationId = stratResult.operationId;
+    }
+  }
 
   // Convert UIMessage[] to ModelMessage[] format
   const modelMessages = await convertToModelMessages(messages);
@@ -607,7 +609,7 @@ export async function POST(req: Request) {
   }
 
   const result = streamText({
-    model: getModel(modelId || "claude-sonnet-4-6"),
+    model: getModel(),
     system: dynamicSystemPrompt,
     messages: modelMessages,
     maxOutputTokens: 65536,
@@ -616,6 +618,19 @@ export async function POST(req: Request) {
     // "Item with id ... not found" when stored items expire.
     providerOptions: {
       openai: { store: false },
+    },
+    onFinish: ({ usage }) => {
+      if (finalOperationId) {
+        fireAndForgetRecordUsage({
+          operationId: finalOperationId,
+          userId: auth.user.id,
+          route: "/api/chat",
+          phase: strategyPhase,
+          inputTokens: usage.inputTokens ?? 0,
+          outputTokens: usage.outputTokens ?? 0,
+          projectId,
+        });
+      }
     },
   });
 

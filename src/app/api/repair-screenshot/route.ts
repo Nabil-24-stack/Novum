@@ -1,26 +1,8 @@
 import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
-import { anthropic } from "@ai-sdk/anthropic";
-import { openai } from "@ai-sdk/openai";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 import type { UserContent } from "ai";
-
-type ModelId = "gemini-2.5-pro" | "gemini-3-pro-preview" | "claude-sonnet-4-6" | "gpt-5.2";
-
-function getModel(modelId: ModelId) {
-  switch (modelId) {
-    case "gemini-2.5-pro":
-      return google("gemini-2.5-pro");
-    case "gemini-3-pro-preview":
-      return google("gemini-3-pro-preview");
-    case "claude-sonnet-4-6":
-      return anthropic("claude-sonnet-4-6");
-    case "gpt-5.2":
-      return openai("gpt-5.2");
-    default:
-      return google("gemini-2.5-pro");
-  }
-}
+import { getModel } from "@/lib/ai/model";
+import { requireBillingAuth, fireAndForgetRecordUsage } from "@/lib/billing/route-helpers";
 
 export const maxDuration = 120;
 
@@ -65,20 +47,25 @@ export async function POST(req: Request) {
     const {
       files,
       contextFiles,
-      modelId = "claude-sonnet-4-6",
       errorText,
       screenshotDataUrl,
       vfsFilePaths,
       availableExports,
+      operationId,
+      projectId,
     } = body as {
       files: Record<string, string>;
       contextFiles?: Record<string, string>;
-      modelId?: ModelId;
       errorText?: string;
       screenshotDataUrl?: string;
       vfsFilePaths?: string[];
       availableExports?: Record<string, string[]>;
+      operationId?: string;
+      projectId?: string;
     };
+
+    const billingCheck = await requireBillingAuth(auth.user.id, "build_usage", operationId, projectId);
+    if (!billingCheck.allowed) return billingCheck.response;
 
     if (!errorText) {
       return Response.json({ status: "pass" });
@@ -172,7 +159,7 @@ export async function POST(req: Request) {
       // Ignore
     }
 
-    const model = getModel(modelId);
+    const model = getModel();
 
     const textContent = `The page shows this error:\n\n"${errorText}"\n\nFiles that were just written:\n${fileContext}${additionalContext}${vfsStructureContext}${depsContext}\n\nDiagnose the error and provide a fix. Respond with JSON only.`;
 
@@ -192,6 +179,17 @@ export async function POST(req: Request) {
         openai: { store: false },
       },
     });
+
+    if (billingCheck.allowed) {
+      fireAndForgetRecordUsage({
+        operationId: billingCheck.operationId,
+        userId: auth.user.id,
+        route: "/api/repair-screenshot",
+        inputTokens: result.usage.inputTokens ?? 0,
+        outputTokens: result.usage.outputTokens ?? 0,
+        projectId,
+      });
+    }
 
     // Parse response - try to extract JSON
     const text = result.text.trim();

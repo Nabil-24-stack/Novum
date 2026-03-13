@@ -376,7 +376,7 @@ export interface VerificationParams {
   completedFiles: string[];
   allFiles: Record<string, string>;
   writeFile: (path: string, content: string) => void;
-  modelId: string;
+  operationId?: string;
   pageId?: string;
   signal?: AbortSignal;
   /** Optional: page-scoped state callbacks for parallel mode. Falls back to global store. */
@@ -531,7 +531,7 @@ export async function runVerificationLoop(
     completedFiles,
     allFiles,
     writeFile,
-    modelId,
+    operationId,
     pageId,
     signal,
     stateCallbacks,
@@ -764,7 +764,7 @@ export async function runVerificationLoop(
           body: JSON.stringify({
             files: apiFiles,
             contextFiles: allFiles,
-            modelId,
+            operationId,
             errorText: enrichedError,
             vfsFilePaths,
             availableExports,

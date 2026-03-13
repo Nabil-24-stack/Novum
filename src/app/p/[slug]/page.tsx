@@ -11,7 +11,7 @@ export default async function PublishedAppPage({ params }: PageProps) {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("published_apps")
-    .select("name, files")
+    .select("name, files, show_novum_branding")
     .eq("slug", slug)
     .single();
 
@@ -34,6 +34,7 @@ export default async function PublishedAppPage({ params }: PageProps) {
     <PublishedAppViewer
       name={data.name}
       files={data.files as Record<string, string>}
+      showBranding={data.show_novum_branding ?? true}
     />
   );
 }
