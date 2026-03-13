@@ -2,24 +2,25 @@ import type { TokenState, SemanticColorName, SemanticColorValue } from "./types"
 import { generateColorScale } from "./color-scale";
 
 /**
- * Default Token State — Arctic Glass
- * Cool, clean, technical calm. Teal brand with slate neutrals.
+ * Default Token State — Monochrome
+ * Minimal, clean, modern. Monochrome surfaces with restrained blue focus cues.
  */
 export const defaultTokenState: TokenState = {
   version: "2.0",
+  activePresetId: "monochrome",
   primitives: {
     colors: {
-      brand: generateColorScale("#0E7490"),
-      neutral: generateColorScale("#64748B"),
-      success: generateColorScale("#0F766E"),
+      brand: generateColorScale("#111111"),
+      neutral: generateColorScale("#71717A"),
+      success: generateColorScale("#16A34A"),
       warning: generateColorScale("#D97706"),
       error: generateColorScale("#DC2626"),
       info: generateColorScale("#2563EB"),
     },
     baseColors: {
-      brand: "#0E7490",
-      neutral: "#64748B",
-      success: "#0F766E",
+      brand: "#111111",
+      neutral: "#71717A",
+      success: "#16A34A",
       warning: "#D97706",
       error: "#DC2626",
       info: "#2563EB",
@@ -28,19 +29,19 @@ export const defaultTokenState: TokenState = {
   semantics: {
     colors: {
       background: { light: "neutral-50", dark: "neutral-950" },
-      foreground: { light: "neutral-900", dark: "neutral-100" },
+      foreground: { light: "neutral-950", dark: "neutral-50" },
       card: { light: "neutral-50", dark: "neutral-900" },
-      "card-foreground": { light: "neutral-900", dark: "neutral-100" },
+      "card-foreground": { light: "neutral-950", dark: "neutral-50" },
       popover: { light: "neutral-50", dark: "neutral-900" },
-      "popover-foreground": { light: "neutral-900", dark: "neutral-100" },
-      primary: { light: "brand-600", dark: "brand-400" },
+      "popover-foreground": { light: "neutral-950", dark: "neutral-50" },
+      primary: { light: "brand-500", dark: "brand-50" },
       "primary-foreground": { light: "neutral-50", dark: "neutral-950" },
-      secondary: { light: "info-100", dark: "info-900" },
-      "secondary-foreground": { light: "info-700", dark: "info-200" },
-      muted: { light: "neutral-100", dark: "neutral-800" },
-      "muted-foreground": { light: "neutral-600", dark: "neutral-400" },
-      accent: { light: "brand-100", dark: "brand-900" },
-      "accent-foreground": { light: "brand-800", dark: "brand-200" },
+      secondary: { light: "neutral-100", dark: "neutral-900" },
+      "secondary-foreground": { light: "neutral-900", dark: "neutral-100" },
+      muted: { light: "neutral-100", dark: "neutral-900" },
+      "muted-foreground": { light: "neutral-500", dark: "neutral-400" },
+      accent: { light: "neutral-100", dark: "neutral-900" },
+      "accent-foreground": { light: "neutral-900", dark: "neutral-100" },
       success: { light: "success-500", dark: "success-400" },
       "success-foreground": { light: "neutral-50", dark: "neutral-950" },
       warning: { light: "warning-500", dark: "warning-400" },
@@ -49,16 +50,16 @@ export const defaultTokenState: TokenState = {
       "info-foreground": { light: "neutral-50", dark: "neutral-950" },
       destructive: { light: "error-500", dark: "error-400" },
       "destructive-foreground": { light: "neutral-50", dark: "neutral-950" },
-      border: { light: "neutral-200", dark: "neutral-700" },
-      input: { light: "neutral-200", dark: "neutral-700" },
-      ring: { light: "brand-500", dark: "brand-400" },
+      border: { light: "neutral-200", dark: "neutral-800" },
+      input: { light: "neutral-200", dark: "neutral-800" },
+      ring: { light: "info-500", dark: "info-400" },
     } as Record<SemanticColorName, SemanticColorValue>,
   },
   components: {
-    button: { radius: "md", border: 1, shadow: "sm" },
-    card: { radius: "lg", border: 1, shadow: "sm" },
+    button: { radius: "md", border: 1, shadow: "none" },
+    card: { radius: "lg", border: 1, shadow: "none" },
     input: { radius: "md", border: 1, shadow: "none" },
-    badge: { radius: "md", border: 1, shadow: "none" },
+    badge: { radius: "full", border: 1, shadow: "none" },
     select: { radius: "md", border: 1, shadow: "none" },
     textarea: { radius: "md", border: 1, shadow: "none" },
     dialog: { radius: "lg", border: 1, shadow: "md" },
@@ -80,12 +81,12 @@ export const defaultTokenState: TokenState = {
       full: "9999px",
     },
     typography: {
-      fontSans: "'Space Grotesk', sans-serif",
-      fontMono: "'JetBrains Mono', monospace",
-      baseSize: 16,
-      scaleRatio: 1.25,
+      fontSans: "'Geist', 'Inter', sans-serif",
+      fontMono: "'Geist Mono', 'JetBrains Mono', monospace",
+      baseSize: 14,
+      scaleRatio: 1.2,
       weightRegular: 400,
-      weightBold: 700,
+      weightBold: 600,
     },
     spacing: {
       baseUnit: 4,
@@ -98,9 +99,9 @@ export const defaultTokenState: TokenState = {
  * Used when regenerating scales from a color picker
  */
 export const defaultBaseColors: Record<string, string> = {
-  brand: "#0E7490",
-  neutral: "#64748B",
-  success: "#0F766E",
+  brand: "#111111",
+  neutral: "#71717A",
+  success: "#16A34A",
   warning: "#D97706",
   error: "#DC2626",
   info: "#2563EB",

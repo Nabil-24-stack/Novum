@@ -254,7 +254,7 @@ Deterministic transpiler enforcing the design system on AI-generated code before
 **Three-tier architecture:** Primitives (raw color palettes 50-950), Semantics (meaningful mappings with light/dark modes), Components (token-aware specs per component).
 
 **Token Studio (`src/components/editor/TokenStudio/`):**
-- **Presets View** (default): 9 one-click presets — Brutalist, Soft, Neon, Editorial, Terra, Arctic Glass (default), Monochrome, Sunset Pop, Noir Luxe. Each provides complete `TokenState` (palettes, semantics, components, typography, spacing). Key file: `src/lib/tokens/presets.ts`
+- **Presets View** (default): 9 one-click presets — Monochrome (default), Brutalist, Soft, Neon, Editorial, Terra, Arctic Glass, Sunset Pop, Noir Luxe. Each provides complete `TokenState` (palettes, semantics, components, typography, spacing). Key file: `src/lib/tokens/presets.ts`
 - **Customise View**: Tabs for palettes, semantic mappings, component specs, typography scale, spacing density
 
 **Typography Scale:** Modular scale from `baseSize` (px) × `scaleRatio`. 7 levels: `text-h1` (+4), `text-h2` (+3), `text-h3` (+2), `text-h4` (+1), `text-body` (0), `text-body-sm` (-1), `text-caption` (-2). Sets font-size, line-height, font-weight only — NOT color.
