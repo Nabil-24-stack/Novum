@@ -43,9 +43,13 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
     try {
       const res = await fetch("/api/billing/checkout", { method: "POST" });
       const data = await res.json();
-      if (data.url) window.location.href = data.url;
-    } catch {
-      // Silently fail
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        console.error("[AccountMenu] Checkout response missing URL:", data);
+      }
+    } catch (err) {
+      console.error("[AccountMenu] Checkout error:", err);
     }
   };
 
@@ -53,9 +57,13 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
     try {
       const res = await fetch("/api/billing/portal", { method: "POST" });
       const data = await res.json();
-      if (data.url) window.location.href = data.url;
-    } catch {
-      // Silently fail
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        console.error("[AccountMenu] Portal response missing URL:", data);
+      }
+    } catch (err) {
+      console.error("[AccountMenu] Portal error:", err);
     }
   };
 
