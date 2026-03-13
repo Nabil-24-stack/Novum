@@ -2,12 +2,12 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Send, Loader2, LogOut, X, Info } from "lucide-react";
+import { Send, Loader2, X, Info } from "lucide-react";
 import { toast } from "sonner";
 import { useProjects } from "@/hooks/useProjects";
 import { useDocumentStore } from "@/hooks/useDocumentStore";
 import { ProjectCard } from "@/components/dashboard/ProjectCard";
-import { BillingCard } from "@/components/billing/BillingCard";
+import { AccountMenu } from "@/components/billing/AccountMenu";
 import { createClient } from "@/lib/supabase/client";
 
 export default function Dashboard() {
@@ -26,6 +26,7 @@ export default function Dashboard() {
   const [input, setInput] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userName, setUserName] = useState<string | null>(null);
   const docFileInputRef = useRef<HTMLInputElement>(null);
   const uploadedDocuments = useDocumentStore((s) => s.documents);
   const isDocUploading = useDocumentStore((s) => s.isUploading);
@@ -34,15 +35,18 @@ export default function Dashboard() {
   useEffect(() => {
     const supabase = createClient();
     supabase.auth.getUser().then(({ data: { user } }) => {
-      setUserEmail(user?.email ?? null);
+      const email = user?.email ?? null;
+      setUserEmail(email);
+      const fullName = user?.user_metadata?.full_name || user?.user_metadata?.name;
+      if (fullName) {
+        setUserName(fullName);
+      } else if (email) {
+        // Derive first name from email: "nabil.hasan@..." → "Nabil"
+        const local = email.split("@")[0].split(/[._-]/)[0];
+        setUserName(local.charAt(0).toUpperCase() + local.slice(1));
+      }
     });
   }, []);
-
-  const handleSignOut = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    router.push("/login");
-  };
 
   const handleDocumentUpload = useCallback(async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -112,18 +116,9 @@ export default function Dashboard() {
 
   return (
     <main className="min-h-screen bg-neutral-50" style={{ overflow: "auto", height: "auto" }}>
-      {/* Top bar */}
-      {userEmail && (
-        <div className="fixed top-0 right-0 p-4 z-50 flex items-center gap-3">
-          <span className="text-sm text-neutral-500">{userEmail}</span>
-          <button
-            onClick={handleSignOut}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-neutral-500 hover:text-neutral-900 transition-colors rounded-lg hover:bg-neutral-100"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Sign out
-          </button>
-        </div>
+      {/* Account menu (top-right) */}
+      {userEmail && userName && (
+        <AccountMenu userEmail={userEmail} userName={userName} />
       )}
 
       {/* Hero section — full viewport minus peek */}
@@ -228,11 +223,6 @@ export default function Dashboard() {
             </div>
           </form>
         </div>
-      </section>
-
-      {/* Billing card */}
-      <section className="px-4 max-w-6xl mx-auto mb-6">
-        <BillingCard />
       </section>
 
       {/* Projects section — peeks 80px above fold */}

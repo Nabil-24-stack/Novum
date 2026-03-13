@@ -1,0 +1,194 @@
+"use client";
+
+import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { ChevronDown, Zap } from "lucide-react";
+import { useBillingStatus } from "@/hooks/useBillingStatus";
+import { createClient } from "@/lib/supabase/client";
+
+interface AccountMenuProps {
+  userEmail: string;
+  userName: string;
+}
+
+export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
+  const router = useRouter();
+  const { status } = useBillingStatus();
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const isPro = status?.planTier === "pro";
+  const initial = userName.charAt(0).toUpperCase();
+
+  const resetDate = status?.usageResetAt
+    ? new Date(status.usageResetAt).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      })
+    : null;
+
+  // Close on outside click
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    if (open) document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  const handleUpgrade = async () => {
+    try {
+      const res = await fetch("/api/billing/checkout", { method: "POST" });
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+    } catch {
+      // Silently fail
+    }
+  };
+
+  const handleManage = async () => {
+    try {
+      const res = await fetch("/api/billing/portal", { method: "POST" });
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+    } catch {
+      // Silently fail
+    }
+  };
+
+  const handleSignOut = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+  };
+
+  return (
+    <div ref={menuRef} className="fixed top-0 right-0 p-4 z-50 flex items-center gap-2">
+      {/* Upgrade button (only for free users) */}
+      {!isPro && status && (
+        <button
+          onClick={handleUpgrade}
+          className="inline-flex items-center gap-1.5 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors"
+        >
+          <Zap className="w-3.5 h-3.5" />
+          Upgrade
+        </button>
+      )}
+
+      {/* Name + chevron trigger */}
+      <button
+        onClick={() => setOpen(!open)}
+        className="inline-flex items-center gap-1 text-sm font-medium text-neutral-900 hover:text-neutral-600 transition-colors py-2 px-1"
+      >
+        {userName}
+        <ChevronDown className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {/* Dropdown */}
+      {open && (
+        <div className="absolute top-full right-0 mt-1 mr-4 w-72 bg-white rounded-xl shadow-lg border border-neutral-200 overflow-hidden">
+          {/* User info */}
+          <div className="flex items-center gap-3 p-4 pb-3">
+            <div className="w-10 h-10 rounded-full bg-neutral-400 text-white flex items-center justify-center text-sm font-semibold shrink-0">
+              {initial}
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-neutral-900 truncate">{userName}</div>
+              <div className="text-xs text-neutral-500 truncate">{userEmail}</div>
+            </div>
+          </div>
+
+          <div className="border-t border-neutral-100 mx-4" />
+
+          {/* Usage bars */}
+          {status && (
+            <div className="px-4 py-3 space-y-3">
+              {isPro ? (
+                <div>
+                  <div className="text-sm text-neutral-900 mb-1.5">
+                    {status.usagePercent}% budget used
+                  </div>
+                  <div className="h-1.5 bg-neutral-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-neutral-900 rounded-full transition-all"
+                      style={{ width: `${Math.min(status.usagePercent, 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <div className="text-sm text-neutral-900 mb-1.5">
+                      {status.freeGenerationsUsed} / {status.freeGenerationsLimit} build used
+                    </div>
+                    <div className="h-1.5 bg-neutral-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-neutral-900 rounded-full transition-all"
+                        style={{ width: `${Math.min(status.usagePercent, 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-neutral-900 mb-1.5">
+                      {status.freeSharedUsagePercent}% AI edits used
+                    </div>
+                    <div className="h-1.5 bg-neutral-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-neutral-900 rounded-full transition-all"
+                        style={{ width: `${Math.min(status.freeSharedUsagePercent, 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <div className="border-t border-neutral-100" />
+
+              {/* Plan badge + reset date */}
+              <div className="flex items-center justify-between">
+                <span className="inline-flex items-center px-2.5 py-1 bg-neutral-100 text-neutral-700 text-xs font-medium rounded-md">
+                  {isPro ? "Pro" : "Free"}
+                </span>
+                {resetDate && (
+                  <span className="text-xs text-neutral-500">Resets {resetDate}</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="border-t border-neutral-100 mx-4" />
+
+          {/* Action button */}
+          <div className="p-4 pt-3 space-y-2">
+            {isPro ? (
+              <button
+                onClick={handleManage}
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors"
+              >
+                Manage Subscription
+              </button>
+            ) : (
+              <button
+                onClick={handleUpgrade}
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors"
+              >
+                <Zap className="w-4 h-4" />
+                Upgrade
+              </button>
+            )}
+
+            <button
+              onClick={handleSignOut}
+              className="w-full text-sm text-neutral-500 hover:text-neutral-900 transition-colors py-1"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
