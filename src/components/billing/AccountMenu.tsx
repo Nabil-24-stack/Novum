@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Zap } from "lucide-react";
+import { ChevronDown, Zap, Loader2 } from "lucide-react";
 import { useBillingStatus } from "@/hooks/useBillingStatus";
 import { createClient } from "@/lib/supabase/client";
 
@@ -17,6 +17,7 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
   const isPro = status?.planTier === "pro";
   const initial = userName.charAt(0).toUpperCase();
 
@@ -40,6 +41,7 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
   }, [open]);
 
   const handleUpgrade = async () => {
+    setUpgradeLoading(true);
     try {
       const res = await fetch("/api/billing/checkout", { method: "POST" });
       const data = await res.json();
@@ -47,9 +49,11 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
         window.location.href = data.url;
       } else {
         console.error("[AccountMenu] Checkout response missing URL:", data);
+        setUpgradeLoading(false);
       }
     } catch (err) {
       console.error("[AccountMenu] Checkout error:", err);
+      setUpgradeLoading(false);
     }
   };
 
@@ -79,9 +83,10 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
       {!isPro && status && (
         <button
           onClick={handleUpgrade}
-          className="inline-flex items-center gap-1.5 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors"
+          disabled={upgradeLoading}
+          className="inline-flex items-center gap-1.5 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-70"
         >
-          <Zap className="w-3.5 h-3.5" />
+          {upgradeLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
           Upgrade
         </button>
       )}
@@ -175,9 +180,10 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
               ) : (
                 <button
                   onClick={handleUpgrade}
-                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors"
+                  disabled={upgradeLoading}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-70"
                 >
-                  <Zap className="w-4 h-4" />
+                  {upgradeLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
                   Upgrade
                 </button>
               )}
