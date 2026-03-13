@@ -17,7 +17,7 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const [upgradeLoading, setUpgradeLoading] = useState(false);
+  const [upgradeLoadingSource, setUpgradeLoadingSource] = useState<"pill" | "dropdown" | null>(null);
   const isPro = status?.planTier === "pro";
   const initial = userName.charAt(0).toUpperCase();
 
@@ -40,20 +40,20 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
-  const handleUpgrade = async () => {
-    setUpgradeLoading(true);
+  const handleUpgrade = async (source: "pill" | "dropdown") => {
+    setUpgradeLoadingSource(source);
     try {
       const res = await fetch("/api/billing/checkout", { method: "POST" });
       const data = await res.json();
       if (data.url) {
-        window.location.href = data.url;
+        window.open(data.url, "_blank");
       } else {
         console.error("[AccountMenu] Checkout response missing URL:", data);
-        setUpgradeLoading(false);
       }
     } catch (err) {
       console.error("[AccountMenu] Checkout error:", err);
-      setUpgradeLoading(false);
+    } finally {
+      setUpgradeLoadingSource(null);
     }
   };
 
@@ -82,11 +82,11 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
       {/* Upgrade button (only for free users) */}
       {!isPro && status && (
         <button
-          onClick={handleUpgrade}
-          disabled={upgradeLoading}
+          onClick={() => handleUpgrade("pill")}
+          disabled={upgradeLoadingSource !== null}
           className="inline-flex items-center gap-1.5 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-70"
         >
-          {upgradeLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+          {upgradeLoadingSource === "pill" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
           Upgrade
         </button>
       )}
@@ -179,11 +179,11 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
                 </button>
               ) : (
                 <button
-                  onClick={handleUpgrade}
-                  disabled={upgradeLoading}
+                  onClick={() => handleUpgrade("dropdown")}
+                  disabled={upgradeLoadingSource !== null}
                   className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-70"
                 >
-                  {upgradeLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                  {upgradeLoadingSource === "dropdown" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
                   Upgrade
                 </button>
               )}
