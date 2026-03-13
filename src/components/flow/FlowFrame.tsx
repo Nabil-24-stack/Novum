@@ -23,7 +23,7 @@ interface FlowFrameProps {
   onDrag: (id: string, deltaX: number, deltaY: number) => void;
   onResize: (id: string, width: number, height: number) => void;
   canvasScale: number;
-  onPreviewModeChange?: (frameId: string, mode: PreviewMode) => void;
+  onPreviewModeChange?: (mode: PreviewMode) => void;
   onInspectionModeChange?: (enabled: boolean) => void;
   /** Whether flow mode is active (navigation interception) */
   flowModeActive?: boolean;
@@ -76,9 +76,6 @@ export function FlowFrame({
 }: FlowFrameProps) {
   const frameRef = useRef<HTMLDivElement>(null);
 
-  // Local preview mode state (independent per-frame)
-  const [localPreviewMode, setLocalPreviewMode] = useState<PreviewMode>(previewMode);
-
   // Layers panel state (local to each frame)
   const [layersOpen, setLayersOpen] = useState(false);
 
@@ -119,12 +116,6 @@ export function FlowFrame({
       setLayersOpen(true);
     }
   }, [selectedPageId, page.id]);
-
-  // Handle local preview mode change
-  const handleLocalPreviewModeChange = useCallback((mode: PreviewMode) => {
-    setLocalPreviewMode(mode);
-    onPreviewModeChange?.(page.id, mode);
-  }, [page.id, onPreviewModeChange]);
 
   // Handle frame state changes (resize only - position managed externally)
   const handleFrameChange = useCallback((state: FrameState) => {
@@ -187,7 +178,7 @@ export function FlowFrame({
       {/* Frame content - always mounted to avoid reload delays */}
       <SandpackWrapper
         files={files}
-        previewMode={localPreviewMode}
+        previewMode={previewMode}
         inspectionMode={isActive && inspectionMode}
         flowModeActive={flowModeActive}
         pageId={page.id}
@@ -201,8 +192,8 @@ export function FlowFrame({
           onFrameChange={handleFrameChange}
           startRoute={page.route}
           pageId={page.id}
-          previewMode={localPreviewMode}
-          onPreviewModeChange={handleLocalPreviewModeChange}
+          previewMode={previewMode}
+          onPreviewModeChange={onPreviewModeChange}
           inspectionMode={isActive && inspectionMode}
           onInspectionModeChange={handleInspectionModeChange}
           layersOpen={isActive && layersOpen}

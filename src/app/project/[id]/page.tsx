@@ -930,11 +930,6 @@ export default function ProjectEditor() {
   // Track which frame is active (receives inspection events, ring highlight)
   const [activeFrameId, setActiveFrameId] = useState<string | null>(null);
 
-  // Track per-frame preview modes (independent light/dark toggle)
-  const [framePreviewModes, setFramePreviewModes] = useState<Map<string, PreviewMode>>(
-    () => new Map()
-  );
-
   // Canvas dimensions for SVG connections
   const [canvasDimensions, setCanvasDimensions] = useState({ width: 800, height: 600 });
 
@@ -1350,14 +1345,10 @@ export default function ProjectEditor() {
     setActiveFrameId(frameId);
   }, []);
 
-  // --- Per-frame preview mode change ---
-  const handleFramePreviewModeChange = useCallback((frameId: string, mode: PreviewMode) => {
-    setFramePreviewModes((prev) => {
-      const newMap = new Map(prev);
-      newMap.set(frameId, mode);
-      return newMap;
-    });
-  }, []);
+  // --- Shared preview mode change across all frames and the design system ---
+  const handleFramePreviewModeChange = useCallback((mode: PreviewMode) => {
+    tokenState.setPreviewMode(mode);
+  }, [tokenState]);
 
   // --- Memoized connections ---
   const connections = useMemo(() => flowManifest.connections, [flowManifest.connections]);
@@ -2367,7 +2358,6 @@ export default function ProjectEditor() {
                 ? { ...basePosition, x: 0, y: 0, width: containerDimensions.width, height: containerDimensions.height - 36 }
                 : basePosition;
 
-              const framePreviewMode = framePreviewModes.get(page.id) ?? tokenState.previewMode;
               const pageDec = brainData?.pages?.find((p) => p.pageId === page.id);
 
               return (
@@ -2376,7 +2366,7 @@ export default function ProjectEditor() {
                   page={page}
                   position={position}
                   files={shadowFiles}
-                  previewMode={framePreviewMode}
+                  previewMode={tokenState.previewMode}
                   inspectionMode={inspection.inspectionMode}
                   isActive={isFrameActive(page.id)}
                   onActivate={handleFrameActivate}
