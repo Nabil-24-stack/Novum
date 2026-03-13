@@ -89,31 +89,32 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute top-full right-0 mt-1 mr-4 w-72 bg-white rounded-xl shadow-lg border border-neutral-200 overflow-hidden">
+        <div className="absolute top-full right-0 mt-1 mr-4 w-72 bg-white rounded-2xl shadow-lg border border-neutral-200 overflow-hidden">
           {/* User info */}
-          <div className="flex items-center gap-3 p-4 pb-3">
+          <div className="flex items-center gap-3 p-4">
             <div className="w-10 h-10 rounded-full bg-neutral-400 text-white flex items-center justify-center text-sm font-semibold shrink-0">
               {initial}
             </div>
             <div className="min-w-0">
-              <div className="text-sm font-medium text-neutral-900 truncate">{userName}</div>
+              <div className="text-sm font-semibold text-neutral-900 truncate">{userName}</div>
               <div className="text-xs text-neutral-500 truncate">{userEmail}</div>
             </div>
           </div>
 
-          <div className="border-t border-neutral-100 mx-4" />
+          {/* Full-width divider */}
+          <div className="border-t border-neutral-200" />
 
-          {/* Usage bars */}
+          {/* Usage + plan + actions */}
           {status && (
-            <div className="px-4 py-3 space-y-3">
+            <div className="px-4 pt-4 pb-2 space-y-4">
               {isPro ? (
                 <div>
-                  <div className="text-sm text-neutral-900 mb-1.5">
+                  <div className="text-sm text-neutral-900 mb-2">
                     {status.usagePercent}% budget used
                   </div>
-                  <div className="h-1.5 bg-neutral-100 rounded-full overflow-hidden">
+                  <div className="h-2 bg-neutral-100 rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-neutral-900 rounded-full transition-all"
+                      className="h-full bg-neutral-300 rounded-full transition-all"
                       style={{ width: `${Math.min(status.usagePercent, 100)}%` }}
                     />
                   </div>
@@ -121,23 +122,23 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
               ) : (
                 <>
                   <div>
-                    <div className="text-sm text-neutral-900 mb-1.5">
+                    <div className="text-sm text-neutral-900 mb-2">
                       {status.freeGenerationsUsed} / {status.freeGenerationsLimit} build used
                     </div>
-                    <div className="h-1.5 bg-neutral-100 rounded-full overflow-hidden">
+                    <div className="h-2 bg-neutral-100 rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-neutral-900 rounded-full transition-all"
+                        className="h-full bg-neutral-300 rounded-full transition-all"
                         style={{ width: `${Math.min(status.usagePercent, 100)}%` }}
                       />
                     </div>
                   </div>
                   <div>
-                    <div className="text-sm text-neutral-900 mb-1.5">
+                    <div className="text-sm text-neutral-900 mb-2">
                       {status.freeSharedUsagePercent}% AI edits used
                     </div>
-                    <div className="h-1.5 bg-neutral-100 rounded-full overflow-hidden">
+                    <div className="h-2 bg-neutral-100 rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-neutral-900 rounded-full transition-all"
+                        className="h-full bg-neutral-300 rounded-full transition-all"
                         style={{ width: `${Math.min(status.freeSharedUsagePercent, 100)}%` }}
                       />
                     </div>
@@ -145,48 +146,42 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
                 </>
               )}
 
-              <div className="border-t border-neutral-100" />
-
               {/* Plan badge + reset date */}
               <div className="flex items-center justify-between">
-                <span className="inline-flex items-center px-2.5 py-1 bg-neutral-100 text-neutral-700 text-xs font-medium rounded-md">
+                <span className="inline-flex items-center px-3 py-1 bg-neutral-100 text-neutral-600 text-xs font-medium rounded-md">
                   {isPro ? "Pro" : "Free"}
                 </span>
                 {resetDate && (
                   <span className="text-xs text-neutral-500">Resets {resetDate}</span>
                 )}
               </div>
+
+              {/* Action button */}
+              {isPro ? (
+                <button
+                  onClick={handleManage}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors"
+                >
+                  Manage Subscription
+                </button>
+              ) : (
+                <button
+                  onClick={handleUpgrade}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors"
+                >
+                  <Zap className="w-4 h-4" />
+                  Upgrade
+                </button>
+              )}
+
+              <button
+                onClick={handleSignOut}
+                className="w-full text-sm text-neutral-900 underline underline-offset-2 hover:text-neutral-600 transition-colors py-1"
+              >
+                Sign out
+              </button>
             </div>
           )}
-
-          <div className="border-t border-neutral-100 mx-4" />
-
-          {/* Action button */}
-          <div className="p-4 pt-3 space-y-2">
-            {isPro ? (
-              <button
-                onClick={handleManage}
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors"
-              >
-                Manage Subscription
-              </button>
-            ) : (
-              <button
-                onClick={handleUpgrade}
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors"
-              >
-                <Zap className="w-4 h-4" />
-                Upgrade
-              </button>
-            )}
-
-            <button
-              onClick={handleSignOut}
-              className="w-full text-sm text-neutral-500 hover:text-neutral-900 transition-colors py-1"
-            >
-              Sign out
-            </button>
-          </div>
         </div>
       )}
     </div>
