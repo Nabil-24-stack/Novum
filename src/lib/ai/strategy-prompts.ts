@@ -13,6 +13,8 @@ export const DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT = `## DESIGN SYSTEM ENFORCEME
   - Destructive action -> \`<Button variant="destructive">\`
   - Outline, ghost, and link styles -> the matching \`Button\` variants
 - Use \`className\` on \`Button\` for layout, spacing, width, alignment, icon gap, and positioning. Do NOT use \`className\` to restyle button background/text colors for solid buttons.
+- Do NOT use the \`Button\` component for logos, wordmarks, or decorative brand badges. Brand identity in navbars/headers should use plain semantic markup such as a \`div\`, \`span\`, or heading wrapper with icon + text.
+- If a brand area uses a filled semantic background, pair it with the matching semantic foreground token in the same state bucket.
 - For badges, prefer the \`Badge\` component's \`variant\` prop instead of custom color overrides:
   - Default status -> \`<Badge>\` or \`<Badge variant="default">\`
   - Secondary/subtle status -> \`<Badge variant="secondary">\`
@@ -763,7 +765,11 @@ Generate shared layout components that ALL pages will import. Output each compon
 ### Required Components
 
 1. **Navbar** at \`/components/layout/Navbar.tsx\` — \`export function Navbar()\`
-   - App title/logo based on the product name
+   - Brand area based on the product name
+   - Do NOT use the \`Button\` component for the logo, wordmark, or brand badge
+   - Build the brand area with plain semantic markup such as a \`div\`, \`span\`, or heading wrapper with icon + text
+   - Treat the brand area as identity, not a CTA
+   - If the brand area uses a filled semantic background, pair it with the matching semantic foreground token
    - Navigation links to ALL pages listed above
    - Use \`navigate()\` from \`useRouter()\` (import from \`../../lib/router\`)
    - Active state highlighting for current route

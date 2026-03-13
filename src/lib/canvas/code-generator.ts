@@ -138,7 +138,7 @@ function getAdditionalImports(componentType: string, defaultCode: string): Impor
       importPath: "./components/ui/dialog",
     },
     select: {
-      components: ["SelectOption"],
+      components: ["SelectTrigger", "SelectValue", "SelectContent", "SelectItem"],
       importPath: "./components/ui/select",
     },
     accordion: {

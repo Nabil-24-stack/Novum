@@ -9,19 +9,19 @@ export interface BadgeProps extends React.HTMLAttributes<HTMLDivElement> {
 
 export function Badge({ className, variant = "default", ...props }: BadgeProps) {
   const variants = {
-    default: "bg-primary text-primary-foreground hover:bg-primary/80",
-    secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-    success: "bg-success text-success-foreground hover:bg-success/85",
-    warning: "bg-warning text-warning-foreground hover:bg-warning/85",
-    info: "bg-info text-info-foreground hover:bg-info/85",
-    destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/80",
-    outline: "bg-background text-foreground border border-input hover:bg-muted",
+    default: "bg-primary text-primary-foreground",
+    secondary: "bg-secondary text-secondary-foreground",
+    success: "bg-success text-success-foreground",
+    warning: "bg-warning text-warning-foreground",
+    info: "bg-info text-info-foreground",
+    destructive: "bg-destructive text-destructive-foreground",
+    outline: "bg-background text-foreground border border-input",
   };
 
   return (
     <div
       className={cn(
-        "inline-flex items-center px-2.5 py-0.5 text-caption transition-colors border-solid border-input",
+        "inline-flex cursor-default select-none items-center gap-1 px-2.5 py-0.5 text-caption border-solid border-input",
         variants[variant],
         className
       )}
@@ -247,13 +247,87 @@ Label.displayName = "Label";
 export const selectTemplate = `import * as React from "react";
 import { cn } from "../../lib/utils";
 
-export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {}
+interface SelectContextValue {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  value: string;
+  onValueChange: (value: string) => void;
+  items: Record<string, string>;
+  registerItem: (value: string, label: string) => void;
+}
 
-export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
+const SelectContext = React.createContext<SelectContextValue | null>(null);
+
+export interface SelectProps extends React.HTMLAttributes<HTMLDivElement> {
+  value?: string;
+  defaultValue?: string;
+  onValueChange?: (value: string) => void;
+}
+
+export function Select({
+  value,
+  defaultValue = "",
+  onValueChange,
+  className,
+  children,
+  ...props
+}: SelectProps) {
+  const [internalValue, setInternalValue] = React.useState(defaultValue);
+  const [open, setOpen] = React.useState(false);
+  const [items, setItems] = React.useState<Record<string, string>>({});
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const currentValue = value ?? internalValue;
+
+  const handleValueChange = React.useCallback(
+    (nextValue: string) => {
+      setInternalValue(nextValue);
+      onValueChange?.(nextValue);
+      setOpen(false);
+    },
+    [onValueChange]
+  );
+
+  const registerItem = React.useCallback((itemValue: string, label: string) => {
+    setItems((prev) => (prev[itemValue] === label ? prev : { ...prev, [itemValue]: label }));
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [open]);
+
+  return (
+    <SelectContext.Provider
+      value={{ open, setOpen, value: currentValue, onValueChange: handleValueChange, items, registerItem }}
+    >
+      <div ref={containerRef} className={cn("relative w-full", className)} {...props}>
+        {children}
+      </div>
+    </SelectContext.Provider>
+  );
+}
+
+export interface SelectTriggerProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {}
+
+export const SelectTrigger = React.forwardRef<HTMLButtonElement, SelectTriggerProps>(
   ({ className, children, style, ...props }, ref) => {
+    const context = React.useContext(SelectContext);
+    if (!context) throw new Error("SelectTrigger must be used within Select");
+
     return (
-      <select
+      <button
+        type="button"
         ref={ref}
+        aria-expanded={context.open}
+        onClick={() => context.setOpen(!context.open)}
         className={cn(
           "flex h-10 w-full items-center justify-between border border-input bg-background text-foreground px-3 py-2 text-body",
           "ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
@@ -269,16 +343,130 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
         {...props}
       >
         {children}
-      </select>
+        <svg className="h-4 w-4 shrink-0 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
     );
   }
 );
-Select.displayName = "Select";
+SelectTrigger.displayName = "SelectTrigger";
 
-export interface SelectOptionProps extends React.OptionHTMLAttributes<HTMLOptionElement> {}
+export interface SelectValueProps extends React.HTMLAttributes<HTMLSpanElement> {
+  placeholder?: string;
+}
 
-export function SelectOption({ className, ...props }: SelectOptionProps) {
-  return <option className={cn(className)} {...props} />;
+export function SelectValue({ className, placeholder = "Select an option", ...props }: SelectValueProps) {
+  const context = React.useContext(SelectContext);
+  if (!context) throw new Error("SelectValue must be used within Select");
+
+  const label = context.value ? context.items[context.value] ?? context.value : placeholder;
+
+  return (
+    <span
+      className={cn("line-clamp-1", !context.value && "text-muted-foreground", className)}
+      {...props}
+    >
+      {label}
+    </span>
+  );
+}
+
+export interface SelectContentProps extends React.HTMLAttributes<HTMLDivElement> {}
+
+export function SelectContent({ className, children, style, ...props }: SelectContentProps) {
+  const context = React.useContext(SelectContext);
+  if (!context) throw new Error("SelectContent must be used within Select");
+
+  if (!context.open) return null;
+
+  return (
+    <div
+      className={cn(
+        "absolute left-0 top-[calc(100%+0.25rem)] z-50 w-full min-w-[8rem] overflow-hidden border bg-popover/95 text-popover-foreground shadow-md backdrop-blur-sm",
+        className
+      )}
+      style={{
+        borderRadius: "var(--select-radius, var(--radius-md))",
+        borderWidth: "var(--select-border-width, 1px)",
+        boxShadow: "var(--select-shadow, none)",
+        ...style,
+      }}
+      {...props}
+    >
+      <div className="p-1">{children}</div>
+    </div>
+  );
+}
+
+export interface SelectGroupProps extends React.HTMLAttributes<HTMLDivElement> {}
+
+export function SelectGroup({ className, ...props }: SelectGroupProps) {
+  return <div className={cn(className)} {...props} />;
+}
+
+export interface SelectLabelProps extends React.HTMLAttributes<HTMLDivElement> {}
+
+export function SelectLabel({ className, ...props }: SelectLabelProps) {
+  return <div className={cn("py-1.5 pl-8 pr-2 text-body-sm text-muted-foreground", className)} {...props} />;
+}
+
+export interface SelectItemProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  value: string;
+}
+
+export function SelectItem({ className, children, value, ...props }: SelectItemProps) {
+  const context = React.useContext(SelectContext);
+  if (!context) throw new Error("SelectItem must be used within Select");
+
+  const label = typeof children === "string" ? children : value;
+  const isSelected = context.value === value;
+
+  React.useEffect(() => {
+    context.registerItem(value, label);
+  }, [context, label, value]);
+
+  return (
+    <button
+      type="button"
+      onClick={() => context.onValueChange(value)}
+      className={cn(
+        "relative flex w-full items-center rounded-md py-2 pl-8 pr-2 text-body-sm outline-none transition-colors",
+        isSelected
+          ? "bg-accent text-accent-foreground"
+          : "text-popover-foreground hover:bg-accent hover:text-accent-foreground",
+        className
+      )}
+      {...props}
+    >
+      <span className="absolute left-2 flex h-4 w-4 items-center justify-center">
+        {isSelected ? (
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m5 13 4 4L19 7" />
+          </svg>
+        ) : null}
+      </span>
+      <span>{children}</span>
+    </button>
+  );
+}
+
+export interface SelectSeparatorProps extends React.HTMLAttributes<HTMLDivElement> {}
+
+export function SelectSeparator({ className, ...props }: SelectSeparatorProps) {
+  return <div className={cn("-mx-1 my-1 h-px bg-border", className)} {...props} />;
+}
+
+export interface SelectScrollUpButtonProps extends React.HTMLAttributes<HTMLDivElement> {}
+
+export function SelectScrollUpButton({ className, ...props }: SelectScrollUpButtonProps) {
+  return <div className={cn("hidden", className)} {...props} />;
+}
+
+export interface SelectScrollDownButtonProps extends React.HTMLAttributes<HTMLDivElement> {}
+
+export function SelectScrollDownButton({ className, ...props }: SelectScrollDownButtonProps) {
+  return <div className={cn("hidden", className)} {...props} />;
 }
 `;
 
@@ -481,14 +669,31 @@ export function Dialog({ open, defaultOpen = false, onOpenChange, children }: Di
   );
 }
 
-export interface DialogTriggerProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {}
+export interface DialogTriggerProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  asChild?: boolean;
+}
 
-export function DialogTrigger({ children, ...props }: DialogTriggerProps) {
+export function DialogTrigger({ children, asChild = false, onClick, ...props }: DialogTriggerProps) {
   const context = React.useContext(DialogContext);
   if (!context) throw new Error("DialogTrigger must be used within Dialog");
 
+  const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    onClick?.(event);
+    context.onOpenChange(true);
+  };
+
+  if (asChild && React.isValidElement(children)) {
+    return React.cloneElement(children as React.ReactElement, {
+      onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+        const childProps = (children as React.ReactElement<{ onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void }>).props;
+        childProps.onClick?.(event);
+        context.onOpenChange(true);
+      },
+    });
+  }
+
   return (
-    <button type="button" onClick={() => context.onOpenChange(true)} {...props}>
+    <button type="button" onClick={handleClick} {...props}>
       {children}
     </button>
   );
@@ -503,26 +708,26 @@ export function DialogContent({ className, children, ...props }: DialogContentPr
   if (!context.open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
       <div
-        className="fixed inset-0 bg-black/80"
+        className="fixed inset-0 bg-background/70 backdrop-blur-sm"
         onClick={() => context.onOpenChange(false)}
       />
       <div
         className={cn(
-          "fixed z-50 grid w-full max-w-lg gap-4 border border-border bg-background text-foreground p-6",
+          "fixed z-50 grid w-full max-w-lg gap-4 overflow-hidden border bg-background/95 p-6 text-foreground backdrop-blur-sm",
           className
         )}
         style={{
           borderRadius: "var(--dialog-radius, var(--radius-lg))",
           borderWidth: "var(--dialog-border-width, 1px)",
-          boxShadow: "var(--dialog-shadow, none)",
+          boxShadow: "var(--dialog-shadow, 0 24px 60px -28px rgb(15 23 42 / 0.45))",
         }}
         {...props}
       >
         {children}
         <button
-          className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 text-foreground"
+          className="absolute right-4 top-4 rounded-full border border-border/60 bg-background/85 p-1.5 text-muted-foreground transition-colors hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
           onClick={() => context.onOpenChange(false)}
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -706,19 +911,39 @@ export interface AlertProps extends React.HTMLAttributes<HTMLDivElement> {
 
 export function Alert({ className, variant = "default", ...props }: AlertProps) {
   const variants = {
-    default: "bg-background text-foreground border-border",
-    success: "bg-success text-success-foreground border-success",
-    warning: "bg-warning text-warning-foreground border-warning",
-    info: "bg-info text-info-foreground border-info",
-    destructive: "bg-destructive text-destructive-foreground border-destructive",
+    default: {
+      surface: "border-border bg-muted/35",
+      accent: "bg-foreground/15",
+      icon: "text-foreground/70",
+    },
+    success: {
+      surface: "border-success/20 bg-success/10",
+      accent: "bg-success",
+      icon: "text-success",
+    },
+    warning: {
+      surface: "border-warning/25 bg-warning/10",
+      accent: "bg-warning",
+      icon: "text-warning",
+    },
+    info: {
+      surface: "border-info/20 bg-info/10",
+      accent: "bg-info",
+      icon: "text-info",
+    },
+    destructive: {
+      surface: "border-destructive/20 bg-destructive/10",
+      accent: "bg-destructive",
+      icon: "text-destructive",
+    },
   };
 
   return (
     <div
       role="alert"
       className={cn(
-        "relative w-full border p-4",
-        variants[variant],
+        "relative overflow-hidden border px-4 py-3 text-foreground",
+        variants[variant].surface,
         className
       )}
       style={{
@@ -727,7 +952,36 @@ export function Alert({ className, variant = "default", ...props }: AlertProps) 
         boxShadow: "var(--alert-shadow, none)",
       }}
       {...props}
-    />
+    >
+      <div className={cn("absolute inset-y-0 left-0 w-1", variants[variant].accent)} />
+      <div className="grid grid-cols-[auto_1fr] items-start gap-3 pl-1">
+        <span
+          className={cn(
+            "mt-0.5 flex h-8 w-8 items-center justify-center rounded-full border border-current/10 bg-background/70",
+            variants[variant].icon
+          )}
+        >
+          {variant === "success" ? (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m5 13 4 4L19 7" />
+            </svg>
+          ) : variant === "warning" ? (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+            </svg>
+          ) : variant === "info" ? (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 16v-4m0-4h.01M22 12A10 10 0 1 1 2 12a10 10 0 0 1 20 0Z" />
+            </svg>
+          ) : (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8h.01M12 12v4m10-4A10 10 0 1 1 2 12a10 10 0 0 1 20 0Z" />
+            </svg>
+          )}
+        </span>
+        <div className="grid gap-1.5">{props.children}</div>
+      </div>
+    </div>
   );
 }
 
@@ -747,7 +1001,7 @@ export interface AlertDescriptionProps extends React.HTMLAttributes<HTMLParagrap
 export function AlertDescription({ className, ...props }: AlertDescriptionProps) {
   return (
     <div
-      className={cn("text-body-sm [&_p]:leading-relaxed", className)}
+      className={cn("text-body-sm text-foreground/80 [&_p]:leading-relaxed", className)}
       {...props}
     />
   );
@@ -1429,8 +1683,12 @@ export interface Toast {
   duration?: number;
 }
 
+interface ToastRecord extends Toast {
+  closing?: boolean;
+}
+
 interface ToastContextValue {
-  toasts: Toast[];
+  toasts: ToastRecord[];
   toast: (props: Omit<Toast, "id">) => string;
   dismiss: (id: string) => void;
 }
@@ -1443,28 +1701,32 @@ function genId() {
   return String(toastCount++);
 }
 
-// Toast Provider
+const TOAST_EXIT_MS = 180;
+
 export function ToastProvider({ children }: { children: React.ReactNode }) {
-  const [toasts, setToasts] = React.useState<Toast[]>([]);
+  const [toasts, setToasts] = React.useState<ToastRecord[]>([]);
+
+  const dismiss = React.useCallback((id: string) => {
+    setToasts((prev) => prev.map((toast) => (toast.id === id ? { ...toast, closing: true } : toast)));
+
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((toast) => toast.id !== id));
+    }, TOAST_EXIT_MS);
+  }, []);
 
   const toast = React.useCallback((props: Omit<Toast, "id">) => {
     const id = genId();
-    const newToast: Toast = { ...props, id, duration: props.duration ?? 5000 };
+    const newToast: ToastRecord = { ...props, id, closing: false, duration: props.duration ?? 5000 };
     setToasts((prev) => [...prev, newToast]);
-    
-    // Auto dismiss
+
     if (newToast.duration > 0) {
       setTimeout(() => {
-        setToasts((prev) => prev.filter((t) => t.id !== id));
+        dismiss(id);
       }, newToast.duration);
     }
-    
-    return id;
-  }, []);
 
-  const dismiss = React.useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
+    return id;
+  }, [dismiss]);
 
   return (
     <ToastContext.Provider value={{ toasts, toast, dismiss }}>
@@ -1494,33 +1756,76 @@ export interface ToastProps extends React.HTMLAttributes<HTMLDivElement> {
 
 export function ToastComponent({ className, variant = "default", onClose, children, style, ...props }: ToastProps) {
   const variants = {
-    default: "bg-background text-foreground border-border",
-    success: "bg-success text-success-foreground border-success",
-    warning: "bg-warning text-warning-foreground border-warning",
-    info: "bg-info text-info-foreground border-info",
-    destructive: "bg-destructive text-destructive-foreground border-destructive",
+    default: {
+      accent: "bg-foreground/15",
+      iconWrap: "border-border bg-muted text-foreground",
+      surface: "border-border bg-background/95 text-foreground",
+    },
+    success: {
+      accent: "bg-success",
+      iconWrap: "border-success/20 bg-success/10 text-success",
+      surface: "border-success/25 bg-background/95 text-foreground",
+    },
+    warning: {
+      accent: "bg-warning",
+      iconWrap: "border-warning/20 bg-warning/10 text-warning",
+      surface: "border-warning/25 bg-background/95 text-foreground",
+    },
+    info: {
+      accent: "bg-info",
+      iconWrap: "border-info/20 bg-info/10 text-info",
+      surface: "border-info/25 bg-background/95 text-foreground",
+    },
+    destructive: {
+      accent: "bg-destructive",
+      iconWrap: "border-destructive/20 bg-destructive/10 text-destructive",
+      surface: "border-destructive/25 bg-background/95 text-foreground",
+    },
   };
 
   return (
     <div
       className={cn(
-        "group pointer-events-auto relative flex w-full items-center justify-between space-x-4 overflow-hidden border p-6 pr-8 shadow-md transition-all",
-        variants[variant],
+        "group pointer-events-auto relative isolate w-full overflow-hidden border p-4 pr-12 backdrop-blur-sm transition-[transform,opacity,box-shadow] duration-200",
+        "supports-[backdrop-filter]:bg-background/80",
+        variants[variant].surface,
         className
       )}
       style={{
         borderRadius: "var(--toast-radius, var(--radius-lg))",
         borderWidth: "var(--toast-border-width, 1px)",
-        boxShadow: "var(--toast-shadow, none)",
+        boxShadow: "var(--toast-shadow, 0 18px 40px -24px rgb(15 23 42 / 0.45))",
         ...style,
       }}
       {...props}
     >
-      {children}
+      <div className={cn("absolute inset-x-0 top-0 h-1", variants[variant].accent)} />
+      <div className="flex min-w-0 items-start gap-3">
+        <span className={cn("mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border", variants[variant].iconWrap)}>
+          {variant === "success" ? (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m5 13 4 4L19 7" />
+            </svg>
+          ) : variant === "warning" ? (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+            </svg>
+          ) : variant === "info" ? (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 16v-4m0-4h.01M22 12A10 10 0 1 1 2 12a10 10 0 0 1 20 0Z" />
+            </svg>
+          ) : (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8h.01M12 12v4m10-4A10 10 0 1 1 2 12a10 10 0 0 1 20 0Z" />
+            </svg>
+          )}
+        </span>
+        <div className="grid min-w-0 flex-1 gap-1">{children}</div>
+      </div>
       {onClose && (
         <button
           onClick={onClose}
-          className="absolute right-2 top-2 rounded-md p-1 text-foreground/50 opacity-0 transition-opacity hover:text-foreground focus:opacity-100 focus:outline-none focus:ring-2 group-hover:opacity-100"
+          className="absolute right-3 top-3 rounded-full border border-border/60 bg-background/85 p-1.5 text-muted-foreground transition-colors hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1538,7 +1843,7 @@ export function ToastTitle({ className, ...props }: React.HTMLAttributes<HTMLDiv
 
 // Toast Description
 export function ToastDescription({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("text-body-sm opacity-90", className)} {...props} />;
+  return <div className={cn("text-body-sm text-foreground/75", className)} {...props} />;
 }
 
 // Toaster - renders all toasts
@@ -1546,9 +1851,17 @@ export function Toaster() {
   const { toasts, dismiss } = useToast();
 
   return (
-    <div className="fixed bottom-0 right-0 z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col-reverse md:max-w-[420px]">
+    <div className="pointer-events-none fixed bottom-0 right-0 z-[100] flex max-h-screen w-full flex-col-reverse gap-3 p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]">
       {toasts.map((t) => (
-        <div key={t.id} className="mb-2">
+        <div
+          key={t.id}
+          className={cn(
+            "pointer-events-auto transition-all duration-200",
+            t.closing
+              ? "animate-out fade-out-0 slide-out-to-right-full zoom-out-95"
+              : "animate-in fade-in-0 slide-in-from-bottom-2 sm:slide-in-from-right-5 zoom-in-95"
+          )}
+        >
           <ToastComponent variant={t.variant} onClose={() => dismiss(t.id)}>
             <div className="grid gap-1">
               {t.title && <ToastTitle>{t.title}</ToastTitle>}

@@ -10,7 +10,8 @@
  * 3. Spacing Normalization - p-[11px] → p-3 (className transforms)
  * 4. Layout Enforcement - gap-7 → gap-8, grid-cols-[5] → grid-cols-5 (className transforms)
  * 5. Typography Enforcement - text-sm → text-body-sm (className transforms)
- * 6. Component Normalization - infer Button/Badge variants and strip conflicting Badge/Tabs color overrides
+ * 6. Brand Logo Normalization - decorative Button logos → static brand markup
+ * 7. Component Normalization - infer Button/Badge variants and strip conflicting Badge/Tabs color overrides
  *
  * Fail-safe: if any phase throws, original code passes through unchanged.
  */
@@ -32,6 +33,10 @@ import {
   type ButtonNormalization,
   type TabsNormalization,
 } from "./component-normalizer";
+import {
+  normalizeBrandLogos,
+  type BrandLogoNormalization,
+} from "./brand-logo-normalizer";
 import { defaultTokenState } from "@/lib/tokens/defaults";
 import type { TokenState } from "@/lib/tokens/types";
 
@@ -58,6 +63,7 @@ export interface GatekeeperReport {
   typographyViolations: TypographyViolation[];
   componentPromotions: ComponentPromotion[];
   layoutDeclarationAdditions: LayoutDeclarationAddition[];
+  brandLogoNormalizations: BrandLogoNormalization[];
   buttonNormalizations: ButtonNormalization[];
   badgeNormalizations: BadgeNormalization[];
   tabsNormalizations: TabsNormalization[];
@@ -206,6 +212,7 @@ export function runGatekeeper(
     typographyViolations: [],
     componentPromotions: [],
     layoutDeclarationAdditions: [],
+    brandLogoNormalizations: [],
     buttonNormalizations: [],
     badgeNormalizations: [],
     tabsNormalizations: [],
@@ -225,6 +232,7 @@ export function runGatekeeper(
   const allTypographyViolations: TypographyViolation[] = [];
   let allPromotions: ComponentPromotion[] = [];
   let allLayoutDeclarationAdditions: LayoutDeclarationAddition[] = [];
+  let allBrandLogoNormalizations: BrandLogoNormalization[] = [];
   let allButtonNormalizations: ButtonNormalization[] = [];
   let allBadgeNormalizations: BadgeNormalization[] = [];
   let allTabsNormalizations: TabsNormalization[] = [];
@@ -322,7 +330,16 @@ export function runGatekeeper(
     console.warn("[Gatekeeper] Color/spacing enforcement failed, skipping:", err);
   }
 
-  // ── Phase 6: Component Normalization ──
+  // ── Phase 6: Brand Logo Normalization ──
+  try {
+    const normalized = normalizeBrandLogos(currentCode, filePath);
+    currentCode = normalized.code;
+    allBrandLogoNormalizations = normalized.brandLogoNormalizations;
+  } catch (err) {
+    console.warn("[Gatekeeper] Brand logo normalization failed, skipping:", err);
+  }
+
+  // ── Phase 7: Component Normalization ──
   try {
     const normalized = normalizeComponents(currentCode);
     currentCode = normalized.code;
@@ -357,6 +374,7 @@ export function runGatekeeper(
         allTypographyViolations.length = 0;
         allPromotions = [];
         allLayoutDeclarationAdditions = [];
+        allBrandLogoNormalizations = [];
         allButtonNormalizations = [];
         allBadgeNormalizations = [];
         allTabsNormalizations = [];
@@ -372,6 +390,7 @@ export function runGatekeeper(
     allTypographyViolations.length > 0 ||
     allPromotions.length > 0 ||
     allLayoutDeclarationAdditions.length > 0 ||
+    allBrandLogoNormalizations.length > 0 ||
     allButtonNormalizations.length > 0 ||
     allBadgeNormalizations.length > 0 ||
     allTabsNormalizations.length > 0;
@@ -387,6 +406,7 @@ export function runGatekeeper(
       typographyViolations: allTypographyViolations,
       componentPromotions: allPromotions,
       layoutDeclarationAdditions: allLayoutDeclarationAdditions,
+      brandLogoNormalizations: allBrandLogoNormalizations,
       buttonNormalizations: allButtonNormalizations,
       badgeNormalizations: allBadgeNormalizations,
       tabsNormalizations: allTabsNormalizations,

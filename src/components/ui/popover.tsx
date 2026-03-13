@@ -83,6 +83,7 @@ export function PopoverContent({
   sideOffset = 4,
   align = "center",
   children,
+  style,
   ...props
 }: PopoverContentProps) {
   const context = React.useContext(PopoverContext);
@@ -168,10 +169,17 @@ export function PopoverContent({
     <div
       ref={contentRef}
       className={cn(
-        "fixed z-50 w-72 rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-none animate-in fade-in-0 zoom-in-95",
+        "fixed z-50 w-72 border bg-popover p-4 text-popover-foreground shadow-md outline-none animate-in fade-in-0 zoom-in-95",
         className
       )}
-      style={{ top: position.top, left: position.left }}
+      style={{
+        top: position.top,
+        left: position.left,
+        borderRadius: "var(--popover-radius, var(--radius-lg))",
+        borderWidth: "var(--popover-border-width, 1px)",
+        boxShadow: "var(--popover-shadow, none)",
+        ...style,
+      }}
       {...props}
     >
       {children}

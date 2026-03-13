@@ -7,7 +7,7 @@ import { Switch } from "./components/ui/switch";
 import { Slider } from "./components/ui/slider";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
-import { Select, SelectOption } from "./components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Separator } from "./components/ui/separator";
 import { Checkbox } from "./components/ui/checkbox";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "./components/ui/tabs";
@@ -150,9 +150,14 @@ const componentRegistry: Array<{
     name: "Select",
     showcase: (
       <Select defaultValue="option1">
-        <SelectOption value="option1">Option 1</SelectOption>
-        <SelectOption value="option2">Option 2</SelectOption>
-        <SelectOption value="option3">Option 3</SelectOption>
+        <SelectTrigger>
+          <SelectValue placeholder="Choose an option" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="option1">Option 1</SelectItem>
+          <SelectItem value="option2">Option 2</SelectItem>
+          <SelectItem value="option3">Option 3</SelectItem>
+        </SelectContent>
       </Select>
     ),
   },

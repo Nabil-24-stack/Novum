@@ -50,7 +50,7 @@ ${DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT}
 | Slider | /components/ui/slider.tsx | Slider |
 | Input | /components/ui/input.tsx | Input |
 | Label | /components/ui/label.tsx | Label |
-| Select | /components/ui/select.tsx | Select, SelectOption |
+| Select | /components/ui/select.tsx | Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel, SelectSeparator |
 | Separator | /components/ui/separator.tsx | Separator |
 | Checkbox | /components/ui/checkbox.tsx | Checkbox |
 | Tabs | /components/ui/tabs.tsx | Tabs, TabsList, TabsTrigger, TabsContent |

@@ -94,7 +94,7 @@ export interface TooltipContentProps extends React.HTMLAttributes<HTMLDivElement
   sideOffset?: number;
 }
 
-export function TooltipContent({ className, side = "top", sideOffset = 4, children, ...props }: TooltipContentProps) {
+export function TooltipContent({ className, side = "top", sideOffset = 4, children, style, ...props }: TooltipContentProps) {
   const context = React.useContext(TooltipContext);
   if (!context) throw new Error("TooltipContent must be used within Tooltip");
 
@@ -138,10 +138,17 @@ export function TooltipContent({ className, side = "top", sideOffset = 4, childr
     <div
       ref={contentRef}
       className={cn(
-        "fixed z-50 overflow-hidden rounded-md border bg-popover px-3 py-1.5 text-sm text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95",
+        "fixed z-50 overflow-hidden border bg-popover px-3 py-1.5 text-caption text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95",
         className
       )}
-      style={{ top: position.top, left: position.left }}
+      style={{
+        top: position.top,
+        left: position.left,
+        borderRadius: "var(--tooltip-radius, var(--radius-md))",
+        borderWidth: "var(--tooltip-border-width, 1px)",
+        boxShadow: "var(--tooltip-shadow, none)",
+        ...style,
+      }}
       {...props}
     >
       {children}

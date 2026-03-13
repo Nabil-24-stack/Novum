@@ -10,6 +10,13 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -22,6 +29,14 @@ import { Toggle } from "@/components/ui/toggle";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbSeparator, BreadcrumbPage } from "@/components/ui/breadcrumb";
 import { AspectRatio } from "@/components/ui/aspect-ratio";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { ToastComponent, ToastTitle, ToastDescription } from "@/components/ui/toast";
 import { DatePicker } from "@/components/ui/date-picker";
@@ -228,18 +243,26 @@ export const KNOWN_COMPONENTS: Record<string, Omit<ComponentDefinition, "name">>
     defaultWidth: 180,
     defaultHeight: 40,
     preview: (
-      <select className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm">
-        <option value="">Select...</option>
-        <option value="option1">Option 1</option>
-        <option value="option2">Option 2</option>
-      </select>
+      <Select defaultValue="option1">
+        <SelectTrigger className="h-9">
+          <SelectValue placeholder="Select..." />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="option1">Option 1</SelectItem>
+          <SelectItem value="option2">Option 2</SelectItem>
+        </SelectContent>
+      </Select>
     ),
     importPath: "./components/ui/select",
     componentName: "Select",
-    defaultCode: `<Select defaultValue="">
-  <SelectOption value="">Select...</SelectOption>
-  <SelectOption value="option1">Option 1</SelectOption>
-  <SelectOption value="option2">Option 2</SelectOption>
+    defaultCode: `<Select defaultValue="option1">
+  <SelectTrigger>
+    <SelectValue placeholder="Select an option" />
+  </SelectTrigger>
+  <SelectContent>
+    <SelectItem value="option1">Option 1</SelectItem>
+    <SelectItem value="option2">Option 2</SelectItem>
+  </SelectContent>
 </Select>`,
     namedExport: true,
   },
@@ -247,14 +270,17 @@ export const KNOWN_COMPONENTS: Record<string, Omit<ComponentDefinition, "name">>
     defaultWidth: 300,
     defaultHeight: 120,
     preview: (
-      <div className="rounded-lg border bg-card p-4 shadow-sm w-full">
-        <h3 className="text-sm font-semibold">Dialog Title</h3>
-        <p className="text-xs text-muted-foreground mt-1">Dialog content preview</p>
-        <div className="flex justify-end gap-2 mt-3">
-          <Button variant="outline" size="sm" className="h-7 text-xs">Cancel</Button>
-          <Button size="sm" className="h-7 text-xs">Confirm</Button>
-        </div>
-      </div>
+      <Dialog>
+        <DialogTrigger asChild>
+          <Button variant="outline" size="sm">Open Dialog</Button>
+        </DialogTrigger>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Dialog Title</DialogTitle>
+            <DialogDescription>Dialog content preview</DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
     ),
     importPath: "./components/ui/dialog",
     componentName: "Dialog",
@@ -526,7 +552,7 @@ export const KNOWN_COMPONENTS: Record<string, Omit<ComponentDefinition, "name">>
   },
   "toast": {
     defaultWidth: 300,
-    defaultHeight: 80,
+    defaultHeight: 96,
     preview: (
       <ToastComponent variant="default" className="w-full">
         <div className="grid gap-1">

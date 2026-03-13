@@ -111,7 +111,7 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
 | Slider | /components/ui/slider.tsx | Slider | \`value\` (number), \`onValueChange\` (NOT defaultValue/array) |
 | Input | /components/ui/input.tsx | Input | Standard input props |
 | Label | /components/ui/label.tsx | Label | |
-| Select | /components/ui/select.tsx | Select, SelectOption | **NATIVE HTML <select> — NOT Radix.** Use \`<Select><SelectOption value="x">Label</SelectOption></Select>\`. Do NOT use SelectTrigger/SelectValue/SelectContent/SelectItem. |
+| Select | /components/ui/select.tsx | Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel, SelectSeparator | **Use the Radix-style API.** Compose \`Select\` with \`SelectTrigger\`, \`SelectValue\`, \`SelectContent\`, and \`SelectItem\`. |
 | Separator | /components/ui/separator.tsx | Separator | orientation prop |
 | Checkbox | /components/ui/checkbox.tsx | Checkbox | \`checked\`, \`onCheckedChange\` (NOT defaultChecked) |
 | Tabs | /components/ui/tabs.tsx | Tabs, TabsList, TabsTrigger, TabsContent | defaultValue, onValueChange |
@@ -119,7 +119,7 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
 | Accordion | /components/ui/accordion.tsx | Accordion, AccordionItem, AccordionTrigger, AccordionContent | type, collapsible props |
 | Textarea | /components/ui/textarea.tsx | Textarea | Multi-line text input, standard textarea props |
 | Progress | /components/ui/progress.tsx | Progress | \`value\`, \`max\` props for progress bar |
-| Alert | /components/ui/alert.tsx | Alert, AlertTitle, AlertDescription | variant: "default" or "destructive" |
+| Alert | /components/ui/alert.tsx | Alert, AlertTitle, AlertDescription | variant: "default", "success", "warning", "info", or "destructive" |
 | Skeleton | /components/ui/skeleton.tsx | Skeleton | Loading placeholder with pulse animation |
 | Radio Group | /components/ui/radio-group.tsx | RadioGroup, RadioGroupItem | \`defaultValue\`, \`onValueChange\` props |
 | Toggle | /components/ui/toggle.tsx | Toggle | \`pressed\`, \`onPressedChange\`, variant, size props |
@@ -139,7 +139,7 @@ The VFS comes with 27 ready-to-use Shadcn components. ALWAYS use these before cr
 ## COMMON IMPORT MISTAKES (AVOID THESE):
 
 1. **Toast:** Import \`useToast\` from \`"./components/ui/toast"\` — NOT from \`"./components/ui/use-toast"\` or \`"./hooks/use-toast"\`
-2. **Select:** Use ONLY \`Select\` and \`SelectOption\`. Do NOT use SelectTrigger, SelectValue, SelectContent, or SelectItem (those are Radix patterns that don't exist here)
+2. **Select:** Use the Radix-style exports from \`"./components/ui/select"\`: \`Select\`, \`SelectTrigger\`, \`SelectValue\`, \`SelectContent\`, and \`SelectItem\`. Do NOT use \`SelectOption\`.
 3. **Dialog:** There is NO \`DialogFooter\` or \`DialogClose\` export. Use a regular \`<div>\` for footer content inside DialogContent.
 4. **Import paths:** Use RELATIVE paths (\`./components/ui/...\`), NEVER \`@/\` aliases
 5. **Only import components from the table above** — do not invent new component names

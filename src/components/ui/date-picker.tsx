@@ -91,11 +91,16 @@ export function DatePicker({ value, onChange, placeholder = "Pick a date", class
         type="button"
         onClick={() => setOpen(!open)}
         className={cn(
-          "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm",
+          "flex h-10 w-full items-center justify-between border border-input bg-background px-3 py-2 text-body",
           "ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
           "disabled:cursor-not-allowed disabled:opacity-50",
           !value && "text-muted-foreground"
         )}
+        style={{
+          borderRadius: "var(--input-radius, var(--radius-md))",
+          borderWidth: "var(--input-border-width, 1px)",
+          boxShadow: "var(--input-shadow, none)",
+        }}
       >
         <span>{value ? formatDate(value) : placeholder}</span>
         <svg className="h-4 w-4 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -104,7 +109,14 @@ export function DatePicker({ value, onChange, placeholder = "Pick a date", class
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-auto min-w-[280px] rounded-md border bg-popover p-3 shadow-md">
+        <div
+          className="absolute left-0 top-full z-50 mt-1 w-auto min-w-[280px] border bg-popover p-3 shadow-md"
+          style={{
+            borderRadius: "var(--date-picker-radius, var(--radius-lg))",
+            borderWidth: "var(--date-picker-border-width, 1px)",
+            boxShadow: "var(--date-picker-shadow, none)",
+          }}
+        >
           {/* Header */}
           <div className="flex items-center justify-between mb-2">
             <button
@@ -116,7 +128,7 @@ export function DatePicker({ value, onChange, placeholder = "Pick a date", class
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
             </button>
-            <span className="text-sm font-medium">
+            <span className="text-body-sm">
               {MONTH_NAMES[month]} {year}
             </span>
             <button
@@ -133,7 +145,7 @@ export function DatePicker({ value, onChange, placeholder = "Pick a date", class
           {/* Day names */}
           <div className="grid grid-cols-7 gap-1 mb-1">
             {DAY_NAMES.map((day) => (
-              <div key={day} className="text-center text-xs text-muted-foreground font-medium py-1">
+              <div key={day} className="text-center text-caption text-muted-foreground py-1">
                 {day}
               </div>
             ))}
@@ -148,7 +160,7 @@ export function DatePicker({ value, onChange, placeholder = "Pick a date", class
                     type="button"
                     onClick={() => handleSelectDate(day)}
                     className={cn(
-                      "w-full h-full flex items-center justify-center rounded-md text-sm transition-colors",
+                      "w-full h-full flex items-center justify-center rounded-md text-body-sm transition-colors",
                       "hover:bg-accent hover:text-accent-foreground",
                       isSelected(day) && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
                       isToday(day) && !isSelected(day) && "border border-primary"

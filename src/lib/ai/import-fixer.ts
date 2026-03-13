@@ -6,14 +6,14 @@
  *
  * Steps (in order):
  * A. Fix known path aliases (use-toast → toast, @/ → ./)
- * B. Fix Select API mismatch (Radix patterns → native Select/SelectOption)
+ * B. Preserve canonical Select API usage
  * C. Remove non-existent export specifiers (DialogFooter, DialogClose, etc.)
  * D. Add missing imports for known components used in JSX
  *
  * Fail-safe: wrapped in try/catch — original code passes through on any error.
  */
 
-import { addImportIfMissing } from "@/lib/ast/import-manager";
+import { addImportIfMissing } from "../ast/import-manager.ts";
 
 // ============================================================================
 // Types
@@ -42,7 +42,15 @@ const COMPONENT_REGISTRY: Record<string, string> = {
   Toggle: "./components/ui/toggle",
   Slider: "./components/ui/slider",
   Select: "./components/ui/select",
-  SelectOption: "./components/ui/select",
+  SelectTrigger: "./components/ui/select",
+  SelectValue: "./components/ui/select",
+  SelectContent: "./components/ui/select",
+  SelectItem: "./components/ui/select",
+  SelectGroup: "./components/ui/select",
+  SelectLabel: "./components/ui/select",
+  SelectSeparator: "./components/ui/select",
+  SelectScrollUpButton: "./components/ui/select",
+  SelectScrollDownButton: "./components/ui/select",
   Label: "./components/ui/label",
   DatePicker: "./components/ui/date-picker",
 
@@ -120,15 +128,7 @@ const COMPONENT_REGISTRY: Record<string, string> = {
 const NON_EXISTENT_SPECIFIERS = new Set([
   "DialogFooter",
   "DialogClose",
-  "SelectTrigger",
-  "SelectValue",
-  "SelectContent",
-  "SelectItem",
-  "SelectGroup",
-  "SelectLabel",
-  "SelectSeparator",
-  "SelectScrollUpButton",
-  "SelectScrollDownButton",
+  "SelectOption",
 ]);
 
 // ============================================================================
@@ -364,94 +364,11 @@ function fixPathAliases(code: string): { code: string; fixes: ImportFix[] } {
 }
 
 // ============================================================================
-// Step B: Fix Select API Mismatch (Radix → Native)
+// Step B: Preserve canonical Select API usage
 // ============================================================================
 
 function fixSelectApi(code: string): { code: string; fixes: ImportFix[] } {
-  const fixes: ImportFix[] = [];
-  let result = code;
-
-  // Check if this file uses any Radix Select patterns
-  const hasRadixSelect =
-    /\bSelectTrigger\b/.test(result) ||
-    /\bSelectContent\b/.test(result) ||
-    /\bSelectItem\b/.test(result) ||
-    /\bSelectValue\b/.test(result);
-
-  if (!hasRadixSelect) {
-    return { code: result, fixes };
-  }
-
-  const originalCode = result;
-
-  // 1. Replace <SelectItem → <SelectOption and </SelectItem> → </SelectOption>
-  result = result.replace(/<SelectItem\b/g, "<SelectOption");
-  result = result.replace(/<\/SelectItem>/g, "</SelectOption>");
-
-  // 2. Unwrap <SelectContent>...</SelectContent> (keep children)
-  result = result.replace(/<SelectContent[^>]*>\s*/g, "");
-  result = result.replace(/\s*<\/SelectContent>/g, "");
-
-  // 3. Unwrap <SelectTrigger>...</SelectTrigger> (keep children)
-  result = result.replace(/<SelectTrigger[^>]*>\s*/g, "");
-  result = result.replace(/\s*<\/SelectTrigger>/g, "");
-
-  // 4. Remove <SelectValue ... /> self-closing tags
-  result = result.replace(/<SelectValue\b[^/]*\/>\s*/g, "");
-
-  // 5. Convert onValueChange → onChange on <Select> elements
-  result = result.replace(/(<Select\b[^>]*)\bonValueChange\b/g, "$1onChange");
-
-  // 6. Fix import: remove Radix specifiers, ensure Select + SelectOption
-  // Match the import line for select
-  result = result.replace(
-    /import\s*\{([^}]*)\}\s*from\s*["']([^"']*\/select)["'];?/g,
-    (fullMatch, specifiers: string, path: string) => {
-      // Parse existing specifiers
-      const specs = specifiers
-        .split(",")
-        .map((s: string) => s.trim())
-        .filter(Boolean);
-
-      // Remove Radix-only specifiers, rename SelectItem → SelectOption
-      const validSpecs = new Set<string>();
-      for (const spec of specs) {
-        if (spec === "SelectItem") {
-          validSpecs.add("SelectOption");
-        } else if (
-          spec === "SelectTrigger" ||
-          spec === "SelectValue" ||
-          spec === "SelectContent" ||
-          spec === "SelectGroup" ||
-          spec === "SelectLabel" ||
-          spec === "SelectSeparator" ||
-          spec === "SelectScrollUpButton" ||
-          spec === "SelectScrollDownButton"
-        ) {
-          // Drop these
-        } else {
-          validSpecs.add(spec);
-        }
-      }
-
-      // Ensure Select and SelectOption are present
-      validSpecs.add("Select");
-      validSpecs.add("SelectOption");
-
-      return `import { ${Array.from(validSpecs).join(", ")} } from "${path}";`;
-    }
-  );
-
-  if (result !== originalCode) {
-    fixes.push({
-      type: "select-api",
-      original: "Radix Select pattern (SelectTrigger/SelectContent/SelectItem)",
-      replacement: "Native Select + SelectOption",
-      reason: "VFS uses native HTML select wrapper, not Radix primitives",
-    });
-  }
-
-  return { code: result, fixes };
+  return { code, fixes: [] };
 }
 
 // ============================================================================
@@ -684,7 +601,7 @@ export function fixImports(
     console.warn("[ImportFixer] Path alias fixing failed, skipping:", err);
   }
 
-  // Step B: Fix Select API mismatch
+  // Step B: Preserve canonical Select API usage
   try {
     const { code: selectFixed, fixes } = fixSelectApi(currentCode);
     currentCode = selectFixed;
