@@ -15,6 +15,7 @@ import { useKeyboardDelete } from "@/hooks/useKeyboardDelete";
 import { useMouseMove } from "@/hooks/useMouseMove";
 import { sendToIframe } from "@/lib/inspection/iframe-messaging";
 import type { SelectedElement, OptimisticMovePayload, SourceLocation } from "@/lib/inspection/types";
+import type { AutoAnnotationRequest } from "@/lib/ai/annotation-targets";
 import type { StrategyPhase } from "@/hooks/useStrategyStore";
 import type { RepairChatDraft } from "./ChatTab";
 
@@ -125,7 +126,7 @@ interface RightPanelProps {
   /** Non-sent repair draft inserted when the user chooses "Fix in Chat" */
   pendingRepairDraft?: RepairChatDraft | null;
   /** Called when an AI response that wrote code files completes — used to auto re-evaluate annotations */
-  onBuildingResponseComplete?: () => void;
+  onBuildingResponseComplete?: (request: AutoAnnotationRequest) => void;
   /** Called when element has strategy annotations — show confirmation modal instead of deleting immediately */
   onAnnotatedDeleteRequest?: (info: {
     tagName: string;

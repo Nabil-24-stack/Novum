@@ -1,29 +1,49 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { create } from "zustand";
 import type { BillingStatus } from "@/lib/billing/types";
 
-export function useBillingStatus() {
-  const [status, setStatus] = useState<BillingStatus | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+interface BillingStatusState {
+  status: BillingStatus | null;
+  isLoading: boolean;
+  refresh: () => Promise<void>;
+}
 
-  const refresh = useCallback(async () => {
+export const useBillingStatus = create<BillingStatusState>((set) => {
+  const refresh = async () => {
     try {
       const res = await fetch("/api/billing/status");
       if (res.ok) {
         const data = await res.json();
-        setStatus(data);
+        set({ status: data });
       }
     } catch {
       // Silently fail — billing status is non-critical
     } finally {
-      setIsLoading(false);
+      set({ isLoading: false });
     }
-  }, []);
+  };
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  // Auto-fetch on module load (client-side only)
+  if (typeof window !== "undefined") {
+    setTimeout(() => refresh(), 0);
 
-  return { status, isLoading, refresh };
+    // Live-update when builds/chat complete
+    window.addEventListener("billing:usage-changed", () => {
+      refresh();
+    });
+  }
+
+  return {
+    status: null,
+    isLoading: true,
+    refresh,
+  };
+});
+
+/** Dispatch this after any action that changes usage (build, chat, etc.) */
+export function notifyUsageChanged() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("billing:usage-changed"));
+  }
 }

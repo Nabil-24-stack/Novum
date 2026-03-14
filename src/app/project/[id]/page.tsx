@@ -54,6 +54,10 @@ import { AnnotatedDeleteModal, type AnnotatedDeleteInfo } from "@/components/can
 import { evaluateAnnotationsStandalone } from "@/hooks/useParallelBuild";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
 import { useProjectPersistence } from "@/hooks/useProjectPersistence";
+import {
+  resolveAutoAnnotationTargets,
+  type AutoAnnotationRequest,
+} from "@/lib/ai/annotation-targets";
 import { useParams, useRouter } from "next/navigation";
 import { Monitor, GitBranch, Share, RefreshCw, RotateCw, ChevronLeft, Loader2 as LoaderIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -89,6 +93,10 @@ function mergeByKey<T extends object>(
   }
 
   return result;
+}
+
+function mergeUniqueStrings(existing: string[], incoming: string[]): string[] {
+  return [...new Set([...existing, ...incoming])];
 }
 
 // Inline editable title component
@@ -328,6 +336,7 @@ export default function ProjectEditor() {
   const [isReEvaluating, setIsReEvaluating] = useState(false);
   const reEvaluateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reEvaluateRunTokenRef = useRef(0);
+  const pendingAutoAnnotationRequestRef = useRef<AutoAnnotationRequest | null>(null);
   const isProjectPageMountedRef = useRef(true);
 
   // Product Brain state
@@ -400,6 +409,7 @@ export default function ProjectEditor() {
     return () => {
       isProjectPageMountedRef.current = false;
       reEvaluateRunTokenRef.current += 1;
+      pendingAutoAnnotationRequestRef.current = null;
       if (reEvaluateTimeoutRef.current) {
         clearTimeout(reEvaluateTimeoutRef.current);
         reEvaluateTimeoutRef.current = null;
@@ -745,13 +755,35 @@ export default function ProjectEditor() {
   }, [brainData, manifestoData, personaData, flowManifest]);
 
   // Re-evaluate annotations handler (placed after flowManifest is available)
-  const handleReEvaluateAnnotations = useCallback(async () => {
+  const handleReEvaluateAnnotations = useCallback(async (autoRequest?: AutoAnnotationRequest) => {
     if (isReEvaluating || !manifestoData || !personaData || !flowManifest) return;
 
     if (reEvaluateTimeoutRef.current) {
       clearTimeout(reEvaluateTimeoutRef.current);
       reEvaluateTimeoutRef.current = null;
     }
+    pendingAutoAnnotationRequestRef.current = null;
+
+    const resolvedTargets = autoRequest
+      ? resolveAutoAnnotationTargets({
+          ...autoRequest,
+          flowPages: flowManifest.pages,
+        })
+      : {
+          targetPageIds: flowManifest.pages.map((page) => page.id),
+          removedPageIds: [] as string[],
+        };
+
+    const flowPageById = new Map(flowManifest.pages.map((page) => [page.id, page]));
+    const pagesToEvaluate = autoRequest
+      ? resolvedTargets.targetPageIds
+          .map((pageId) => flowPageById.get(pageId))
+          .filter((page): page is (typeof flowManifest.pages)[number] => Boolean(page))
+      : flowManifest.pages;
+    const removedPageIds = autoRequest ? resolvedTargets.removedPageIds : [];
+    const shouldShowProgress = pagesToEvaluate.length > 0;
+
+    if (!shouldShowProgress && removedPageIds.length === 0) return;
 
     const runToken = reEvaluateRunTokenRef.current + 1;
     reEvaluateRunTokenRef.current = runToken;
@@ -759,17 +791,19 @@ export default function ProjectEditor() {
       isProjectPageMountedRef.current && reEvaluateRunTokenRef.current === runToken;
 
     setIsReEvaluating(true);
-    useStrategyStore.getState().setCoverageDisplayState("pending");
-    useStreamingStore.getState().setAnnotationEvaluating({
-      connectionCount: brainData?.pages.reduce((sum, page) => sum + page.connections.length, 0) ?? 0,
-      activePageId: null,
-      activePageName: null,
-      completedPages: 0,
-      failedPages: 0,
-      failedPageIds: [],
-      totalPages: flowManifest.pages.length,
-      errorMessage: undefined,
-    });
+    if (shouldShowProgress) {
+      useStrategyStore.getState().setCoverageDisplayState("pending");
+      useStreamingStore.getState().setAnnotationEvaluating({
+        connectionCount: brainData?.pages.reduce((sum, page) => sum + page.connections.length, 0) ?? 0,
+        activePageId: null,
+        activePageName: null,
+        completedPages: 0,
+        failedPages: 0,
+        failedPageIds: [],
+        totalPages: pagesToEvaluate.length,
+        errorMessage: undefined,
+      });
+    }
 
     const mCtx = `Title: ${manifestoData.title}\nProblem: ${manifestoData.problemStatement}\nTarget User: ${manifestoData.targetUser}\nJTBDs:\n${manifestoData.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}`;
     const pCtx = personaData.map((p, i) => `Persona ${i + 1}: ${p.name} — ${p.role}\nGoals: ${p.goals.join("; ")}\nPain Points: ${p.painPoints.join("; ")}`).join("\n\n");
@@ -791,7 +825,18 @@ export default function ProjectEditor() {
     let lastErrorMessage: string | undefined;
 
     try {
-      for (const page of flowManifest.pages) {
+      if (removedPageIds.length > 0) {
+        const brainStore = useProductBrainStore.getState();
+        for (const removedPageId of removedPageIds) {
+          brainStore.removePageConnections(removedPageId);
+        }
+        const pendingBrain = brainStore.brainData;
+        if (pendingBrain) {
+          writeFile("/product-brain.json", JSON.stringify(pendingBrain, null, 2));
+        }
+      }
+
+      for (const page of pagesToEvaluate) {
         if (!isRunActive()) return;
 
         const pagePath = `/pages/${toPascalCase(page.name)}.tsx`;
@@ -809,7 +854,7 @@ export default function ProjectEditor() {
           completedPages: completedPageCount,
           failedPages: failedPageIds.length,
           failedPageIds,
-          totalPages: flowManifest.pages.length,
+          totalPages: pagesToEvaluate.length,
           errorMessage: undefined,
         });
 
@@ -852,7 +897,7 @@ export default function ProjectEditor() {
               completedPages: completedPageCount,
               failedPages: failedPageIds.length,
               failedPageIds,
-              totalPages: flowManifest.pages.length,
+              totalPages: pagesToEvaluate.length,
               errorMessage: undefined,
             });
           }
@@ -889,10 +934,10 @@ export default function ProjectEditor() {
             completedPages: completedPageCount,
             failedPages: failedPageIds.length,
             failedPageIds,
-            totalPages: flowManifest.pages.length,
+            totalPages: pagesToEvaluate.length,
           }
         );
-        if (completedPageCount === 0) {
+        if (completedPageCount === 0 && totalNew === 0) {
           useStrategyStore.getState().setCoverageDisplayState("unavailable");
         }
         toast.error(
@@ -901,19 +946,36 @@ export default function ProjectEditor() {
             : "Failed to re-evaluate annotations"
         );
       } else {
-        useStreamingStore.getState().setAnnotationDone(totalNew, {
-          activePageId: null,
-          activePageName: null,
-          completedPages: completedPageCount,
-          failedPages: 0,
-          failedPageIds: [],
-          totalPages: flowManifest.pages.length,
-        });
-        useStrategyStore.getState().setStrategyUpdatedAfterBuild(false);
+        if (shouldShowProgress) {
+          useStreamingStore.getState().setAnnotationDone(totalNew, {
+            activePageId: null,
+            activePageName: null,
+            completedPages: completedPageCount,
+            failedPages: 0,
+            failedPageIds: [],
+            totalPages: pagesToEvaluate.length,
+          });
+        } else {
+          useStreamingStore.getState().setAnnotationEvaluation({
+            status: "idle",
+            connectionCount: totalNew,
+            activePageId: null,
+            activePageName: null,
+            completedPages: 0,
+            failedPages: 0,
+            failedPageIds: [],
+            totalPages: 0,
+            errorMessage: undefined,
+          });
+        }
+
+        if (!autoRequest) {
+          useStrategyStore.getState().setStrategyUpdatedAfterBuild(false);
+        }
 
         if (delta > 0) toast.success(`Annotations updated: ${totalNew} total (+${delta} new)`);
         else if (delta < 0) toast.success(`Annotations updated: ${totalNew} total (${delta} removed)`);
-        else toast.success(`Annotations re-evaluated: ${totalNew} total (no changes)`);
+        else if (shouldShowProgress) toast.success(`Annotations re-evaluated: ${totalNew} total (no changes)`);
       }
     } finally {
       if (isRunActive()) {
@@ -926,9 +988,24 @@ export default function ProjectEditor() {
   const reEvaluateRef = useRef(handleReEvaluateAnnotations);
   reEvaluateRef.current = handleReEvaluateAnnotations;
 
-  const handleAutoReEvaluateAnnotations = useCallback(() => {
+  const handleAutoReEvaluateAnnotations = useCallback((request: AutoAnnotationRequest) => {
     // Defer by 1s to ensure all VFS writes from code blocks have propagated
     // through React state so handleReEvaluateAnnotations reads latest files
+    const pendingRequest = pendingAutoAnnotationRequestRef.current;
+    pendingAutoAnnotationRequestRef.current = pendingRequest
+      ? {
+          writtenFiles: mergeUniqueStrings(pendingRequest.writtenFiles, request.writtenFiles),
+          fallbackPageIds: mergeUniqueStrings(pendingRequest.fallbackPageIds, request.fallbackPageIds),
+          addedPageIds: mergeUniqueStrings(pendingRequest.addedPageIds, request.addedPageIds),
+          removedPageIds: mergeUniqueStrings(pendingRequest.removedPageIds, request.removedPageIds),
+        }
+      : {
+          writtenFiles: [...request.writtenFiles],
+          fallbackPageIds: [...request.fallbackPageIds],
+          addedPageIds: [...request.addedPageIds],
+          removedPageIds: [...request.removedPageIds],
+        };
+
     if (reEvaluateTimeoutRef.current) {
       clearTimeout(reEvaluateTimeoutRef.current);
     }
@@ -936,7 +1013,10 @@ export default function ProjectEditor() {
     reEvaluateTimeoutRef.current = setTimeout(() => {
       reEvaluateTimeoutRef.current = null;
       if (!isProjectPageMountedRef.current) return;
-      reEvaluateRef.current();
+      const nextRequest = pendingAutoAnnotationRequestRef.current;
+      pendingAutoAnnotationRequestRef.current = null;
+      if (!nextRequest) return;
+      reEvaluateRef.current(nextRequest);
     }, 1000);
   }, []);
 
@@ -2097,7 +2177,9 @@ export default function ProjectEditor() {
                     </button>
                     <div className={`w-px ${annotationsActive ? "bg-amber-300" : strategyUpdatedAfterBuild ? "bg-blue-300" : "bg-neutral-300"}`} />
                     <button
-                      onClick={handleReEvaluateAnnotations}
+                      onClick={() => {
+                        void handleReEvaluateAnnotations();
+                      }}
                       disabled={isReEvaluating}
                       className={`flex items-center px-2 py-1.5 transition-colors ${
                         strategyUpdatedAfterBuild || (!hasConnections && !isReEvaluating)

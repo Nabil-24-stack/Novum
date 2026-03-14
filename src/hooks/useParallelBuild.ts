@@ -16,6 +16,7 @@ import { waitForSandpackSettle as waitForSandpackSettleStore } from "@/hooks/use
 import { buildProductBrainFromEvaluation } from "@/lib/product-brain/snapshot";
 import type { DecisionConnection, ProductBrainData } from "@/lib/product-brain/types";
 import { toast } from "sonner";
+import { notifyUsageChanged } from "./useBillingStatus";
 
 export interface PageBuildConfig {
   pageId: string;
@@ -537,7 +538,9 @@ export function useParallelBuild({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ operationId: operationIdRef.current }),
-      }).catch(() => {});
+      })
+        .then(() => notifyUsageChanged())
+        .catch(() => {});
     }
   }, []);
 

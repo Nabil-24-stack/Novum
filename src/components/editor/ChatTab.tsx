@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import { useEffect, useRef, useState, useCallback, useMemo, DragEvent, ClipboardEvent, FormEvent } from "react";
-import { Send, Loader2, X, ImagePlus, ArrowRight, Check, AlertTriangle, Square, FileText, RotateCcw } from "lucide-react";
+import { Send, Loader2, X, ImagePlus, ArrowRight, Check, AlertTriangle, Square, FileText, RotateCcw, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { useChatContextStore, type PinnedElement, type AddressGapsPayload } from "@/hooks/useChatContextStore";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
@@ -31,7 +31,9 @@ import { BuildProgressCards } from "./BuildProgressCards";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
 import { trackEvent } from "@/lib/analytics/track-event";
 import { useBillingStore } from "@/hooks/useBillingStore";
+import { notifyUsageChanged } from "@/hooks/useBillingStatus";
 import { checkRouteConsistency } from "@/lib/ai/route-consistency";
+import type { AutoAnnotationRequest } from "@/lib/ai/annotation-targets";
 import { parseStreamingContent } from "@/lib/streaming-parser";
 import { runVerificationLoop } from "@/lib/verification/verify-loop";
 import type { FileUIPart } from "ai";
@@ -77,7 +79,7 @@ interface ChatTabProps {
   /** Draft inserted when the user chooses the explicit Fix in Chat recovery path */
   pendingRepairDraft?: RepairChatDraft | null;
   /** Called when an AI response that wrote code files completes — used to auto re-evaluate annotations */
-  onBuildingResponseComplete?: () => void;
+  onBuildingResponseComplete?: (request: AutoAnnotationRequest) => void;
   /** Project ID for analytics tracking */
   projectId?: string;
 }
@@ -1280,6 +1282,7 @@ export function ChatTab({
   const [input, setInput] = useState(initialInput ?? "");
   const [stagedImages, setStagedImages] = useState<FileUIPart[]>([]);
   const showLimitModal = useBillingStore((s) => s.showLimitModal);
+  const billingLimitReached = useBillingStore((s) => s.billingLimitReached);
   const [isDragOver, setIsDragOver] = useState(false);
   const [activeRepairContext, setActiveRepairContext] = useState<RepairChatDraft | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -2548,6 +2551,9 @@ export function ChatTab({
     }
 
     if (wasActive && status === "ready") {
+      // Refresh billing usage after any AI response completes
+      notifyUsageChanged();
+
       const store = useStreamingStore.getState();
       if (store.completedFilePaths.length === 0) return; // No code written
       if (store.parallelMode) return; // Skip during parallel builds
@@ -2646,14 +2652,20 @@ export function ChatTab({
     if (!CODE_BLOCK_REGEX.test(text)) return;
     CODE_BLOCK_REGEX.lastIndex = 0; // reset stateful regex
 
+    const writtenFiles = writtenFilesPerMessage.get(lastAssistant.id) ?? [];
+
     if (parallelMode && verificationPaused && verificationPausedPageId) {
       parallelBuild.resumePausedVerification();
-    } else {
-      onBuildingResponseComplete?.();
+    } else if (writtenFiles.length > 0) {
+      onBuildingResponseComplete?.({
+        writtenFiles: [...writtenFiles],
+        fallbackPageIds: [...activeEditingPageIds],
+        addedPageIds: [...(editScope?.addedPageIds ?? [])],
+        removedPageIds: [...(editScope?.removedPageIds ?? [])],
+      });
     }
 
     // --- Run verification loop on written files ---
-    const writtenFiles = writtenFilesPerMessage.get(lastAssistant.id);
     if (writtenFiles && writtenFiles.length > 0 && !verifiedMessages.has(lastAssistant.id)) {
       verifiedMessages.add(lastAssistant.id);
 
@@ -2695,7 +2707,7 @@ export function ChatTab({
         });
       }
     }
-  }, [messages, isLoading, onBuildingResponseComplete, files, getLatestFile, writeFile, parallelMode, verificationPaused, verificationPausedPageId, parallelBuild]);
+  }, [messages, isLoading, onBuildingResponseComplete, files, getLatestFile, writeFile, parallelMode, verificationPaused, verificationPausedPageId, parallelBuild, activeEditingPageIds, editScope]);
 
   // --- Image upload helpers ---
 
@@ -3704,7 +3716,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           <StreamingStatus />
         )}
 
-        {error && (
+        {error && !billingLimitReached && (
           <div className="bg-red-100 text-red-700 text-base p-3 rounded-lg">
             Error: {error.message}
           </div>
@@ -3764,6 +3776,29 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
       )}
 
       {/* Input */}
+      {billingLimitReached ? (
+        <div className="p-4 border-t border-neutral-200">
+          <div className="flex items-center gap-3 rounded-lg bg-neutral-50 border border-neutral-200 px-4 py-3">
+            <p className="flex-1 text-sm text-neutral-500">
+              You&apos;ve reached your monthly usage limit.
+            </p>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const res = await fetch("/api/billing/checkout", { method: "POST" });
+                  const data = await res.json();
+                  if (data.url) window.location.href = data.url;
+                } catch { /* ignore */ }
+              }}
+              className="shrink-0 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors flex items-center gap-1.5"
+            >
+              <Zap className="w-3.5 h-3.5" />
+              Upgrade
+            </button>
+          </div>
+        </div>
+      ) : (
       <form onSubmit={handleSubmit} className="p-4 border-t border-neutral-200">
         <div className="flex gap-2">
           {/* Hidden file input */}
@@ -3818,6 +3853,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           </button>
         </div>
       </form>
+      )}
     </div>
   );
 }
