@@ -31,7 +31,7 @@ import { BuildProgressCards } from "./BuildProgressCards";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
 import { trackEvent } from "@/lib/analytics/track-event";
 import { useBillingStore } from "@/hooks/useBillingStore";
-import { notifyUsageChanged } from "@/hooks/useBillingStatus";
+import { notifyUsageChanged, useBillingStatus } from "@/hooks/useBillingStatus";
 import { checkRouteConsistency } from "@/lib/ai/route-consistency";
 import type { AutoAnnotationRequest } from "@/lib/ai/annotation-targets";
 import { parseStreamingContent } from "@/lib/streaming-parser";
@@ -1358,15 +1358,15 @@ export function ChatTab({
     messages: initialMessages,
     onError: (err) => {
       console.error("Chat error:", err);
-      const errObj = err as Error & { status?: number };
-      if (errObj.status === 402) {
-        try {
-          const body = JSON.parse(errObj.message || '{}');
-          showLimitModal(body.message || 'Usage limit reached');
-        } catch {
-          showLimitModal('Usage limit reached');
+      // AI SDK v6 puts the response body in err.message (no .status property)
+      try {
+        const body = JSON.parse(err.message);
+        if (body.code === "BILLING_LIMIT") {
+          showLimitModal(body.message || "Usage limit reached");
+          return;
         }
-        return;
+      } catch {
+        // Not JSON — fall through to generic handler
       }
       toast.error("AI response failed — please try again");
       trackEvent("ai_response_error", projectId, { error: String(err).slice(0, 500) });
@@ -3021,6 +3021,21 @@ export function ChatTab({
 
     if ((!hasText && !hasImages) || isLoading) return;
 
+    // Pre-check billing limit for build/edit phases
+    const billingStatus = useBillingStatus.getState().status;
+    if (
+      (strategyPhase === "building" || strategyPhase === "editing" || strategyPhase === "complete") &&
+      billingStatus &&
+      !billingStatus.canRunBuildUsage
+    ) {
+      showLimitModal(
+        billingStatus.planTier === "free"
+          ? "Free plan AI usage budget exhausted. Upgrade to Pro for more."
+          : "Monthly budget exhausted."
+      );
+      return;
+    }
+
     const messageText = effectiveInput.trim();
     const imagesToSend = [...stagedImages];
 
@@ -3717,8 +3732,8 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         )}
 
         {error && !billingLimitReached && (
-          <div className="bg-red-100 text-red-700 text-base p-3 rounded-lg">
-            Error: {error.message}
+          <div className="bg-red-100 text-red-700 text-sm p-3 rounded-lg">
+            Something went wrong. Please try again.
           </div>
         )}
 
