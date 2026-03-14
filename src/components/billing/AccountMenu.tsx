@@ -7,19 +7,22 @@ import { useBillingStatus } from "@/hooks/useBillingStatus";
 import { createClient } from "@/lib/supabase/client";
 
 interface AccountMenuProps {
-  userEmail: string;
-  userName: string;
+  /** Extra classes on the wrapper div (use to override positioning) */
+  className?: string;
 }
 
-export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
+export function AccountMenu({ className }: AccountMenuProps) {
   const router = useRouter();
   const { status } = useBillingStatus();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const [upgradeLoadingSource, setUpgradeLoadingSource] = useState<"pill" | "dropdown" | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userName, setUserName] = useState<string | null>(null);
+
   const isPro = status?.planTier === "pro";
-  const initial = userName.charAt(0).toUpperCase();
+  const initial = userName?.charAt(0).toUpperCase() ?? "";
 
   const resetDate = status?.usageResetAt
     ? new Date(status.usageResetAt).toLocaleDateString("en-US", {
@@ -28,6 +31,22 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
         year: "numeric",
       })
     : null;
+
+  // Fetch user info
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      const email = user?.email ?? null;
+      setUserEmail(email);
+      const fullName = user?.user_metadata?.full_name || user?.user_metadata?.name;
+      if (fullName) {
+        setUserName(fullName);
+      } else if (email) {
+        const local = email.split("@")[0].split(/[._-]/)[0];
+        setUserName(local.charAt(0).toUpperCase() + local.slice(1));
+      }
+    });
+  }, []);
 
   // Close on outside click
   useEffect(() => {
@@ -77,8 +96,10 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
     router.push("/login");
   };
 
+  if (!userName) return null;
+
   return (
-    <div ref={menuRef} className="fixed top-0 right-0 p-4 z-50 flex items-center gap-2">
+    <div ref={menuRef} className={className ?? "fixed top-0 right-0 p-4 z-50 flex items-center gap-2"}>
       {/* Upgrade button (only for free users) */}
       {!isPro && status && (
         <button
@@ -102,7 +123,7 @@ export function AccountMenu({ userEmail, userName }: AccountMenuProps) {
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute top-full right-0 mt-1 mr-4 w-72 bg-white rounded-2xl shadow-lg border border-neutral-200 overflow-hidden">
+        <div className="absolute top-full right-0 mt-1 w-72 bg-white rounded-2xl shadow-lg border border-neutral-200 overflow-hidden z-[100]">
           {/* User info */}
           <div className="flex items-center gap-3 p-4">
             <div className="w-10 h-10 rounded-full bg-neutral-400 text-white flex items-center justify-center text-sm font-semibold shrink-0">

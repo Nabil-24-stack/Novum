@@ -48,7 +48,7 @@ import { calculateHorizontalLayout, type GroupId, type GroupConfig, type GroupOr
 import { calculateStrategyLayout } from "@/lib/strategy/strategy-layout";
 import { initializeTestAPI, updateTestAPI } from "@/lib/ast/test-utils";
 import { PublishDialog } from "@/components/editor/PublishDialog";
-import { BillingBadge } from "@/components/billing/BillingBadge";
+import { AccountMenu } from "@/components/billing/AccountMenu";
 import { BillingLimitModal } from "@/components/billing/BillingLimitModal";
 import { AnnotatedDeleteModal, type AnnotatedDeleteInfo } from "@/components/canvas/AnnotatedDeleteModal";
 import { evaluateAnnotationsStandalone } from "@/hooks/useParallelBuild";
@@ -184,6 +184,7 @@ export default function ProjectEditor() {
     useCanvasStore.getState().clearNodes();
     useChatContextStore.getState().clearPinnedElements();
     useAnnotationStore.getState().closeAll();
+    useStreamingStore.getState().resetTransientState();
 
     (async () => {
       try {
@@ -325,6 +326,9 @@ export default function ProjectEditor() {
   const documentInputRef = useRef<HTMLInputElement>(null);
   // Re-evaluate annotations state
   const [isReEvaluating, setIsReEvaluating] = useState(false);
+  const reEvaluateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reEvaluateRunTokenRef = useRef(0);
+  const isProjectPageMountedRef = useRef(true);
 
   // Product Brain state
   const brainData = useProductBrainStore((s) => s.brainData);
@@ -388,6 +392,20 @@ export default function ProjectEditor() {
   const openAllAnnotations = useAnnotationStore((s) => s.openAll);
   const closeAllAnnotations = useAnnotationStore((s) => s.closeAll);
   useAnnotationResolution({ brainData });
+
+  useEffect(() => {
+    isProjectPageMountedRef.current = true;
+    setIsReEvaluating(false);
+
+    return () => {
+      isProjectPageMountedRef.current = false;
+      reEvaluateRunTokenRef.current += 1;
+      if (reEvaluateTimeoutRef.current) {
+        clearTimeout(reEvaluateTimeoutRef.current);
+        reEvaluateTimeoutRef.current = null;
+      }
+    };
+  }, [projectId]);
 
   // Toast notification when strategy artifacts are updated after build
   useEffect(() => {
@@ -730,6 +748,16 @@ export default function ProjectEditor() {
   const handleReEvaluateAnnotations = useCallback(async () => {
     if (isReEvaluating || !manifestoData || !personaData || !flowManifest) return;
 
+    if (reEvaluateTimeoutRef.current) {
+      clearTimeout(reEvaluateTimeoutRef.current);
+      reEvaluateTimeoutRef.current = null;
+    }
+
+    const runToken = reEvaluateRunTokenRef.current + 1;
+    reEvaluateRunTokenRef.current = runToken;
+    const isRunActive = () =>
+      isProjectPageMountedRef.current && reEvaluateRunTokenRef.current === runToken;
+
     setIsReEvaluating(true);
     useStrategyStore.getState().setCoverageDisplayState("pending");
     useStreamingStore.getState().setAnnotationEvaluating({
@@ -762,126 +790,136 @@ export default function ProjectEditor() {
     let completedPageCount = 0;
     let lastErrorMessage: string | undefined;
 
-    for (const page of flowManifest.pages) {
-      const pagePath = `/pages/${toPascalCase(page.name)}.tsx`;
-      const pageCode = getLatestFile(pagePath) || files[pagePath];
+    try {
+      for (const page of flowManifest.pages) {
+        if (!isRunActive()) return;
 
-      useProductBrainStore.getState().removePageConnections(page.id);
-      const pendingBrain = useProductBrainStore.getState().brainData;
-      if (pendingBrain) {
-        writeFile("/product-brain.json", JSON.stringify(pendingBrain, null, 2));
+        const pagePath = `/pages/${toPascalCase(page.name)}.tsx`;
+        const pageCode = getLatestFile(pagePath) || files[pagePath];
+
+        useProductBrainStore.getState().removePageConnections(page.id);
+        const pendingBrain = useProductBrainStore.getState().brainData;
+        if (pendingBrain) {
+          writeFile("/product-brain.json", JSON.stringify(pendingBrain, null, 2));
+        }
+
+        useStreamingStore.getState().setAnnotationEvaluating({
+          activePageId: page.id,
+          activePageName: page.name,
+          completedPages: completedPageCount,
+          failedPages: failedPageIds.length,
+          failedPageIds,
+          totalPages: flowManifest.pages.length,
+          errorMessage: undefined,
+        });
+
+        if (!pageCode?.trim()) {
+          failedPageIds.push(page.id);
+          lastErrorMessage = "No generated page code was available to annotate";
+          continue;
+        }
+
+        const result = await evaluateAnnotationsStandalone(
+          { [pagePath]: pageCode },
+          mCtx,
+          pCtx,
+          insCtx,
+          [{ id: page.id, name: page.name, route: page.route }],
+          { initialDelayMs: completedPageCount + failedPageIds.length === 0 ? 500 : 0 }
+        );
+
+        if (!isRunActive()) return;
+
+        if (result.ok) {
+          const nextBrain = buildProductBrainFromEvaluation(result.pages, [
+            {
+              pageId: page.id,
+              pageName: page.name,
+            },
+          ]);
+          const nextPage = nextBrain.pages[0];
+          if (nextPage) {
+            useProductBrainStore.getState().addPageDecisions(nextPage);
+            const currentBrain = useProductBrainStore.getState().brainData ?? nextBrain;
+            const totalConnections = currentBrain.pages.reduce((sum, p) => sum + p.connections.length, 0);
+            writeFile("/product-brain.json", JSON.stringify(currentBrain, null, 2));
+            useStrategyStore.getState().setCoverageDisplayState("ready");
+            completedPageCount += 1;
+            useStreamingStore.getState().setAnnotationEvaluating({
+              connectionCount: totalConnections,
+              activePageId: null,
+              activePageName: null,
+              completedPages: completedPageCount,
+              failedPages: failedPageIds.length,
+              failedPageIds,
+              totalPages: flowManifest.pages.length,
+              errorMessage: undefined,
+            });
+          }
+        } else {
+          failedPageIds.push(page.id);
+          lastErrorMessage = result.errorMessage;
+        }
       }
 
-      useStreamingStore.getState().setAnnotationEvaluating({
-        activePageId: page.id,
-        activePageName: page.name,
-        completedPages: completedPageCount,
-        failedPages: failedPageIds.length,
-        failedPageIds,
-        totalPages: flowManifest.pages.length,
-        errorMessage: undefined,
-      });
+      if (!isRunActive()) return;
 
-      if (!pageCode?.trim()) {
-        failedPageIds.push(page.id);
-        lastErrorMessage = "No generated page code was available to annotate";
-        continue;
-      }
-
-      const result = await evaluateAnnotationsStandalone(
-        { [pagePath]: pageCode },
-        mCtx,
-        pCtx,
-        insCtx,
-        [{ id: page.id, name: page.name, route: page.route }],
-        { initialDelayMs: completedPageCount + failedPageIds.length === 0 ? 500 : 0 }
+      // Auto-clean orphans in case the evaluator returned invalid persona/JTBD refs.
+      const validPageIds = flowManifest.pages.map((p: { id: string }) => p.id);
+      useProductBrainStore.getState().removeOrphanedConnections(
+        validPageIds,
+        manifestoData.jtbd.length,
+        personaData.map((p) => p.name),
       );
 
-      if (result.ok) {
-        const nextBrain = buildProductBrainFromEvaluation(result.pages, [
+      const finalBrain = useProductBrainStore.getState().brainData;
+      if (finalBrain) {
+        writeFile("/product-brain.json", JSON.stringify(finalBrain, null, 2));
+      }
+      const totalNew = finalBrain?.pages.reduce((sum, page) => sum + page.connections.length, 0) ?? 0;
+      const delta = totalNew - oldCount;
+
+      if (failedPageIds.length > 0) {
+        useStreamingStore.getState().setAnnotationError(
+          lastErrorMessage || "Some pages could not be re-annotated",
           {
-            pageId: page.id,
-            pageName: page.name,
-          },
-        ]);
-        const nextPage = nextBrain.pages[0];
-        if (nextPage) {
-          useProductBrainStore.getState().addPageDecisions(nextPage);
-          const currentBrain = useProductBrainStore.getState().brainData ?? nextBrain;
-          const totalConnections = currentBrain.pages.reduce((sum, p) => sum + p.connections.length, 0);
-          writeFile("/product-brain.json", JSON.stringify(currentBrain, null, 2));
-          useStrategyStore.getState().setCoverageDisplayState("ready");
-          completedPageCount += 1;
-          useStreamingStore.getState().setAnnotationEvaluating({
-            connectionCount: totalConnections,
+            connectionCount: totalNew,
             activePageId: null,
             activePageName: null,
             completedPages: completedPageCount,
             failedPages: failedPageIds.length,
             failedPageIds,
             totalPages: flowManifest.pages.length,
-            errorMessage: undefined,
-          });
+          }
+        );
+        if (completedPageCount === 0) {
+          useStrategyStore.getState().setCoverageDisplayState("unavailable");
         }
+        toast.error(
+          completedPageCount > 0
+            ? `Re-evaluated ${completedPageCount} page${completedPageCount === 1 ? "" : "s"}, but ${failedPageIds.length} still need annotation retry`
+            : "Failed to re-evaluate annotations"
+        );
       } else {
-        failedPageIds.push(page.id);
-        lastErrorMessage = result.errorMessage;
-      }
-    }
-
-    // Auto-clean orphans in case the evaluator returned invalid persona/JTBD refs.
-    const validPageIds = flowManifest.pages.map((p: { id: string }) => p.id);
-    useProductBrainStore.getState().removeOrphanedConnections(
-      validPageIds,
-      manifestoData.jtbd.length,
-      personaData.map((p) => p.name),
-    );
-
-    const finalBrain = useProductBrainStore.getState().brainData;
-    if (finalBrain) {
-      writeFile("/product-brain.json", JSON.stringify(finalBrain, null, 2));
-    }
-    const totalNew = finalBrain?.pages.reduce((sum, page) => sum + page.connections.length, 0) ?? 0;
-    const delta = totalNew - oldCount;
-
-    if (failedPageIds.length > 0) {
-      useStreamingStore.getState().setAnnotationError(
-        lastErrorMessage || "Some pages could not be re-annotated",
-        {
-          connectionCount: totalNew,
+        useStreamingStore.getState().setAnnotationDone(totalNew, {
           activePageId: null,
           activePageName: null,
           completedPages: completedPageCount,
-          failedPages: failedPageIds.length,
-          failedPageIds,
+          failedPages: 0,
+          failedPageIds: [],
           totalPages: flowManifest.pages.length,
-        }
-      );
-      if (completedPageCount === 0) {
-        useStrategyStore.getState().setCoverageDisplayState("unavailable");
+        });
+        useStrategyStore.getState().setStrategyUpdatedAfterBuild(false);
+
+        if (delta > 0) toast.success(`Annotations updated: ${totalNew} total (+${delta} new)`);
+        else if (delta < 0) toast.success(`Annotations updated: ${totalNew} total (${delta} removed)`);
+        else toast.success(`Annotations re-evaluated: ${totalNew} total (no changes)`);
       }
-      toast.error(
-        completedPageCount > 0
-          ? `Re-evaluated ${completedPageCount} page${completedPageCount === 1 ? "" : "s"}, but ${failedPageIds.length} still need annotation retry`
-          : "Failed to re-evaluate annotations"
-      );
-    } else {
-      useStreamingStore.getState().setAnnotationDone(totalNew, {
-        activePageId: null,
-        activePageName: null,
-        completedPages: completedPageCount,
-        failedPages: 0,
-        failedPageIds: [],
-        totalPages: flowManifest.pages.length,
-      });
-      useStrategyStore.getState().setStrategyUpdatedAfterBuild(false);
-
-      if (delta > 0) toast.success(`Annotations updated: ${totalNew} total (+${delta} new)`);
-      else if (delta < 0) toast.success(`Annotations updated: ${totalNew} total (${delta} removed)`);
-      else toast.success(`Annotations re-evaluated: ${totalNew} total (no changes)`);
+    } finally {
+      if (isRunActive()) {
+        setIsReEvaluating(false);
+      }
     }
-
-    setIsReEvaluating(false);
   }, [brainData, files, flowManifest, getLatestFile, isReEvaluating, manifestoData, personaData, writeFile]);
 
   // --- Auto re-evaluate annotations after AI writes code ---
@@ -891,7 +929,13 @@ export default function ProjectEditor() {
   const handleAutoReEvaluateAnnotations = useCallback(() => {
     // Defer by 1s to ensure all VFS writes from code blocks have propagated
     // through React state so handleReEvaluateAnnotations reads latest files
-    setTimeout(() => {
+    if (reEvaluateTimeoutRef.current) {
+      clearTimeout(reEvaluateTimeoutRef.current);
+    }
+
+    reEvaluateTimeoutRef.current = setTimeout(() => {
+      reEvaluateTimeoutRef.current = null;
+      if (!isProjectPageMountedRef.current) return;
       reEvaluateRef.current();
     }, 1000);
   }, []);
@@ -2004,9 +2048,6 @@ export default function ProjectEditor() {
                 </span>
               </div>
             )}
-            <div className="ml-2">
-              <BillingBadge />
-            </div>
           </div>
 
           {/* Action buttons on far right */}
@@ -2115,6 +2156,7 @@ export default function ProjectEditor() {
                 <Share className="w-4 h-4" />
                 Publish
               </button>
+              <AccountMenu className="relative flex items-center gap-2" />
             </div>
           )}
         </nav>

@@ -8,7 +8,6 @@ import { useProjects } from "@/hooks/useProjects";
 import { useDocumentStore } from "@/hooks/useDocumentStore";
 import { ProjectCard } from "@/components/dashboard/ProjectCard";
 import { AccountMenu } from "@/components/billing/AccountMenu";
-import { createClient } from "@/lib/supabase/client";
 
 export default function Dashboard() {
   // Override the global overflow:hidden on html/body so the dashboard can scroll
@@ -25,28 +24,9 @@ export default function Dashboard() {
   const { projects, isLoading, deleteProject, renameProject } = useProjects();
   const [input, setInput] = useState("");
   const [isCreating, setIsCreating] = useState(false);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [userName, setUserName] = useState<string | null>(null);
   const docFileInputRef = useRef<HTMLInputElement>(null);
   const uploadedDocuments = useDocumentStore((s) => s.documents);
   const isDocUploading = useDocumentStore((s) => s.isUploading);
-
-  // Fetch user info
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      const email = user?.email ?? null;
-      setUserEmail(email);
-      const fullName = user?.user_metadata?.full_name || user?.user_metadata?.name;
-      if (fullName) {
-        setUserName(fullName);
-      } else if (email) {
-        // Derive first name from email: "nabil.hasan@..." → "Nabil"
-        const local = email.split("@")[0].split(/[._-]/)[0];
-        setUserName(local.charAt(0).toUpperCase() + local.slice(1));
-      }
-    });
-  }, []);
 
   const handleDocumentUpload = useCallback(async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -117,9 +97,7 @@ export default function Dashboard() {
   return (
     <main className="min-h-screen bg-neutral-50" style={{ overflow: "auto", height: "auto" }}>
       {/* Account menu (top-right) */}
-      {userEmail && userName && (
-        <AccountMenu userEmail={userEmail} userName={userName} />
-      )}
+      <AccountMenu />
 
       {/* Hero section — full viewport minus peek */}
       <section className="h-[calc(100vh-80px)] flex flex-col items-center justify-center px-4">
