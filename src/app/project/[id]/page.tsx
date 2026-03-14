@@ -2156,7 +2156,7 @@ export default function ProjectEditor() {
                 <Share className="w-4 h-4" />
                 Publish
               </button>
-              <AccountMenu className="relative flex items-center gap-2" />
+              <AccountMenu className="relative flex items-center gap-2" showUpgradePill={false} />
             </div>
           )}
         </nav>

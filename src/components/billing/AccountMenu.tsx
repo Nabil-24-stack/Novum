@@ -9,9 +9,11 @@ import { createClient } from "@/lib/supabase/client";
 interface AccountMenuProps {
   /** Extra classes on the wrapper div (use to override positioning) */
   className?: string;
+  /** Show the Upgrade pill button next to the name (default: true) */
+  showUpgradePill?: boolean;
 }
 
-export function AccountMenu({ className }: AccountMenuProps) {
+export function AccountMenu({ className, showUpgradePill = true }: AccountMenuProps) {
   const router = useRouter();
   const { status } = useBillingStatus();
   const [open, setOpen] = useState(false);
@@ -100,6 +102,18 @@ export function AccountMenu({ className }: AccountMenuProps) {
 
   return (
     <div ref={menuRef} className={className ?? "fixed top-0 right-0 p-4 z-50 flex items-center gap-2"}>
+      {/* Upgrade pill (only on dashboard for free users) */}
+      {showUpgradePill && !isPro && status && (
+        <button
+          onClick={() => handleUpgrade("pill")}
+          disabled={upgradeLoadingSource !== null}
+          className="inline-flex items-center gap-1.5 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-70"
+        >
+          {upgradeLoadingSource === "pill" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+          Upgrade
+        </button>
+      )}
+
       {/* Name + chevron trigger */}
       <button
         onClick={() => setOpen(!open)}
