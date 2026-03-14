@@ -121,6 +121,7 @@ interface StreamingState {
   requestRepairInChat: (pageId: string) => void;
   clearRepairChatIntent: () => void;
   endParallelStreaming: () => void;
+  resetTransientState: () => void;
 
   // --- Annotation evaluation ---
   annotationEvaluation: {
@@ -158,14 +159,47 @@ interface StreamingState {
   resetVerification: () => void;
 }
 
-export const useStreamingStore = create<StreamingState>((set, get) => ({
-  // --- Single-build mode ---
+const createDefaultAnnotationEvaluation = () => ({
+  status: "idle" as const,
+  connectionCount: 0,
+  activePageId: null,
+  activePageName: null,
+  completedPages: 0,
+  failedPages: 0,
+  failedPageIds: [] as string[],
+  totalPages: 0,
+});
+
+const createTransientStreamingState = () => ({
   isStreaming: false,
   statusText: "",
-  currentFile: null,
-  completedFilePaths: [],
-  targetPageId: null,
-  targetPageIds: [],
+  currentFile: null as { path: string; content: string } | null,
+  completedFilePaths: [] as string[],
+  targetPageId: null as string | null,
+  targetPageIds: [] as string[],
+  parallelMode: false,
+  pageBuilds: {} as Record<string, PageBuildState>,
+  buildPhase: "idle" as const,
+  foundationPageId: null as string | null,
+  foundationBuild: { ...defaultFoundationBuild },
+  verificationQueue: [] as string[],
+  verificationActive: null as string | null,
+  annotationQueue: [] as string[],
+  annotationActive: null as string | null,
+  verificationPaused: false,
+  verificationPausedPageId: null as string | null,
+  verificationPausedErrorText: null as string | null,
+  verificationPausedErrorPath: null as string | null,
+  repairChatIntent: null as RepairChatIntent | null,
+  annotationEvaluation: createDefaultAnnotationEvaluation(),
+  refreshSignals: {} as Record<string, number>,
+  verificationStatus: "idle" as const,
+  verificationAttempt: 0,
+  verificationIssues: [] as string[],
+});
+
+export const useStreamingStore = create<StreamingState>((set, get) => ({
+  ...createTransientStreamingState(),
 
   startStreaming: (targetPageIds?: string[] | null) => {
     const normalizedPageIds = targetPageIds?.filter(Boolean) ?? [];
@@ -215,23 +249,6 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
     });
   },
 
-  // --- Parallel-build mode ---
-  parallelMode: false,
-  pageBuilds: {},
-  buildPhase: "idle",
-  foundationPageId: null,
-  foundationBuild: { ...defaultFoundationBuild },
-
-  verificationQueue: [],
-  verificationActive: null,
-  annotationQueue: [],
-  annotationActive: null,
-  verificationPaused: false,
-  verificationPausedPageId: null,
-  verificationPausedErrorText: null,
-  verificationPausedErrorPath: null,
-  repairChatIntent: null,
-
   startParallelStreaming: (pageIds) => {
     const builds: Record<string, PageBuildState> = {};
     for (const id of pageIds) {
@@ -264,13 +281,7 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
       verificationPausedErrorPath: null,
       repairChatIntent: null,
       annotationEvaluation: {
-        status: "idle",
-        connectionCount: 0,
-        activePageId: null,
-        activePageName: null,
-        completedPages: 0,
-        failedPages: 0,
-        failedPageIds: [],
+        ...createDefaultAnnotationEvaluation(),
         totalPages: pageIds.length,
       },
       // Also set isStreaming so overlays know something is happening
@@ -512,18 +523,11 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
     });
   },
 
-  // --- Annotation evaluation ---
-  annotationEvaluation: {
-    status: "idle" as const,
-    connectionCount: 0,
-    activePageId: null,
-    activePageName: null,
-    completedPages: 0,
-    failedPages: 0,
-    failedPageIds: [],
-    totalPages: 0,
+  resetTransientState: () => {
+    set(createTransientStreamingState());
   },
 
+  // --- Annotation evaluation ---
   setAnnotationEvaluation: (update) => {
     set((s) => ({
       annotationEvaluation: { ...s.annotationEvaluation, ...update },
@@ -566,22 +570,11 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
 
   resetAnnotationEvaluation: () => {
     set({
-      annotationEvaluation: {
-        status: "idle",
-        connectionCount: 0,
-        activePageId: null,
-        activePageName: null,
-        completedPages: 0,
-        failedPages: 0,
-        failedPageIds: [],
-        totalPages: 0,
-      },
+      annotationEvaluation: createDefaultAnnotationEvaluation(),
     });
   },
 
   // --- Refresh signals ---
-  refreshSignals: {},
-
   triggerRefresh: (pageId) => {
     if (pageId) {
       set((s) => ({
@@ -601,10 +594,6 @@ export const useStreamingStore = create<StreamingState>((set, get) => ({
   },
 
   // --- Verification loop ---
-  verificationStatus: "idle",
-  verificationAttempt: 0,
-  verificationIssues: [],
-
   startVerification: () => {
     set({
       verificationStatus: "capturing",

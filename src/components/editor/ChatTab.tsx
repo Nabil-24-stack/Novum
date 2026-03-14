@@ -1322,6 +1322,7 @@ export function ChatTab({
 
   // Parallel build orchestrator
   const parallelBuild = useParallelBuild({ writeFile, files, getLatestFile, projectId });
+  const cancelParallelBuildRef = useRef(parallelBuild.cancelAll);
   const parallelBuildConfigRef = useRef<{
     pages: { pageId: string; pageName: string; componentName: string; pageRoute: string }[];
     sharedContext: { manifestoContext: string; personaContext: string; flowContext: string };
@@ -1339,6 +1340,16 @@ export function ChatTab({
     annotationEvaluation.totalPages,
     annotationProcessedPages + (annotationEvaluation.activePageId ? 1 : 0)
   );
+
+  useEffect(() => {
+    cancelParallelBuildRef.current = parallelBuild.cancelAll;
+  }, [parallelBuild.cancelAll]);
+
+  useEffect(() => {
+    return () => {
+      cancelParallelBuildRef.current();
+    };
+  }, []);
 
   const { messages, sendMessage, status, error, stop } = useChat({
     messages: initialMessages,

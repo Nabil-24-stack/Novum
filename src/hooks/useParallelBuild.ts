@@ -2164,12 +2164,11 @@ export function useParallelBuild({
     }
     abortControllersRef.current.clear();
 
-    // Clear verification queue state
-    const store = useStreamingStore.getState();
-    // Reset verification queue manually since endParallelStreaming will clear it
-    store.setVerificationActive(null);
-
     // Clear mutable refs
+    operationIdRef.current = null;
+    allPagesRef.current = [];
+    sharedContextRef.current = null;
+    evaluationTriggeredRef.current = false;
     latestBuildFilesRef.current = {};
     knownFailuresRef.current = [];
     verificationProcessingRef.current = false;
@@ -2181,7 +2180,7 @@ export function useParallelBuild({
       rebuildTimerRef.current = null;
     }
 
-    useStreamingStore.getState().endParallelStreaming();
+    useStreamingStore.getState().resetTransientState();
     useStrategyStore.getState().setBuildingPages([]);
   }, []);
 
