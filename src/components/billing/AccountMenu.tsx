@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Zap, Loader2 } from "lucide-react";
+import { Zap, Loader2 } from "lucide-react";
 import { useBillingStatus } from "@/hooks/useBillingStatus";
 import { createClient } from "@/lib/supabase/client";
 
@@ -114,13 +114,12 @@ export function AccountMenu({ className, showUpgradePill = true }: AccountMenuPr
         </button>
       )}
 
-      {/* Name + chevron trigger */}
+      {/* Avatar trigger */}
       <button
         onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-1 text-sm font-medium text-neutral-900 hover:text-neutral-600 transition-colors py-2 px-1"
+        className="w-8 h-8 rounded-full bg-neutral-400 text-white flex items-center justify-center text-sm font-semibold hover:bg-neutral-500 transition-colors"
       >
-        {userName}
-        <ChevronDown className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} />
+        {initial}
       </button>
 
       {/* Dropdown */}
