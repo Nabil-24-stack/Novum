@@ -3799,13 +3799,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
             </p>
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  const res = await fetch("/api/billing/checkout", { method: "POST" });
-                  const data = await res.json();
-                  if (data.url) window.location.href = data.url;
-                } catch { /* ignore */ }
-              }}
+              onClick={() => { window.location.href = "/pricing"; }}
               className="shrink-0 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors flex items-center gap-1.5"
             >
               <Zap className="w-3.5 h-3.5" />

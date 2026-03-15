@@ -1,9 +1,11 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useBillingStatus } from "@/hooks/useBillingStatus";
 import { Loader2, Zap, Crown } from "lucide-react";
 
 export function BillingCard() {
+  const router = useRouter();
   const { status, isLoading } = useBillingStatus();
 
   if (isLoading) {
@@ -39,14 +41,8 @@ export function BillingCard() {
           ? "bg-amber-500"
           : "bg-neutral-900";
 
-  const handleUpgrade = async () => {
-    try {
-      const res = await fetch("/api/billing/checkout", { method: "POST" });
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
-    } catch {
-      // Silently fail
-    }
+  const handleUpgrade = () => {
+    router.push("/pricing");
   };
 
   const handleManage = async () => {

@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useBillingStore } from "@/hooks/useBillingStore";
 import { useBillingStatus } from "@/hooks/useBillingStatus";
 import { X, Zap } from "lucide-react";
@@ -7,6 +8,8 @@ import { X, Zap } from "lucide-react";
 export function BillingLimitModal() {
   const { limitModalOpen, limitReason, closeLimitModal } = useBillingStore();
   const { status } = useBillingStatus();
+
+  const router = useRouter();
 
   if (!limitModalOpen) return null;
 
@@ -19,14 +22,9 @@ export function BillingLimitModal() {
       })
     : null;
 
-  const handleUpgrade = async () => {
-    try {
-      const res = await fetch("/api/billing/checkout", { method: "POST" });
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
-    } catch {
-      // Silently fail
-    }
+  const handleUpgrade = () => {
+    closeLimitModal();
+    router.push("/pricing");
   };
 
   const handleManage = async () => {

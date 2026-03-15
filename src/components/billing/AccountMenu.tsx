@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Zap, Loader2 } from "lucide-react";
+import { Zap } from "lucide-react";
 import { useBillingStatus } from "@/hooks/useBillingStatus";
 import { createClient } from "@/lib/supabase/client";
 
@@ -19,7 +19,6 @@ export function AccountMenu({ className, showUpgradePill = true }: AccountMenuPr
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const [upgradeLoadingSource, setUpgradeLoadingSource] = useState<"pill" | "dropdown" | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
 
@@ -61,24 +60,9 @@ export function AccountMenu({ className, showUpgradePill = true }: AccountMenuPr
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
-  const handleUpgrade = async (source: "pill" | "dropdown") => {
-    setUpgradeLoadingSource(source);
-    try {
-      const res = await fetch("/api/billing/checkout", { method: "POST" });
-      const data = await res.json();
-      if (data.url) {
-        if (data.sessionId) {
-          sessionStorage.setItem("novum-stripe-session", data.sessionId);
-        }
-        window.open(data.url, "_blank");
-      } else {
-        console.error("[AccountMenu] Checkout response missing URL:", data);
-      }
-    } catch (err) {
-      console.error("[AccountMenu] Checkout error:", err);
-    } finally {
-      setUpgradeLoadingSource(null);
-    }
+  const handleUpgrade = () => {
+    setOpen(false);
+    router.push("/pricing");
   };
 
   const handleManage = async () => {
@@ -114,11 +98,10 @@ export function AccountMenu({ className, showUpgradePill = true }: AccountMenuPr
           </span>
         ) : (
           <button
-            onClick={() => handleUpgrade("pill")}
-            disabled={upgradeLoadingSource !== null}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-70"
+            onClick={handleUpgrade}
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors"
           >
-            {upgradeLoadingSource === "pill" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            <Zap className="w-3.5 h-3.5" />
             Upgrade
           </button>
         )
@@ -211,11 +194,10 @@ export function AccountMenu({ className, showUpgradePill = true }: AccountMenuPr
                 </button>
               ) : (
                 <button
-                  onClick={() => handleUpgrade("dropdown")}
-                  disabled={upgradeLoadingSource !== null}
-                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-70"
+                  onClick={handleUpgrade}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors"
                 >
-                  {upgradeLoadingSource === "dropdown" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                  <Zap className="w-4 h-4" />
                   Upgrade
                 </button>
               )}
