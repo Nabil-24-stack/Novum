@@ -539,7 +539,7 @@ export function useParallelBuild({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ operationId: operationIdRef.current }),
       })
-        .then(() => notifyUsageChanged())
+        .then(() => notifyUsageChanged({ delayedRefetch: true }))
         .catch(() => {});
     }
   }, []);

@@ -1354,7 +1354,7 @@ export function ChatTab({
     };
   }, []);
 
-  const { messages, sendMessage, status, error, stop } = useChat({
+  const { messages, sendMessage: rawSendMessage, status, error, stop } = useChat({
     messages: initialMessages,
     onError: (err) => {
       console.error("Chat error:", err);
@@ -1372,6 +1372,17 @@ export function ChatTab({
       trackEvent("ai_response_error", projectId, { error: String(err).slice(0, 500) });
     },
   });
+
+  // Wrap sendMessage to auto-inject projectId into every request body
+  const sendMessage = useCallback(
+    (message: Parameters<typeof rawSendMessage>[0], options?: Parameters<typeof rawSendMessage>[1]) => {
+      return rawSendMessage(message, {
+        ...options,
+        body: { ...((options as Record<string, unknown>)?.body as Record<string, unknown> ?? {}), projectId },
+      });
+    },
+    [rawSendMessage, projectId]
+  );
 
   // Pre-populate dedup sets with restored messages so they don't re-trigger VFS writes
   const didPrePopulateRef = useRef(false);
@@ -2552,7 +2563,7 @@ export function ChatTab({
 
     if (wasActive && status === "ready") {
       // Refresh billing usage after any AI response completes
-      notifyUsageChanged();
+      notifyUsageChanged({ delayedRefetch: true });
 
       const store = useStreamingStore.getState();
       if (store.completedFilePaths.length === 0) return; // No code written
