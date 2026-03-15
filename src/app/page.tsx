@@ -6,6 +6,7 @@ import { Send, Loader2, X, Info } from "lucide-react";
 import { toast } from "sonner";
 import { useProjects } from "@/hooks/useProjects";
 import { useDocumentStore } from "@/hooks/useDocumentStore";
+import { useBillingStatus } from "@/hooks/useBillingStatus";
 import { ProjectCard } from "@/components/dashboard/ProjectCard";
 import { AccountMenu } from "@/components/billing/AccountMenu";
 
@@ -18,6 +19,69 @@ export default function Dashboard() {
       document.documentElement.style.overflow = "";
       document.body.style.overflow = "";
     };
+  }, []);
+
+  // Handle Stripe checkout redirect (?billing=success or ?billing=cancelled)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const billingParam = params.get("billing");
+    if (!billingParam) return;
+
+    // Clean the URL immediately
+    window.history.replaceState({}, "", window.location.pathname);
+
+    if (billingParam === "cancelled") {
+      toast.info("Checkout cancelled.");
+      return;
+    }
+
+    if (billingParam === "success") {
+      toast.success("Upgrade successful! Welcome to Pro.");
+
+      // Poll billing status — webhook may still be processing
+      const { refresh } = useBillingStatus.getState();
+      refresh();
+
+      let attempts = 0;
+      const interval = setInterval(async () => {
+        attempts++;
+        await refresh();
+        const status = useBillingStatus.getState().status;
+
+        if (status?.planTier === "pro") {
+          clearInterval(interval);
+          sessionStorage.removeItem("novum-stripe-session");
+          return;
+        }
+
+        // After 3 polls without upgrade, try server-side verification as fallback
+        if (attempts === 3) {
+          const stripeSessionId = sessionStorage.getItem("novum-stripe-session");
+          if (stripeSessionId) {
+            try {
+              const res = await fetch("/api/billing/verify-checkout", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ sessionId: stripeSessionId }),
+              });
+              const data = await res.json();
+              if (data.upgraded) {
+                sessionStorage.removeItem("novum-stripe-session");
+                await refresh();
+              }
+            } catch {
+              // Non-critical — user can still manually refresh
+            }
+          }
+        }
+
+        if (attempts >= 5) {
+          clearInterval(interval);
+        }
+      }, 3000);
+
+      return () => clearInterval(interval);
+    }
   }, []);
 
   const router = useRouter();

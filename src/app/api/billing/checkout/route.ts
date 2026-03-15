@@ -6,8 +6,8 @@ export async function POST() {
   if (auth.response) return auth.response;
 
   try {
-    const url = await createCheckoutSession(auth.user.id, auth.user.email || "");
-    return Response.json({ url });
+    const { url, sessionId } = await createCheckoutSession(auth.user.id, auth.user.email || "");
+    return Response.json({ url, sessionId });
   } catch (err) {
     console.error("[billing/checkout] Error:", err);
     return Response.json({ error: "Failed to create checkout session" }, { status: 500 });

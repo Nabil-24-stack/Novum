@@ -32,6 +32,18 @@ export const useBillingStatus = create<BillingStatusState>((set) => {
     window.addEventListener("billing:usage-changed", () => {
       refresh();
     });
+
+    // Refresh when user returns to this tab (e.g. after Stripe checkout in new tab)
+    let lastRefreshAt = 0;
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        const now = Date.now();
+        if (now - lastRefreshAt > 5000) {
+          lastRefreshAt = now;
+          refresh();
+        }
+      }
+    });
   }
 
   return {

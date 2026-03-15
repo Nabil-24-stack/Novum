@@ -37,7 +37,7 @@ function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
 export async function createCheckoutSession(
   userId: string,
   email: string
-): Promise<string> {
+): Promise<{ url: string; sessionId: string }> {
   const stripe = getStripe();
   const supabase = createSupabaseAdmin();
 
@@ -69,7 +69,7 @@ export async function createCheckoutSession(
     },
   });
 
-  return session.url!;
+  return { url: session.url!, sessionId: session.id };
 }
 
 export async function createPortalSession(
@@ -88,16 +88,24 @@ export async function createPortalSession(
 export async function syncStripeSubscription(event: Stripe.Event): Promise<void> {
   const supabase = createSupabaseAdmin();
 
+  console.log("[stripe/sync] Processing event:", event.type, event.id);
+
   switch (event.type) {
     case "checkout.session.completed": {
       const session = event.data.object as Stripe.Checkout.Session;
       const subId = session.subscription;
-      if (!subId) break;
+      if (!subId) {
+        console.warn("[stripe/sync] checkout.session.completed: no subscription ID on session", { sessionId: session.id });
+        break;
+      }
 
       const subIdStr = typeof subId === "string" ? subId : subId.id;
       const subscription = await getStripe().subscriptions.retrieve(subIdStr);
       const userId = subscription.metadata.supabase_user_id;
-      if (!userId) break;
+      if (!userId) {
+        console.warn("[stripe/sync] checkout.session.completed: no supabase_user_id in subscription metadata", { subscriptionId: subIdStr });
+        break;
+      }
 
       const { periodStart, periodEnd } = getSubscriptionPeriod(subscription);
 
@@ -137,13 +145,18 @@ export async function syncStripeSubscription(event: Stripe.Event): Promise<void>
         is_active: true,
       });
 
+      console.log("[stripe/sync] checkout.session.completed: upgraded user to Pro", { userId, subscriptionId: subscription.id });
+
       break;
     }
 
     case "customer.subscription.updated": {
       const subscription = event.data.object as Stripe.Subscription;
       const userId = subscription.metadata.supabase_user_id;
-      if (!userId) break;
+      if (!userId) {
+        console.warn("[stripe/sync] customer.subscription.updated: no supabase_user_id in metadata", { subscriptionId: subscription.id });
+        break;
+      }
 
       const { periodStart, periodEnd } = getSubscriptionPeriod(subscription);
 
@@ -165,7 +178,10 @@ export async function syncStripeSubscription(event: Stripe.Event): Promise<void>
     case "customer.subscription.deleted": {
       const subscription = event.data.object as Stripe.Subscription;
       const userId = subscription.metadata.supabase_user_id;
-      if (!userId) break;
+      if (!userId) {
+        console.warn("[stripe/sync] customer.subscription.deleted: no supabase_user_id in metadata", { subscriptionId: subscription.id });
+        break;
+      }
 
       const now = new Date();
 
@@ -213,11 +229,17 @@ export async function syncStripeSubscription(event: Stripe.Event): Promise<void>
     case "invoice.payment_succeeded": {
       const invoice = event.data.object as Stripe.Invoice;
       const subId = getInvoiceSubscriptionId(invoice);
-      if (!subId) break;
+      if (!subId) {
+        console.warn("[stripe/sync] invoice.payment_succeeded: no subscription ID on invoice", { invoiceId: invoice.id });
+        break;
+      }
 
       const subscription = await getStripe().subscriptions.retrieve(subId);
       const userId = subscription.metadata.supabase_user_id;
-      if (!userId) break;
+      if (!userId) {
+        console.warn("[stripe/sync] invoice.payment_succeeded: no supabase_user_id in metadata", { subscriptionId: subId });
+        break;
+      }
 
       // Check if this is a renewal (not the initial invoice)
       if (invoice.billing_reason === "subscription_cycle") {
@@ -257,11 +279,17 @@ export async function syncStripeSubscription(event: Stripe.Event): Promise<void>
     case "invoice.payment_failed": {
       const invoice = event.data.object as Stripe.Invoice;
       const subId = getInvoiceSubscriptionId(invoice);
-      if (!subId) break;
+      if (!subId) {
+        console.warn("[stripe/sync] invoice.payment_failed: no subscription ID on invoice", { invoiceId: invoice.id });
+        break;
+      }
 
       const subscription = await getStripe().subscriptions.retrieve(subId);
       const userId = subscription.metadata.supabase_user_id;
-      if (!userId) break;
+      if (!userId) {
+        console.warn("[stripe/sync] invoice.payment_failed: no supabase_user_id in metadata", { subscriptionId: subId });
+        break;
+      }
 
       await getOrCreateBillingAccount(userId);
       await supabase

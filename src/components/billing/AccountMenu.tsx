@@ -67,6 +67,9 @@ export function AccountMenu({ className, showUpgradePill = true }: AccountMenuPr
       const res = await fetch("/api/billing/checkout", { method: "POST" });
       const data = await res.json();
       if (data.url) {
+        if (data.sessionId) {
+          sessionStorage.setItem("novum-stripe-session", data.sessionId);
+        }
         window.open(data.url, "_blank");
       } else {
         console.error("[AccountMenu] Checkout response missing URL:", data);
