@@ -59,7 +59,7 @@ import {
   type AutoAnnotationRequest,
 } from "@/lib/ai/annotation-targets";
 import { useParams, useRouter } from "next/navigation";
-import { Monitor, GitBranch, Share, RefreshCw, RotateCw, ChevronLeft, Loader2 as LoaderIcon, Lock } from "lucide-react";
+import { Monitor, GitBranch, Share, RefreshCw, ChevronLeft, ChevronDown, Loader2 as LoaderIcon, Lock } from "lucide-react";
 import { useBillingStatus } from "@/hooks/useBillingStatus";
 import { toast } from "sonner";
 import { toPascalCase } from "@/lib/vfs/app-generator";
@@ -71,6 +71,7 @@ import type { FlowNodePosition } from "@/lib/flow/types";
 import type { PreviewMode } from "@/lib/tokens";
 import { serializeCanvasLayout, deserializeCanvasLayout } from "@/lib/canvas/canvas-layout-types";
 import type { RepairChatDraft } from "@/components/editor/ChatTab";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type ViewMode = "app" | "design-system";
 
@@ -338,6 +339,7 @@ export default function ProjectEditor() {
   const documentInputRef = useRef<HTMLInputElement>(null);
   // Re-evaluate annotations state
   const [isReEvaluating, setIsReEvaluating] = useState(false);
+  const [isAnnotationsMenuOpen, setIsAnnotationsMenuOpen] = useState(false);
   const reEvaluateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reEvaluateRunTokenRef = useRef(0);
   const pendingAutoAnnotationRequestRef = useRef<AutoAnnotationRequest | null>(null);
@@ -2137,26 +2139,37 @@ export default function ProjectEditor() {
           {/* Action buttons on far right */}
           {!isEarlyStrategyPhase && viewMode === "app" && (
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setGlobalRefreshCounter((c) => c + 1)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
-                title="Refresh all frames"
-              >
-                <RefreshCw className="w-4 h-4" />
-              </button>
-              {/* Annotations split button — toggle + retry/re-evaluate */}
+              <div className="relative group">
+                <button
+                  onClick={() => setGlobalRefreshCounter((c) => c + 1)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+                <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-neutral-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                  Refresh all frames
+                </div>
+              </div>
+              {/* Annotations split button — toggle + action menu */}
               {!isFrameExpanded && manifestoData && personaData && completedPages.length > 0 && (() => {
                 const hasConnections = brainData?.pages?.some((p) => p.connections.length > 0) ?? false;
                 const annotationsActive = annotationActiveFrames.size > 0;
+                const splitButtonBorderClass = annotationsActive
+                  ? "border-amber-300"
+                  : strategyUpdatedAfterBuild
+                    ? "border-blue-300"
+                    : "border-neutral-300";
+                const splitButtonDividerClass = annotationsActive
+                  ? "bg-amber-300"
+                  : strategyUpdatedAfterBuild
+                    ? "bg-blue-300"
+                    : "bg-neutral-300";
                 return (
-                  <div className={`flex items-stretch rounded-md overflow-hidden border transition-colors ${
-                    annotationsActive
-                      ? "border-amber-300"
-                      : strategyUpdatedAfterBuild
-                        ? "border-blue-300 animate-pulse"
-                        : "border-neutral-300"
-                  }`}>
+                  <div className={`flex items-stretch rounded-md border bg-white shadow-sm transition-colors ${
+                    splitButtonBorderClass
+                  } ${strategyUpdatedAfterBuild ? "animate-pulse" : ""}`}>
                     <button
+                      type="button"
                       onClick={() => {
                         if (!hasConnections || !brainData) return;
                         const pagesWithConnections = brainData.pages
@@ -2168,34 +2181,60 @@ export default function ProjectEditor() {
                           openAllAnnotations(pagesWithConnections);
                         }
                       }}
-                      className={`flex items-center px-3 py-1.5 text-sm font-medium transition-colors ${
+                      className={`relative flex items-center px-3 py-1.5 text-sm font-medium transition-colors group/ann ${
                         !hasConnections
                           ? "text-neutral-400 cursor-default"
                           : annotationsActive
-                            ? "text-amber-700 bg-amber-50 hover:bg-amber-100"
-                            : "text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50"
+                            ? "bg-amber-50 text-amber-700 hover:bg-amber-100"
+                            : "text-neutral-900 hover:bg-neutral-50"
                       }`}
-                      title={!hasConnections ? "No annotations available — click retry to generate" : annotationsActive ? "Hide all annotations" : "Show all annotations"}
                     >
                       Annotations
+                      <div className="absolute top-full left-0 mt-2 px-2 py-1 bg-neutral-900 text-white text-xs rounded opacity-0 group-hover/ann:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                        {!hasConnections ? "No annotations available — open the menu to generate" : annotationsActive ? "Hide all annotations" : "Show all annotations"}
+                      </div>
                     </button>
-                    <div className={`w-px ${annotationsActive ? "bg-amber-300" : strategyUpdatedAfterBuild ? "bg-blue-300" : "bg-neutral-300"}`} />
-                    <button
-                      onClick={() => {
-                        void handleReEvaluateAnnotations();
-                      }}
-                      disabled={isReEvaluating}
-                      className={`flex items-center px-2 py-1.5 transition-colors ${
-                        strategyUpdatedAfterBuild || (!hasConnections && !isReEvaluating)
-                          ? "text-blue-700 bg-blue-50 hover:bg-blue-100"
-                          : isReEvaluating
-                            ? "text-neutral-400 cursor-not-allowed"
-                            : "text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50"
-                      }`}
-                      title={!hasConnections ? "Generate annotations" : strategyUpdatedAfterBuild ? "Strategy changed — re-evaluate annotations" : isReEvaluating ? "Evaluating annotations…" : "Retry / re-evaluate annotations"}
-                    >
-                      <RotateCw className={`w-4 h-4 ${isReEvaluating ? "animate-spin" : ""}`} />
-                    </button>
+                    <div className={`w-px ${splitButtonDividerClass}`} />
+                    <Popover open={isAnnotationsMenuOpen} onOpenChange={setIsAnnotationsMenuOpen}>
+                      <PopoverTrigger
+                        type="button"
+                        disabled={isReEvaluating}
+                        className={`relative flex items-center px-2.5 py-1.5 transition-colors group/chevron ${
+                          strategyUpdatedAfterBuild || (!hasConnections && !isReEvaluating)
+                            ? "bg-blue-50 text-blue-700 hover:bg-blue-100"
+                            : isReEvaluating
+                              ? "cursor-not-allowed text-neutral-400"
+                              : "text-neutral-900 hover:bg-neutral-50"
+                        }`}
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                        <div className="absolute top-full right-0 mt-2 px-2 py-1 bg-neutral-900 text-white text-xs rounded opacity-0 group-hover/chevron:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                          {!hasConnections ? "Generate annotations" : strategyUpdatedAfterBuild ? "Strategy changed — re-evaluate annotations" : isReEvaluating ? "Evaluating annotations…" : "Annotation actions"}
+                        </div>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        align="end"
+                        side="bottom"
+                        sideOffset={8}
+                        className="w-52 rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-lg"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsAnnotationsMenuOpen(false);
+                            void handleReEvaluateAnnotations();
+                          }}
+                          disabled={isReEvaluating}
+                          className={`flex w-full items-center rounded-xl px-3 py-2 text-left text-sm font-medium transition-colors ${
+                            isReEvaluating
+                              ? "cursor-not-allowed text-neutral-400"
+                              : "text-neutral-900 hover:bg-neutral-100"
+                          }`}
+                        >
+                          Refresh annotation
+                        </button>
+                      </PopoverContent>
+                    </Popover>
                   </div>
                 );
               })()}
@@ -2208,25 +2247,29 @@ export default function ProjectEditor() {
                 />
                 <button
                   onClick={isFrameExpanded ? handlePrototypeToggle : undefined}
-                  className={`relative z-10 flex items-center justify-center w-8 h-7 rounded-md transition-colors duration-200 ${
+                  className={`relative z-10 flex items-center justify-center w-8 h-7 rounded-md transition-colors duration-200 group/canvas ${
                     !isFrameExpanded
                       ? "text-neutral-900"
                       : "text-neutral-500 hover:text-neutral-700"
                   }`}
-                  title="Canvas View"
                 >
                   <GitBranch className="w-4 h-4" />
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-neutral-900 text-white text-xs rounded opacity-0 group-hover/canvas:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                    Canvas View
+                  </div>
                 </button>
                 <button
                   onClick={!isFrameExpanded ? handlePrototypeToggle : undefined}
-                  className={`relative z-10 flex items-center justify-center w-8 h-7 rounded-md transition-colors duration-200 ${
+                  className={`relative z-10 flex items-center justify-center w-8 h-7 rounded-md transition-colors duration-200 group/proto ${
                     isFrameExpanded
                       ? "text-neutral-900"
                       : "text-neutral-500 hover:text-neutral-700"
                   }`}
-                  title="Prototype View"
                 >
                   <Monitor className="w-4 h-4" />
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-neutral-900 text-white text-xs rounded opacity-0 group-hover/proto:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                    Prototype View
+                  </div>
                 </button>
               </div>
               <div className="relative group">
