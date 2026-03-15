@@ -65,18 +65,9 @@ export function AccountMenu({ className, showUpgradePill = true }: AccountMenuPr
     router.push("/pricing");
   };
 
-  const handleManage = async () => {
-    try {
-      const res = await fetch("/api/billing/portal", { method: "POST" });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        console.error("[AccountMenu] Portal response missing URL:", data);
-      }
-    } catch (err) {
-      console.error("[AccountMenu] Portal error:", err);
-    }
+  const handleManage = () => {
+    setOpen(false);
+    router.push("/pricing");
   };
 
   const handleSignOut = async () => {

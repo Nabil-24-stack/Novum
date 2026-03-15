@@ -45,14 +45,8 @@ export function BillingCard() {
     router.push("/pricing");
   };
 
-  const handleManage = async () => {
-    try {
-      const res = await fetch("/api/billing/portal", { method: "POST" });
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
-    } catch {
-      // Silently fail
-    }
+  const handleManage = () => {
+    router.push("/pricing");
   };
 
   return (
