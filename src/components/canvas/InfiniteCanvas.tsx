@@ -31,6 +31,7 @@ export function useCanvasScale() {
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 3;
 const ZOOM_SENSITIVITY = 0.01;
+const SHOW_CANVAS_TOOLBAR = false;
 
 export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(function InfiniteCanvas(
   { children, viewport, onViewportChange, activeTool, onToolChange, isDrawingActive, onCanvasClick, hideChrome },
@@ -48,7 +49,7 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
 
   // Keyboard shortcuts for tool switching
   useEffect(() => {
-    if (!onToolChange) return;
+    if (!SHOW_CANVAS_TOOLBAR || !onToolChange) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't trigger shortcuts when typing in input fields
@@ -307,7 +308,7 @@ export const InfiniteCanvas = forwardRef<HTMLDivElement, InfiniteCanvasProps>(fu
         )}
 
         {/* Canvas Toolbar */}
-        {!hideChrome && onToolChange && (
+        {!hideChrome && SHOW_CANVAS_TOOLBAR && onToolChange && (
           <CanvasToolbar
             activeTool={activeTool ?? "cursor"}
             onToolChange={onToolChange}

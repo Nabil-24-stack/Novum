@@ -2165,7 +2165,7 @@ export default function ProjectEditor() {
                     ? "bg-blue-300"
                     : "bg-neutral-300";
                 return (
-                  <div className={`flex items-stretch rounded-md border bg-white shadow-sm transition-colors ${
+                  <div className={`flex items-stretch rounded-md border bg-white transition-colors ${
                     splitButtonBorderClass
                   } ${strategyUpdatedAfterBuild ? "animate-pulse" : ""}`}>
                     <button

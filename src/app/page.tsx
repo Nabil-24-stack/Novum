@@ -160,13 +160,17 @@ export default function Dashboard() {
 
   return (
     <main className="min-h-screen bg-neutral-50" style={{ overflow: "auto", height: "auto" }}>
-      {/* Account menu (top-right) */}
-      <AccountMenu />
+      <header className="h-20 px-6 flex items-center justify-between">
+        <div className="text-xl font-semibold text-neutral-900 tracking-tight">
+          Novum
+        </div>
+        <AccountMenu className="relative z-50 flex items-center gap-2" />
+      </header>
 
       {/* Hero section — full viewport minus peek */}
-      <section className="h-[calc(100vh-80px)] flex flex-col items-center justify-center px-4">
-        <h1 className="text-4xl font-semibold text-neutral-900 tracking-tight">
-          Novum
+      <section className="h-[calc(100vh-160px)] flex flex-col items-center justify-center px-4">
+        <h1 className="max-w-3xl text-center text-4xl font-semibold tracking-tight text-neutral-900">
+          Don&apos;t just build apps. Solve problems.
         </h1>
         <p className="mt-3 text-neutral-500 text-center max-w-md">
           Describe the problem you want to solve, and I&apos;ll help you design and build a web app.
