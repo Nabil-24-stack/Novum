@@ -224,6 +224,10 @@ export async function authorizeAction(
       if (period.free_generations_used >= period.free_generations_limit) {
         return { allowed: false, reason: `Free plan limit reached (${period.free_generations_used}/${period.free_generations_limit} builds used). Upgrade to Pro for more.` };
       }
+      // Also check shared budget since builds consume it
+      if (period.free_shared_spent_usd_micros >= period.free_shared_budget_usd_micros) {
+        return { allowed: false, reason: "Free plan AI usage budget exhausted. Upgrade to Pro for more." };
+      }
       // Generation count is incremented on finalize, not here,
       // so failed builds don't consume a slot.
     } else {
@@ -320,8 +324,8 @@ export async function recordUsage(params: {
           p_period_id: op.period_id,
           p_amount: costMicros,
         });
-      } else if (op.operation_type !== "initial_generation") {
-        // Free tier build_usage: decrement shared budget
+      } else {
+        // Free tier: all non-strategy usage decrements shared budget
         await supabase.rpc("increment_period_free_shared_spent", {
           p_period_id: op.period_id,
           p_amount: costMicros,
