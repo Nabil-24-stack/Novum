@@ -105,16 +105,23 @@ export function AccountMenu({ className, showUpgradePill = true }: AccountMenuPr
 
   return (
     <div ref={menuRef} className={className ?? "fixed top-0 right-0 p-4 z-50 flex items-center gap-2"}>
-      {/* Upgrade pill (only on dashboard for free users) */}
-      {showUpgradePill && !isPro && status && (
-        <button
-          onClick={() => handleUpgrade("pill")}
-          disabled={upgradeLoadingSource !== null}
-          className="inline-flex items-center gap-1.5 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-70"
-        >
-          {upgradeLoadingSource === "pill" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-          Upgrade
-        </button>
+      {/* Pill next to avatar: Upgrade (free) or Pro tag (pro) */}
+      {showUpgradePill && status && (
+        isPro ? (
+          <span className="inline-flex items-center gap-1 px-3 py-1.5 bg-neutral-900 text-white text-xs font-semibold rounded-full">
+            <Zap className="w-3 h-3" />
+            Pro
+          </span>
+        ) : (
+          <button
+            onClick={() => handleUpgrade("pill")}
+            disabled={upgradeLoadingSource !== null}
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-70"
+          >
+            {upgradeLoadingSource === "pill" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            Upgrade
+          </button>
+        )
       )}
 
       {/* Avatar trigger */}
