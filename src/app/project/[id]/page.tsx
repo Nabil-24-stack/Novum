@@ -59,7 +59,8 @@ import {
   type AutoAnnotationRequest,
 } from "@/lib/ai/annotation-targets";
 import { useParams, useRouter } from "next/navigation";
-import { Monitor, GitBranch, Share, RefreshCw, RotateCw, ChevronLeft, Loader2 as LoaderIcon } from "lucide-react";
+import { Monitor, GitBranch, Share, RefreshCw, RotateCw, ChevronLeft, Loader2 as LoaderIcon, Lock } from "lucide-react";
+import { useBillingStatus } from "@/hooks/useBillingStatus";
 import { toast } from "sonner";
 import { toPascalCase } from "@/lib/vfs/app-generator";
 import { animateViewport, calculateCenteredViewport, calculateFitAllViewport } from "@/lib/canvas/viewport-animation";
@@ -162,6 +163,9 @@ export default function ProjectEditor() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [chatMessages, setChatMessages] = useState<any[] | null>(null);
   const didHydrateRef = useRef(false);
+
+  const { status: billingStatus } = useBillingStatus();
+  const isPro = billingStatus?.planTier === "pro";
 
   const { files, writeFile, getLatestFile, resetFiles } = useVirtualFiles();
 
@@ -2225,12 +2229,24 @@ export default function ProjectEditor() {
                   <Monitor className="w-4 h-4" />
                 </button>
               </div>
-              <button
-                onClick={() => setViewMode("design-system")}
-                className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
-              >
-                Design System
-              </button>
+              <div className="relative group">
+                <button
+                  onClick={isPro ? () => setViewMode("design-system") : undefined}
+                  className={`px-3 py-1.5 text-sm font-medium border rounded-md transition-colors flex items-center gap-1.5 ${
+                    isPro
+                      ? "text-neutral-600 hover:text-neutral-900 border-neutral-300 hover:border-neutral-400 cursor-pointer"
+                      : "text-neutral-400 border-neutral-200 cursor-default"
+                  }`}
+                >
+                  {!isPro && <Lock className="w-3.5 h-3.5" />}
+                  Design System
+                </button>
+                {!isPro && (
+                  <div className="absolute top-full right-0 mt-2 px-2 py-1 bg-neutral-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                    Access prebuilt styles and custom design systems on the Pro plan.
+                  </div>
+                )}
+              </div>
               <button
                 onClick={() => setPublishDialogOpen(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-neutral-900 border border-neutral-300 rounded-md hover:border-neutral-400 transition-colors"
@@ -2565,7 +2581,7 @@ export default function ProjectEditor() {
 
         {/* Design System: Full-width preview — unmounted during early strategy phases
             to avoid SandpackProvider re-render cascades from rapid Zustand updates */}
-        {!isEarlyStrategyPhase && (
+        {!isEarlyStrategyPhase && isPro && (
           <div className={`flex-1 flex flex-col h-full ${viewMode !== "design-system" ? "hidden" : ""}`}>
             <div className="flex items-center gap-2 px-4 py-2 border-b border-neutral-200 bg-white shrink-0">
               <button
@@ -2635,7 +2651,7 @@ export default function ProjectEditor() {
         />
 
         {/* Token Studio - only shown in design-system mode */}
-        {viewMode === "design-system" && !isEarlyStrategyPhase && (
+        {viewMode === "design-system" && !isEarlyStrategyPhase && isPro && (
           <TokenStudio tokenState={tokenState} />
         )}
       </div>

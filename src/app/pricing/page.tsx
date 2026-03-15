@@ -10,21 +10,19 @@ type AuthState = "loading" | "anonymous" | "free" | "pro";
 
 const FREE_FEATURES = [
   "2 app builds per month",
-  "Shared AI refinement budget",
-  "All design system features",
-  "Full visual editor",
-  "Token Studio presets",
-  "Flow View",
-  "Multi-model AI chat",
+  "Unlimited strategy planning with AI",
+  "Limited app editing with AI + full manual editing",
+  "Publish app with Novum branding",
 ];
 
 const PRO_FEATURES = [
-  "Unlimited builds",
-  "$10/month AI budget",
-  "Everything in Free, plus:",
-  "Priority support",
-  "Higher token limits",
-  "Advanced strategy tools",
+  "Unlimited app builds",
+  "Unlimited strategy planning with AI",
+  "Expanded app editing with AI + full manual editing",
+  "Publish app with no Novum branding",
+  "Access to pre built design systems",
+  "Access to design system customisation",
+  "Priority Support",
 ];
 
 export default function PricingPage() {
@@ -239,22 +237,10 @@ export default function PricingPage() {
 
             {/* Feature list */}
             <div className="border-t border-neutral-200 mt-6 pt-6 space-y-3 flex-1">
-              {PRO_FEATURES.map((feature, i) => (
+              {PRO_FEATURES.map((feature) => (
                 <div key={feature} className="flex items-start gap-3">
-                  {i === 2 ? (
-                    <div className="w-5 shrink-0" />
-                  ) : (
-                    <Check className="w-5 h-5 text-neutral-900 shrink-0 mt-0.5" />
-                  )}
-                  <span
-                    className={`text-sm ${
-                      i === 2
-                        ? "text-neutral-400 font-medium"
-                        : "text-neutral-600"
-                    }`}
-                  >
-                    {feature}
-                  </span>
+                  <Check className="w-5 h-5 text-neutral-900 shrink-0 mt-0.5" />
+                  <span className="text-sm text-neutral-600">{feature}</span>
                 </div>
               ))}
             </div>
