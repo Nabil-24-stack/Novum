@@ -9,6 +9,7 @@ import { useDocumentStore } from "@/hooks/useDocumentStore";
 import { useBillingStatus } from "@/hooks/useBillingStatus";
 import { ProjectCard } from "@/components/dashboard/ProjectCard";
 import { AccountMenu } from "@/components/billing/AccountMenu";
+import { cn } from "@/lib/utils";
 
 export default function Dashboard() {
   // Override the global overflow:hidden on html/body so the dashboard can scroll
@@ -91,6 +92,7 @@ export default function Dashboard() {
   const docFileInputRef = useRef<HTMLInputElement>(null);
   const uploadedDocuments = useDocumentStore((s) => s.documents);
   const isDocUploading = useDocumentStore((s) => s.isUploading);
+  const showProjectsSection = !isLoading && projects.length > 0;
 
   const handleDocumentUpload = useCallback(async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -167,8 +169,13 @@ export default function Dashboard() {
         <AccountMenu className="relative z-50 flex items-center gap-2" />
       </header>
 
-      {/* Hero section — full viewport minus peek */}
-      <section className="h-[calc(100vh-160px)] flex flex-col items-center justify-center px-4">
+      {/* Hero section — full viewport unless there are projects peeking below the fold */}
+      <section
+        className={cn(
+          "flex flex-col items-center justify-center px-4",
+          showProjectsSection ? "h-[calc(100vh-160px)]" : "min-h-[calc(100vh-80px)]"
+        )}
+      >
         <h1 className="max-w-3xl text-center text-4xl font-semibold tracking-tight text-neutral-900">
           Don&apos;t just build apps. Solve problems.
         </h1>
@@ -271,19 +278,11 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {/* Projects section — peeks 80px above fold */}
-      <section className="px-4 pb-16 max-w-6xl mx-auto">
-        <h2 className="text-xl font-semibold text-neutral-900 mb-6">Your projects</h2>
+      {showProjectsSection && (
+        /* Projects section — peeks 80px above fold */
+        <section className="px-4 pb-16 max-w-6xl mx-auto">
+          <h2 className="text-xl font-semibold text-neutral-900 mb-6">Your projects</h2>
 
-        {isLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="w-5 h-5 animate-spin text-neutral-400" />
-          </div>
-        ) : projects.length === 0 ? (
-          <p className="text-neutral-400 text-sm text-center py-12">
-            No projects yet. Describe a problem above to get started.
-          </p>
-        ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {projects.map((project) => (
               <ProjectCard
@@ -294,8 +293,8 @@ export default function Dashboard() {
               />
             ))}
           </div>
-        )}
-      </section>
+        </section>
+      )}
     </main>
   );
 }
