@@ -35,7 +35,8 @@ export async function updateSession(request: NextRequest) {
   const isPublicRoute =
     pathname.startsWith("/p/") ||
     pathname.startsWith("/login") ||
-    pathname.startsWith("/auth");
+    pathname.startsWith("/auth") ||
+    pathname.startsWith("/api/stripe/webhook");
 
   if (!user && !isPublicRoute) {
     const url = request.nextUrl.clone();
