@@ -1316,6 +1316,7 @@ export function ChatTab({
   const foundationPageId = useStreamingStore((s) => s.foundationPageId);
   const foundationBuild = useStreamingStore((s) => s.foundationBuild);
   const annotationEvaluation = useStreamingStore((s) => s.annotationEvaluation);
+  const globalVerificationStatus = useStreamingStore((s) => s.verificationStatus);
   const verificationPaused = useStreamingStore((s) => s.verificationPaused);
   const verificationPausedPageId = useStreamingStore((s) => s.verificationPausedPageId);
   const requestRepairInChat = useStreamingStore((s) => s.requestRepairInChat);
@@ -1454,6 +1455,15 @@ export function ChatTab({
   const requestPhaseRef = useRef<StrategyPhase | null>(null);
 
   const isLoading = status === "submitted" || status === "streaming";
+
+  // Disable chat input while AI is actively generating or editing code:
+  // - buildPhase === "building": parallel build in progress
+  // - globalVerificationStatus in active state: verification loop is fixing code
+  const isAiEditing =
+    buildPhase === "building" ||
+    globalVerificationStatus === "capturing" ||
+    globalVerificationStatus === "reviewing" ||
+    globalVerificationStatus === "fixing";
 
   const beginEditingRequest = useCallback((
     context: EditContext,
@@ -3045,7 +3055,7 @@ export function ChatTab({
     const hasText = effectiveInput.trim().length > 0;
     const hasImages = stagedImages.length > 0;
 
-    if ((!hasText && !hasImages) || isLoading) return;
+    if ((!hasText && !hasImages) || isLoading || isAiEditing) return;
 
     // Pre-check billing limit for build/edit phases
     const billingStatus = useBillingStatus.getState().status;
@@ -3851,7 +3861,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={isLoading || atImageLimit}
+            disabled={isLoading || isAiEditing || atImageLimit}
             className="px-2 py-2 text-neutral-500 hover:text-neutral-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             title={atImageLimit ? `Max ${MAX_IMAGES_PER_MESSAGE} images` : "Attach images"}
           >
@@ -3879,11 +3889,11 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 : "Ask me to modify your UI..."
             }
             className="flex-1 px-3 py-2 text-base border border-neutral-200 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:border-transparent disabled:bg-neutral-50 disabled:text-neutral-400"
-            disabled={isLoading || (hasActiveQuestions && questionWriteOwn === null)}
+            disabled={isLoading || isAiEditing || (hasActiveQuestions && questionWriteOwn === null)}
           />
           <button
             type="submit"
-            disabled={isLoading || (!input.trim() && !hasImages)}
+            disabled={isLoading || isAiEditing || (!input.trim() && !hasImages)}
             className="px-3 py-2 bg-neutral-900 text-white rounded-md hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <Send className="w-4 h-4" />
