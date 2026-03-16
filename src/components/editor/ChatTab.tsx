@@ -1283,6 +1283,7 @@ export function ChatTab({
   const [stagedImages, setStagedImages] = useState<FileUIPart[]>([]);
   const showLimitModal = useBillingStore((s) => s.showLimitModal);
   const billingLimitReached = useBillingStore((s) => s.billingLimitReached);
+  const billingCanBuild = useBillingStatus((s) => s.status === null || !!s.status.canStartInitialGeneration);
   const [isDragOver, setIsDragOver] = useState(false);
   const [activeRepairContext, setActiveRepairContext] = useState<RepairChatDraft | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1343,6 +1344,20 @@ export function ChatTab({
     annotationEvaluation.totalPages,
     annotationProcessedPages + (annotationEvaluation.activePageId ? 1 : 0)
   );
+
+  // Reset billingLimitReached when billing status refreshes to show available budget
+  useEffect(() => {
+    if (!billingLimitReached) return;
+    const unsub = useBillingStatus.subscribe((state) => {
+      if (state.status) {
+        const canProceed = state.status.canStartInitialGeneration || state.status.canRunBuildUsage;
+        if (canProceed) {
+          useBillingStore.getState().resetLimit();
+        }
+      }
+    });
+    return unsub;
+  }, [billingLimitReached]);
 
   useEffect(() => {
     cancelParallelBuildRef.current = parallelBuild.cancelAll;
@@ -3551,7 +3566,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           </p>
         )}
 
-        {strategyPhase === "solution-design" && flowData && !isLoading && (
+        {((strategyPhase === "solution-design") ||
+          (strategyPhase === "building" && !parallelMode && completedPages.length === 0 && billingCanBuild)) &&
+          flowData && !isLoading && (
           <div className="flex justify-center pt-2">
             <button
               onClick={() => {
