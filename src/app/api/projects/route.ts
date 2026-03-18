@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireAuth } from "@/lib/supabase/auth-guard";
 import { helloWorldTemplate } from "@/lib/vfs/templates/hello-world";
 import { logServerEvent } from "@/lib/analytics/log-server-event";
+import { createEmptyHandoffState } from "@/lib/handoff/types";
 
 export async function GET() {
   const auth = await requireAuth();
@@ -31,7 +32,10 @@ export async function POST(req: Request) {
       name,
       user_id: auth.user.id,
       files: helloWorldTemplate,
-      strategy: {},
+      strategy: {
+        productMode: "handoff-v1",
+        handoff: createEmptyHandoffState(),
+      },
       chat_messages: [],
       documents: [],
       phase: "hero",

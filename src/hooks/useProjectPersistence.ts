@@ -20,6 +20,7 @@ function getStrategySnapshot() {
   const s = useStrategyStore.getState();
   return {
     phase: s.phase === "editing" ? "complete" : s.phase,
+    productMode: s.productMode ?? undefined,
     userPrompt: s.userPrompt,
     manifestoData: s.manifestoData,
     personaData: s.personaData,
@@ -34,6 +35,7 @@ function getStrategySnapshot() {
     isDeepDive: s.isDeepDive,
     strategyUpdatedAfterBuild: s.strategyUpdatedAfterBuild,
     coverageDisplayState: s.coverageDisplayState,
+    handoff: s.productMode ? s.handoff : undefined,
   };
 }
 

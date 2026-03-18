@@ -41,6 +41,11 @@ import { useDocumentStore } from "@/hooks/useDocumentStore";
 import { PersonaCard } from "@/components/strategy/PersonaCard";
 import { JourneyMapCard } from "@/components/strategy/JourneyMapCard";
 import { IdeaCard } from "@/components/strategy/IdeaCard";
+import {
+  HandoffMarkdownCard,
+  HANDOFF_CARD_HEIGHT,
+  HANDOFF_CARD_WIDTH,
+} from "@/components/strategy/HandoffMarkdownCard";
 import { KeyFeaturesCard, KEY_FEATURES_CARD_WIDTH } from "@/components/strategy/KeyFeaturesCard";
 import { UserFlowCard, USER_FLOW_CARD_WIDTH, USER_FLOW_CARD_HEIGHT } from "@/components/strategy/UserFlowCard";
 import { StrategyFlowCanvas } from "@/components/strategy/StrategyFlowCanvas";
@@ -72,6 +77,7 @@ import type { PreviewMode } from "@/lib/tokens";
 import { serializeCanvasLayout, deserializeCanvasLayout } from "@/lib/canvas/canvas-layout-types";
 import type { RepairChatDraft } from "@/components/editor/ChatTab";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { buildHandoffSnapshot, getDirtyHandoffSections, hasMeaningfulHandoffSnapshot } from "@/lib/handoff/snapshot";
 
 type ViewMode = "app" | "design-system";
 
@@ -327,16 +333,20 @@ export default function ProjectEditor() {
   const currentBuildingPages = useStrategyStore((s) => s.currentBuildingPages);
   const strategyUpdatedAfterBuild = useStrategyStore((s) => s.strategyUpdatedAfterBuild);
   const persistedCoverageDisplayState = useStrategyStore((s) => s.coverageDisplayState);
+  const productMode = useStrategyStore((s) => s.productMode);
+  const handoffState = useStrategyStore((s) => s.handoff);
   const repairChatIntent = useStreamingStore((s) => s.repairChatIntent);
   const verificationPausedErrorText = useStreamingStore((s) => s.verificationPausedErrorText);
   const verificationPausedErrorPath = useStreamingStore((s) => s.verificationPausedErrorPath);
   const annotationEvaluation = useStreamingStore((s) => s.annotationEvaluation);
+  const isHandoffProject = productMode === "handoff-v1";
 
   // Document/Insights state
   const insightsData = useDocumentStore((s) => s.insightsData);
   const streamingInsights = useDocumentStore((s) => s.streamingInsights);
   const isDocUploading = useDocumentStore((s) => s.isUploading);
   const documentInputRef = useRef<HTMLInputElement>(null);
+  const [handoffGenerationStatus, setHandoffGenerationStatus] = useState<"idle" | "generating">("idle");
   // Re-evaluate annotations state
   const [isReEvaluating, setIsReEvaluating] = useState(false);
   const [isAnnotationsMenuOpen, setIsAnnotationsMenuOpen] = useState(false);
@@ -399,6 +409,37 @@ export default function ProjectEditor() {
     annotationEvaluation.totalPages,
     brainData,
   ]);
+  const selectedSolution = useMemo(
+    () => ideaData?.find((idea) => idea.id === selectedIdeaId) ?? null,
+    [ideaData, selectedIdeaId]
+  );
+  const handoffSnapshot = useMemo(
+    () =>
+      buildHandoffSnapshot({
+        productOverview: manifestoData,
+        insights: insightsData,
+        personas: personaData,
+        journeyHighlights: journeyMapData,
+        selectedSolution,
+        keyFeatures: keyFeaturesData,
+        informationArchitecture: flowData,
+        userFlows: userFlowsData,
+      }),
+    [
+      flowData,
+      insightsData,
+      journeyMapData,
+      keyFeaturesData,
+      manifestoData,
+      personaData,
+      selectedSolution,
+      userFlowsData,
+    ]
+  );
+  const handoffDirtySections = useMemo(
+    () => getDirtyHandoffSections(handoffSnapshot, handoffState.baselineSnapshot),
+    [handoffSnapshot, handoffState.baselineSnapshot]
+  );
 
   // Annotation store + resolution
   const annotationActiveFrames = useAnnotationStore((s) => s.activeFrames);
@@ -539,8 +580,31 @@ export default function ProjectEditor() {
       visible: userFlowCount > 0,
     });
 
+    configs.push({
+      id: "handoff",
+      width: HANDOFF_CARD_WIDTH,
+      height: HANDOFF_CARD_HEIGHT,
+      visible: isHandoffProject && strategyPhase === "handoff",
+    });
+
     return configs;
-  }, [insightsData, streamingInsights, manifestoData, streamingOverview, personaData, streamingPersonas, journeyMapData, streamingJourneyMaps, ideaData, streamingIdeas, activeKeyFeatures, flowData, activeUserFlows]);
+  }, [
+    activeKeyFeatures,
+    activeUserFlows,
+    flowData,
+    ideaData,
+    insightsData,
+    isHandoffProject,
+    manifestoData,
+    personaData,
+    strategyPhase,
+    streamingIdeas,
+    streamingInsights,
+    streamingJourneyMaps,
+    streamingOverview,
+    streamingPersonas,
+    journeyMapData,
+  ]);
 
   // Derived layout rects (for viewport animations) — useMemo avoids state-update
   // render loops that useState+useEffect would cause with cascading effects.
@@ -1096,6 +1160,97 @@ export default function ProjectEditor() {
     chatMessages,
     canvasLayout,
   });
+
+  const generateHandoffMarkdown = useCallback(
+    async (mode: "initial" | "regenerate") => {
+      if (!isHandoffProject) return;
+
+      setHandoffGenerationStatus("generating");
+      useStrategyStore.getState().updateHandoffState({ lastError: null });
+
+      try {
+        const res = await fetch("/api/generate-handoff", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            snapshot: handoffSnapshot,
+            previousSnapshot: handoffState.baselineSnapshot,
+            mode,
+            projectId,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to generate markdown handoff");
+        }
+
+        useStrategyStore.getState().updateHandoffState({
+          fullMarkdown: data.fullMarkdown,
+          latestDeltaMarkdown: data.deltaMarkdown ?? null,
+          baselineSnapshot: handoffSnapshot,
+          baselineHash: data.baselineHash,
+          dirtySections: [],
+          isOutdated: false,
+          generatedAt: data.generatedAt,
+          lastError: null,
+        });
+
+        toast.success(
+          mode === "initial"
+            ? "Markdown handoff generated."
+            : "Markdown handoff regenerated."
+        );
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to generate markdown handoff";
+        useStrategyStore.getState().updateHandoffState({ lastError: message });
+        toast.error(message);
+      } finally {
+        setHandoffGenerationStatus("idle");
+      }
+    },
+    [handoffSnapshot, handoffState.baselineSnapshot, isHandoffProject, projectId]
+  );
+
+  useEffect(() => {
+    if (!isHandoffProject) return;
+
+    const nextIsOutdated = handoffDirtySections.length > 0;
+    const currentDirty = handoffState.dirtySections.join("|");
+    const nextDirty = handoffDirtySections.join("|");
+    if (
+      handoffState.isOutdated !== nextIsOutdated ||
+      currentDirty !== nextDirty
+    ) {
+      useStrategyStore.getState().updateHandoffState({
+        dirtySections: handoffDirtySections,
+        isOutdated: nextIsOutdated,
+      });
+    }
+  }, [
+    handoffDirtySections,
+    handoffState.dirtySections,
+    handoffState.isOutdated,
+    isHandoffProject,
+  ]);
+
+  useEffect(() => {
+    if (!isHandoffProject || strategyPhase !== "handoff") return;
+    if (handoffGenerationStatus === "generating") return;
+    if (handoffState.fullMarkdown || handoffState.lastError) return;
+    if (!hasMeaningfulHandoffSnapshot(handoffSnapshot)) return;
+
+    void generateHandoffMarkdown("initial");
+  }, [
+    generateHandoffMarkdown,
+    handoffGenerationStatus,
+    handoffSnapshot,
+    handoffState.fullMarkdown,
+    handoffState.lastError,
+    isHandoffProject,
+    strategyPhase,
+  ]);
 
   // Container dimensions for viewport centering calculations
   const [containerDimensions, setContainerDimensions] = useState({ width: 800, height: 600 });
@@ -1806,6 +1961,7 @@ export default function ProjectEditor() {
       if (activeKeyFeatures && !flowData) return "key-features";
       return null;
     }
+    if (strategyPhase === "handoff") return "handoff";
     return null;
   }, [strategyPhase, streamingOverview, manifestoData, streamingPersonas, personaData,
       streamingJourneyMaps, journeyMapData, streamingKeyFeatures, activeKeyFeatures,
@@ -1963,6 +2119,14 @@ export default function ProjectEditor() {
     } else if (action === "approve-ideation") {
       useStrategyStore.getState().setPhase("solution-design");
     } else if (action === "approve-solution-design") {
+      if (isHandoffProject) {
+        useStrategyStore.getState().updateHandoffState({
+          lastError: null,
+        });
+        useStrategyStore.getState().setPhase("handoff");
+        return;
+      }
+
       // Write /flow.json from the approved flow data
       const currentFlowData = useStrategyStore.getState().flowData;
       if (currentFlowData) {
@@ -2041,7 +2205,7 @@ export default function ProjectEditor() {
         }
       }, 50);
     }
-  }, [writeFile, setViewport, containerDimensions, groupPositions, groupRects, setNodePositions]);
+  }, [containerDimensions, groupPositions, groupRects, isHandoffProject, setNodePositions, setViewport, writeFile]);
 
   // --- Floating Chat Handlers ---
 
@@ -2060,7 +2224,12 @@ export default function ProjectEditor() {
   }, []);
 
   // Determine if we're in an early strategy phase (no Sandpack needed)
-  const isEarlyStrategyPhase = strategyPhase === "hero" || strategyPhase === "problem-overview" || strategyPhase === "ideation" || strategyPhase === "solution-design";
+  const isEarlyStrategyPhase =
+    strategyPhase === "hero" ||
+    strategyPhase === "problem-overview" ||
+    strategyPhase === "ideation" ||
+    strategyPhase === "solution-design" ||
+    strategyPhase === "handoff";
   // Hide RightPanel during hero phase, and during early strategy phases when chat is floating (no Design tab)
   const showRightPanel = strategyPhase !== "hero" && !(isEarlyStrategyPhase && chatMode === "floating");
   const showNav = strategyPhase !== "hero";
@@ -2131,6 +2300,7 @@ export default function ProjectEditor() {
                   {strategyPhase === "problem-overview" && "Defining Problem"}
                   {strategyPhase === "ideation" && "Exploring Ideas"}
                   {strategyPhase === "solution-design" && "Designing Solution"}
+                  {strategyPhase === "handoff" && "Preparing Handoff"}
                 </span>
               </div>
             )}
@@ -2519,6 +2689,34 @@ export default function ProjectEditor() {
                 />
               );
             })}
+
+            {isHandoffProject && strategyPhase === "handoff" && (() => {
+              const g = getGroupOrigin("handoff");
+              if (!g) return null;
+
+              return (
+                <HandoffMarkdownCard
+                  projectName={projectName}
+                  x={g.x}
+                  y={g.y}
+                  fullMarkdown={handoffState.fullMarkdown}
+                  latestDeltaMarkdown={handoffState.latestDeltaMarkdown}
+                  dirtySections={handoffState.dirtySections}
+                  isOutdated={handoffState.isOutdated}
+                  generatedAt={handoffState.generatedAt}
+                  lastError={handoffState.lastError}
+                  isGenerating={handoffGenerationStatus === "generating"}
+                  onMove={(nx, ny) =>
+                    setGroupPositions((prev) => new Map(prev).set("handoff", { x: nx, y: ny }))
+                  }
+                  onRegenerate={() => {
+                    void generateHandoffMarkdown(
+                      handoffState.baselineSnapshot ? "regenerate" : "initial"
+                    );
+                  }}
+                />
+              );
+            })()}
 
             {/* FlowConnections — visible when not expanded */}
             {!isEarlyStrategyPhase && connectionOpacity > 0 && (

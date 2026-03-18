@@ -2,8 +2,18 @@
 
 import { create } from "zustand";
 import type { CoverageDisplayState } from "@/lib/product-brain/types";
+import type { HandoffState, ProductMode } from "@/lib/handoff/types";
+import { createEmptyHandoffState } from "@/lib/handoff/types";
 
-export type StrategyPhase = "hero" | "problem-overview" | "ideation" | "solution-design" | "building" | "editing" | "complete";
+export type StrategyPhase =
+  | "hero"
+  | "problem-overview"
+  | "ideation"
+  | "solution-design"
+  | "handoff"
+  | "building"
+  | "editing"
+  | "complete";
 
 export type EditContextSource = "follow-up-edit" | "address-gaps" | "repair";
 
@@ -167,9 +177,14 @@ interface StrategyState {
 
   // Pages that passed verification in parallel build
   verifiedPages: string[];
+  productMode: ProductMode | null;
+  handoff: HandoffState;
 
   // Actions
   setPhase: (phase: StrategyPhase) => void;
+  setProductMode: (mode: ProductMode | null) => void;
+  setHandoffState: (handoff: HandoffState) => void;
+  updateHandoffState: (patch: Partial<HandoffState>) => void;
   setUserPrompt: (prompt: string) => void;
   setManifestoData: (data: ManifestoData) => void;
   setStreamingOverview: (data: Partial<ManifestoData> | null) => void;
@@ -233,12 +248,26 @@ const initialState = {
   journeyMapContinueAttempts: 0,
   isJourneyMapContinuing: false,
   verifiedPages: [] as string[],
+  productMode: null as ProductMode | null,
+  handoff: createEmptyHandoffState(),
 };
 
 export const useStrategyStore = create<StrategyState>((set, get) => ({
   ...initialState,
 
   setPhase: (phase) => set({ phase }),
+
+  setProductMode: (productMode) => set({ productMode }),
+
+  setHandoffState: (handoff) => set({ handoff }),
+
+  updateHandoffState: (patch) =>
+    set((state) => ({
+      handoff: {
+        ...state.handoff,
+        ...patch,
+      },
+    })),
 
   setUserPrompt: (prompt) => set({ userPrompt: prompt }),
 

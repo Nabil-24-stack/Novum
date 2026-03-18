@@ -1307,6 +1307,7 @@ export function ChatTab({
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
   const editScope = useStrategyStore((s) => s.editScope);
   const activeEditingPageIds = useStrategyStore((s) => s.activeEditingPageIds);
+  const productMode = useStrategyStore((s) => s.productMode);
   const brainData = useProductBrainStore((s) => s.brainData);
   const isJourneyMapContinuing = useStrategyStore((s) => s.isJourneyMapContinuing);
   const journeyMapContinueAttempts = useStrategyStore((s) => s.journeyMapContinueAttempts);
@@ -1320,6 +1321,7 @@ export function ChatTab({
   const verificationPaused = useStreamingStore((s) => s.verificationPaused);
   const verificationPausedPageId = useStreamingStore((s) => s.verificationPausedPageId);
   const requestRepairInChat = useStreamingStore((s) => s.requestRepairInChat);
+  const isHandoffProject = productMode === "handoff-v1";
 
   // Strategy alignment check state
   const [alignmentCheckPending, setAlignmentCheckPending] = useState(false);
@@ -3088,26 +3090,34 @@ export function ChatTab({
 
     // Hero phase: transition to problem-overview before sending
     let effectivePhase = strategyPhase;
+    let requestStrategyPhase = strategyPhase ?? "hero";
     if (strategyPhase === "hero") {
       useStrategyStore.getState().setUserPrompt(messageText);
       useStrategyStore.getState().setPhase("problem-overview");
       effectivePhase = "problem-overview";
+      requestStrategyPhase = "problem-overview";
       onHeroSubmit?.();
+    } else if (strategyPhase === "handoff") {
+      requestStrategyPhase = classifyArtifactEditPhase(messageText) ?? "solution-design";
     } else if ((strategyPhase === "complete" || strategyPhase === "editing") && completedPages.length > 0) {
       const artifactPhase = classifyArtifactEditPhase(messageText);
       if (artifactPhase) {
         useStrategyStore.getState().clearEditSession();
         useStrategyStore.getState().setPhase(artifactPhase);
         effectivePhase = artifactPhase;
+        requestStrategyPhase = artifactPhase;
       } else {
         effectivePhase = "editing";
+        requestStrategyPhase = "editing";
       }
+    } else {
+      requestStrategyPhase = effectivePhase ?? "hero";
     }
 
     // Build context based on strategy phase
     let vfsContext: string | Record<string, string> = "";
 
-    if (effectivePhase === "problem-overview" || effectivePhase === "ideation" || effectivePhase === "solution-design") {
+    if (requestStrategyPhase === "problem-overview" || requestStrategyPhase === "ideation" || requestStrategyPhase === "solution-design") {
       // In strategy phases, send manifesto/persona/flow/idea data as context instead of VFS
       const storeState = useStrategyStore.getState();
       const parts: string[] = [];
@@ -3130,7 +3140,7 @@ export function ChatTab({
         parts.push(`## Current Flow Architecture\n\n${JSON.stringify(storeState.flowData, null, 2)}`);
       }
       vfsContext = parts.join("\n\n");
-    } else if (effectivePhase === "building" || effectivePhase === "editing") {
+    } else if (requestStrategyPhase === "building" || requestStrategyPhase === "editing") {
       // In build phase, send full VFS context plus strategy context
       vfsContext = buildBuildingPhaseVfsContext(files);
     } else {
@@ -3181,7 +3191,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
     if (hasImages) messagePayload.files = imagesToSend;
 
     const pinnedPageIds = resolvePinnedPageIds(pinnedElements, flowData);
-    const editContext: EditContext | undefined = effectivePhase === "editing"
+    const editContext: EditContext | undefined = requestStrategyPhase === "editing"
       ? {
           source: activeRepairContext ? "repair" : "follow-up-edit",
           activePageId: activePageId ?? null,
@@ -3221,7 +3231,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
 
     // Determine if this is a subsequent edit (for strategy alignment check)
     const isSubsequentEdit =
-      (effectivePhase === "building" || effectivePhase === "editing") && completedPages.length > 0;
+      (requestStrategyPhase === "building" || requestStrategyPhase === "editing") && completedPages.length > 0;
 
     // Store original request for potential "Build Anyway" re-send
     if (isSubsequentEdit) {
@@ -3240,7 +3250,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         }
       : undefined;
 
-    requestPhaseRef.current = effectivePhase ?? null;
+    requestPhaseRef.current = strategyPhase === "handoff" ? "handoff" : effectivePhase ?? null;
 
     await sendMessage(
       messagePayload as { text: string; files?: FileUIPart[] },
@@ -3248,7 +3258,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         body: {
           vfsContext,
 
-          strategyPhase: effectivePhase,
+          strategyPhase: requestStrategyPhase,
           currentPageId: buildingPageId,
           currentPageName: buildingPageName,
           documentContext,
@@ -3576,8 +3586,23 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           </p>
         )}
 
-        {((strategyPhase === "solution-design") ||
-          (strategyPhase === "building" && !parallelMode && completedPages.length === 0 && billingCanBuild)) &&
+        {strategyPhase === "solution-design" && isHandoffProject && flowData && !isLoading && (
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={() => {
+                onPhaseAction?.("approve-solution-design");
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-lg hover:bg-neutral-800 transition-colors shadow-sm"
+            >
+              Approve and generate .md file
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {(!isHandoffProject &&
+          ((strategyPhase === "solution-design") ||
+            (strategyPhase === "building" && !parallelMode && completedPages.length === 0 && billingCanBuild))) &&
           flowData && !isLoading && (
           <div className="flex justify-center pt-2">
             <button
@@ -3886,6 +3911,8 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 ? "Discuss or refine the selected idea..."
                 : strategyPhase === "solution-design"
                 ? "Adjust the IA or user flows..."
+                : strategyPhase === "handoff"
+                ? "Update the artifacts or refine the handoff..."
                 : "Ask me to modify your UI..."
             }
             className="flex-1 px-3 py-2 text-base border border-neutral-200 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:border-transparent disabled:bg-neutral-50 disabled:text-neutral-400"
@@ -4279,6 +4306,8 @@ function StreamingMessageContent({ content }: { content: string }) {
       : phase === "solution-design"
         ? userFlowsData ? "Refining solution design..."
         : "Designing solution..."
+      : phase === "handoff"
+        ? "Updating handoff artifacts..."
       : phase === "editing"
         ? "Preparing a targeted edit..."
       : phase === "building"
@@ -4409,6 +4438,7 @@ function StreamingStatus() {
       : "Analyzing your problem..."
     : phase === "ideation" ? "Generating ideas..."
     : phase === "solution-design" ? "Designing solution..."
+    : phase === "handoff" ? "Updating handoff artifacts..."
     : phase === "editing" ? "Preparing a targeted edit..."
     : phase === "building"
       ? currentBuildingPage ? `Preparing to build ${currentBuildingPage}...`

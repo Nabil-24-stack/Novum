@@ -180,7 +180,7 @@ export default function Dashboard() {
           Don&apos;t just build apps. Solve problems.
         </h1>
         <p className="mt-3 text-neutral-500 text-center max-w-md">
-          Describe the problem you want to solve, and I&apos;ll help you design and build a web app.
+          Describe the problem you want to solve, and I&apos;ll help you shape the strategy and generate a build-ready markdown handoff.
         </p>
 
         {/* Chat input card */}
