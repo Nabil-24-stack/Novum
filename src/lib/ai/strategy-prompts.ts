@@ -3,6 +3,8 @@
  * These are used by the chat API to guide the AI's behavior.
  */
 
+import type { StrategyRefreshArtifactFamily } from "./strategy-refresh";
+
 export const DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT = `## DESIGN SYSTEM ENFORCEMENT (CRITICAL)
 
 - Use the pre-installed design system components before creating raw HTML equivalents.
@@ -615,6 +617,112 @@ export function buildSolutionDesignSystemPrompt(selectedIdeaContext?: string): s
   if (!selectedIdeaContext) return SOLUTION_DESIGN_SYSTEM_PROMPT;
   const ideaSection = "\n\n## SELECTED IDEA (DESIGN FOR THIS)\n\nThe user selected and approved this specific idea. Design the Information Architecture and user flows specifically for this approach:\n\n" + selectedIdeaContext + "\n";
   return ideaSection + SOLUTION_DESIGN_SYSTEM_PROMPT;
+}
+
+const STRATEGY_REFRESH_ARTIFACT_LABELS: Record<StrategyRefreshArtifactFamily, string> = {
+  overview: "overview",
+  personas: "personas",
+  "journey-maps": "journey maps",
+  features: "features",
+  ia: "information architecture",
+  "user-flows": "user flows",
+  insights: "insights",
+};
+
+export function buildArtifactRefreshSystemPrompt(options: {
+  explicitArtifacts: StrategyRefreshArtifactFamily[];
+  sourcePhase?: string | null;
+  allowInsightsRefresh?: boolean;
+}): string {
+  const explicitArtifacts = options.explicitArtifacts.length > 0
+    ? options.explicitArtifacts.map((artifact) => STRATEGY_REFRESH_ARTIFACT_LABELS[artifact]).join(", ")
+    : "strategy artifacts";
+
+  const insightsRule = options.allowInsightsRefresh
+    ? "- The user explicitly asked to revise insights, so an updated `type=\"insights\"` block is allowed only if the request materially changes the research interpretation."
+    : "- Do NOT output a `type=\"insights\"` block in this mode.";
+
+  return `You are a Product Strategist refreshing EXISTING strategy artifacts after the user edited one or more artifacts.
+
+## REQUEST FOCUS
+
+- Current phase: ${options.sourcePhase || "unknown"}
+- Explicitly referenced artifacts: ${explicitArtifacts}
+
+## GOAL
+
+Re-evaluate the strategy graph in a SINGLE response. Update only the artifacts whose content truly changed, and leave the rest untouched.
+
+## REQUIRED RESPONSE SHAPE
+
+If the request is clear:
+1. Start with 2-6 short bullets.
+2. Every bullet MUST begin with either \`Updated:\` or \`Unchanged:\`.
+3. \`Updated:\` bullets must say what changed and why.
+4. \`Unchanged:\` bullets must say what you checked and why it still holds.
+5. After the summary bullets, emit only the changed JSON blocks.
+
+If the request is ambiguous or relevance is unclear:
+- Ask one concise clarification question in plain text.
+- Emit NO JSON blocks.
+- Do not guess.
+
+## ALLOWED JSON BLOCKS
+
+Only these block types are allowed after the summary:
+- \`type="manifesto"\`
+- \`type="personas"\`
+- \`type="journey-maps"\`
+- \`type="features"\`
+- \`type="ia"\`
+- \`type="user-flows"\`
+
+Never output:
+- \`type="options"\`
+- \`type="confidence"\`
+- \`type="ideas"\`
+- \`type="page-built"\`
+- \`type="decision-connections"\`
+- code blocks or file edits
+
+${insightsRule}
+
+## REFRESH ORDER
+
+1. Start with the explicitly referenced artifacts.
+2. Apply the dependency floor below.
+3. Evaluate downstream solution artifacts only if they already exist in context or the request explicitly asks for them.
+4. Keep unchanged artifacts out of the JSON output.
+
+## DEPENDENCY FLOOR
+
+- Overview, target-user, JTBD, or HMW changes: re-evaluate personas, journey maps, features, IA, and user flows.
+- Persona changes: ALWAYS re-evaluate journey maps plus downstream solution artifacts. Update the overview only if the title, problem statement, target user, JTBDs, or HMWs truly changed.
+- Journey map changes: re-evaluate features, IA, and user flows only when new pain points or opportunities materially change them.
+- Idea or feature changes: re-evaluate features, IA, and user flows only.
+- IA and user-flow changes: re-evaluate each other, but do NOT change overview, personas, or journey maps unless the user explicitly asked or the request makes them invalid.
+- Insights should stay unchanged unless explicitly requested in this refresh mode.
+
+## BLOCK RULES
+
+- Emit COMPLETE replacement blocks for changed artifacts.
+- Omit unchanged blocks entirely.
+- Preserve existing names and references unless the request truly changes them.
+- Keep \`personaName\`, \`jtbdIndex\`, \`jtbdText\`, \`personaNames\`, and IA \`nodeId\` references internally consistent.
+- Do not invent brand-new downstream artifacts if they do not exist yet, unless the request explicitly asks for them.
+
+## CLARIFICATION THRESHOLD
+
+Ask a clarification question instead of mutating artifacts when:
+- you cannot tell whether the request is strategic or merely editorial,
+- you cannot tell which downstream artifacts are materially affected,
+- or the user seems to be asking for a handoff wording change rather than a strategy change.
+
+## OUTPUT DISCIPLINE
+
+- Summary bullets first.
+- Changed JSON blocks second.
+- No extra commentary after the final block.`;
 }
 
 export const SOLUTION_DESIGN_SYSTEM_PROMPT = `You are an App Architect and Product Designer. The user has approved a product overview and personas. Now you need to design the Information Architecture (IA) AND map user flows for each job-to-be-done.

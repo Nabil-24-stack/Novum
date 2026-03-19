@@ -29,6 +29,11 @@ import type { ProductBrainData } from "@/lib/product-brain/types";
 import { ConfidenceBar } from "./ConfidenceBar";
 import { BuildProgressCards } from "./BuildProgressCards";
 import { runGatekeeper } from "@/lib/ai/gatekeeper";
+import {
+  detectStrategyRefreshArtifactFamilies,
+  resolveStrategyRefreshRequestPhase,
+  type StrategyRefreshArtifactFamily,
+} from "@/lib/ai/strategy-refresh";
 import { trackEvent } from "@/lib/analytics/track-event";
 import { useBillingStore } from "@/hooks/useBillingStore";
 import { notifyUsageChanged, useBillingStatus } from "@/hooks/useBillingStatus";
@@ -248,6 +253,61 @@ function buildExistingArtifactsContext(): string {
   return `## EXISTING ARTIFACTS (evaluate each against new insights)\n\n${sections.join("\n\n")}`;
 }
 
+function buildStrategyArtifactsContext(options?: {
+  sectionLabel?: string;
+  includeConfidence?: boolean;
+  includeInsights?: boolean;
+}): string {
+  const sectionLabel = options?.sectionLabel ?? "Current";
+  const s = useStrategyStore.getState();
+  const docStore = useDocumentStore.getState();
+  const sections: string[] = [];
+
+  if (options?.includeInsights !== false && docStore.insightsData) {
+    sections.push(`## ${sectionLabel} Insights\n\n${JSON.stringify(docStore.insightsData, null, 2)}`);
+  }
+
+  if (s.manifestoData) {
+    sections.push(`## ${sectionLabel} Overview\n\n${JSON.stringify(s.manifestoData, null, 2)}`);
+  }
+
+  if (s.personaData) {
+    sections.push(`## ${sectionLabel} Personas\n\n${JSON.stringify(s.personaData, null, 2)}`);
+  }
+
+  if (s.journeyMapData) {
+    sections.push(`## ${sectionLabel} Journey Maps\n\n${JSON.stringify(s.journeyMapData, null, 2)}`);
+  }
+
+  if (s.ideaData) {
+    sections.push(`## ${sectionLabel} Ideas\n\n${JSON.stringify(s.ideaData, null, 2)}`);
+    if (s.selectedIdeaId) {
+      const selectedIdea = s.ideaData.find((idea) => idea.id === s.selectedIdeaId);
+      sections.push(
+        `## ${sectionLabel} Selected Idea\n\n${selectedIdea ? JSON.stringify(selectedIdea, null, 2) : s.selectedIdeaId}`
+      );
+    }
+  }
+
+  if (s.keyFeaturesData) {
+    sections.push(`## ${sectionLabel} Key Features\n\n${JSON.stringify(s.keyFeaturesData, null, 2)}`);
+  }
+
+  if (s.flowData) {
+    sections.push(`## ${sectionLabel} Information Architecture\n\n${JSON.stringify(s.flowData, null, 2)}`);
+  }
+
+  if (s.userFlowsData) {
+    sections.push(`## ${sectionLabel} User Flows\n\n${JSON.stringify(s.userFlowsData, null, 2)}`);
+  }
+
+  if (options?.includeConfidence && s.confidenceData) {
+    sections.push(`## ${sectionLabel} Confidence\n\n${JSON.stringify(s.confidenceData, null, 2)}`);
+  }
+
+  return sections.join("\n\n");
+}
+
 function findPageNodeByComponentName(
   componentName: string,
   flowData: FlowData | null | undefined,
@@ -431,21 +491,6 @@ function normalizeAlignmentCheck(parsed: unknown): EditScope | null {
     concerns: normalizeStringArray(data.concerns),
     changeMode,
   };
-}
-
-function classifyArtifactEditPhase(messageText: string): StrategyPhase | null {
-  const normalized = messageText.toLowerCase();
-  if (
-    /\b(ia|information architecture|user flow|user flows|architecture|key feature|key features)\b/.test(normalized)
-  ) {
-    return "solution-design";
-  }
-  if (
-    /\b(persona|personas|jtbd|jobs to be done|jobs-to-be-done|journey map|journey maps|problem overview|problem statement|manifesto|target user|hmw|how might we|insight|insights|strategy)\b/.test(normalized)
-  ) {
-    return "problem-overview";
-  }
-  return null;
 }
 
 function buildCanonicalFlowForEdit(
@@ -2855,29 +2900,7 @@ export function ChatTab({
   const sendQuickReply = useCallback(
     (text: string) => {
       if (isLoading) return;
-
-      // Build context (same as manifesto/persona/flow phases)
-      const storeState = useStrategyStore.getState();
-      const parts: string[] = [];
-      if (storeState.manifestoData) {
-        parts.push(`## Current Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
-      }
-      if (storeState.personaData) {
-        parts.push(`## Current Personas\n\n${JSON.stringify(storeState.personaData, null, 2)}`);
-      }
-      if (storeState.journeyMapData) {
-        parts.push(`## Current Journey Maps\n\n${JSON.stringify(storeState.journeyMapData, null, 2)}`);
-      }
-      if (storeState.ideaData) {
-        parts.push(`## Current Ideas\n\n${JSON.stringify(storeState.ideaData, null, 2)}`);
-        if (storeState.selectedIdeaId) {
-          parts.push(`## Selected Idea ID: ${storeState.selectedIdeaId}`);
-        }
-      }
-      if (storeState.flowData) {
-        parts.push(`## Current Flow Architecture\n\n${JSON.stringify(storeState.flowData, null, 2)}`);
-      }
-      const vfsContext = parts.join("\n\n");
+      const vfsContext = buildStrategyArtifactsContext();
 
       sendMessage(
         { text },
@@ -2892,22 +2915,7 @@ export function ChatTab({
   const handleDiscussMore = useCallback(() => {
     if (isLoading) return;
     useStrategyStore.getState().setDeepDive(true);
-
-    const storeState = useStrategyStore.getState();
-    const parts: string[] = [];
-    if (storeState.manifestoData) {
-      parts.push(`## Current Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
-    }
-    if (storeState.personaData) {
-      parts.push(`## Current Personas\n\n${JSON.stringify(storeState.personaData, null, 2)}`);
-    }
-    if (storeState.journeyMapData) {
-      parts.push(`## Current Journey Maps\n\n${JSON.stringify(storeState.journeyMapData, null, 2)}`);
-    }
-    if (storeState.confidenceData) {
-      parts.push(`## Current Confidence\n\n${JSON.stringify(storeState.confidenceData, null, 2)}`);
-    }
-    const vfsContext = parts.join("\n\n");
+    const vfsContext = buildStrategyArtifactsContext({ includeConfidence: true });
 
     sendMessage(
       { text: "I'd like to discuss the problem more before moving on. What areas should we go deeper on?" },
@@ -2972,22 +2980,7 @@ export function ChatTab({
     if (isLoading) {
       stop();
     }
-
-    const storeState = useStrategyStore.getState();
-    const parts: string[] = [];
-    if (storeState.manifestoData) {
-      parts.push(`## Current Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
-    }
-    if (storeState.personaData) {
-      parts.push(`## Current Personas\n\n${JSON.stringify(storeState.personaData, null, 2)}`);
-    }
-    if (storeState.journeyMapData) {
-      parts.push(`## Current Journey Maps\n\n${JSON.stringify(storeState.journeyMapData, null, 2)}`);
-    }
-    if (storeState.confidenceData) {
-      parts.push(`## Current Confidence\n\n${JSON.stringify(storeState.confidenceData, null, 2)}`);
-    }
-    const vfsContext = parts.join("\n\n");
+    const vfsContext = buildStrategyArtifactsContext({ includeConfidence: true });
 
     sendMessage(
       { text: "Let's wrap up this discussion. Based on everything we've discussed, update the overview, personas, and journey maps where needed." },
@@ -3056,12 +3049,18 @@ export function ChatTab({
     const effectiveInput = overrideText ?? input;
     const hasText = effectiveInput.trim().length > 0;
     const hasImages = stagedImages.length > 0;
+    const preflightArtifactFamilies: StrategyRefreshArtifactFamily[] =
+      strategyPhase === "hero" || activeRepairContext
+        ? []
+        : detectStrategyRefreshArtifactFamilies(effectiveInput.trim());
+    const preflightArtifactRefresh = preflightArtifactFamilies.length > 0;
 
     if ((!hasText && !hasImages) || isLoading || isAiEditing) return;
 
     // Pre-check billing limit for build/edit phases
     const billingStatus = useBillingStatus.getState().status;
     if (
+      !preflightArtifactRefresh &&
       (strategyPhase === "building" || strategyPhase === "editing" || strategyPhase === "complete") &&
       billingStatus &&
       !billingStatus.canRunBuildUsage
@@ -3088,58 +3087,57 @@ export function ChatTab({
     setInput("");
     setStagedImages([]);
 
+    const explicitArtifactFamilies: StrategyRefreshArtifactFamily[] =
+      strategyPhase === "hero" || activeRepairContext
+        ? []
+        : preflightArtifactFamilies;
+    const shouldUseArtifactRefresh = explicitArtifactFamilies.length > 0;
+
     // Hero phase: transition to problem-overview before sending
     let effectivePhase = strategyPhase;
     let requestStrategyPhase = strategyPhase ?? "hero";
+    let artifactRefreshMeta:
+      | {
+          explicitArtifacts: StrategyRefreshArtifactFamily[];
+          sourcePhase: StrategyPhase | null | undefined;
+          allowInsightsRefresh: boolean;
+        }
+      | undefined;
     if (strategyPhase === "hero") {
       useStrategyStore.getState().setUserPrompt(messageText);
       useStrategyStore.getState().setPhase("problem-overview");
       effectivePhase = "problem-overview";
       requestStrategyPhase = "problem-overview";
       onHeroSubmit?.();
+    } else if (shouldUseArtifactRefresh) {
+      useStrategyStore.getState().clearEditSession();
+      const refreshPhase = resolveStrategyRefreshRequestPhase(strategyPhase, explicitArtifactFamilies) as StrategyPhase;
+      effectivePhase = refreshPhase;
+      requestStrategyPhase = refreshPhase;
+      artifactRefreshMeta = {
+        explicitArtifacts: explicitArtifactFamilies,
+        sourcePhase: strategyPhase,
+        allowInsightsRefresh: explicitArtifactFamilies.includes("insights"),
+      };
     } else if (strategyPhase === "handoff") {
-      requestStrategyPhase = classifyArtifactEditPhase(messageText) ?? "solution-design";
+      requestStrategyPhase = "solution-design";
     } else if ((strategyPhase === "complete" || strategyPhase === "editing") && completedPages.length > 0) {
-      const artifactPhase = classifyArtifactEditPhase(messageText);
-      if (artifactPhase) {
-        useStrategyStore.getState().clearEditSession();
-        useStrategyStore.getState().setPhase(artifactPhase);
-        effectivePhase = artifactPhase;
-        requestStrategyPhase = artifactPhase;
-      } else {
-        effectivePhase = "editing";
-        requestStrategyPhase = "editing";
-      }
+      effectivePhase = "editing";
+      requestStrategyPhase = "editing";
     } else {
       requestStrategyPhase = effectivePhase ?? "hero";
     }
 
     // Build context based on strategy phase
     let vfsContext: string | Record<string, string> = "";
+    const usesStrategyArtifactsContext =
+      shouldUseArtifactRefresh ||
+      requestStrategyPhase === "problem-overview" ||
+      requestStrategyPhase === "ideation" ||
+      requestStrategyPhase === "solution-design";
 
-    if (requestStrategyPhase === "problem-overview" || requestStrategyPhase === "ideation" || requestStrategyPhase === "solution-design") {
-      // In strategy phases, send manifesto/persona/flow/idea data as context instead of VFS
-      const storeState = useStrategyStore.getState();
-      const parts: string[] = [];
-      if (storeState.manifestoData) {
-        parts.push(`## Current Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
-      }
-      if (storeState.personaData) {
-        parts.push(`## Current Personas\n\n${JSON.stringify(storeState.personaData, null, 2)}`);
-      }
-      if (storeState.journeyMapData) {
-        parts.push(`## Current Journey Maps\n\n${JSON.stringify(storeState.journeyMapData, null, 2)}`);
-      }
-      if (storeState.ideaData) {
-        parts.push(`## Current Ideas\n\n${JSON.stringify(storeState.ideaData, null, 2)}`);
-        if (storeState.selectedIdeaId) {
-          parts.push(`## Selected Idea ID: ${storeState.selectedIdeaId}`);
-        }
-      }
-      if (storeState.flowData) {
-        parts.push(`## Current Flow Architecture\n\n${JSON.stringify(storeState.flowData, null, 2)}`);
-      }
-      vfsContext = parts.join("\n\n");
+    if (usesStrategyArtifactsContext) {
+      vfsContext = buildStrategyArtifactsContext();
     } else if (requestStrategyPhase === "building" || requestStrategyPhase === "editing") {
       // In build phase, send full VFS context plus strategy context
       vfsContext = buildBuildingPhaseVfsContext(files);
@@ -3191,7 +3189,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
     if (hasImages) messagePayload.files = imagesToSend;
 
     const pinnedPageIds = resolvePinnedPageIds(pinnedElements, flowData);
-    const editContext: EditContext | undefined = requestStrategyPhase === "editing"
+    const editContext: EditContext | undefined = !shouldUseArtifactRefresh && requestStrategyPhase === "editing"
       ? {
           source: activeRepairContext ? "repair" : "follow-up-edit",
           activePageId: activePageId ?? null,
@@ -3223,7 +3221,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
     const documentContext = hasUploadedDocuments ? buildInsightsContext(docStore.documents) : undefined;
 
     // Include existing insights in strategy phase context
-    if (hasUploadedDocuments && docStore.insightsData && typeof vfsContext === "string") {
+    if (hasUploadedDocuments && docStore.insightsData && typeof vfsContext === "string" && !usesStrategyArtifactsContext) {
       vfsContext += `\n\n## Existing Research Insights\n\n${JSON.stringify(docStore.insightsData, null, 2)}`;
     } else if (hasUploadedDocuments && docStore.insightsData && typeof vfsContext === "object") {
       (vfsContext as Record<string, string>).insightsContext = `## Research Insights\n\n${JSON.stringify(docStore.insightsData, null, 2)}`;
@@ -3250,7 +3248,9 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         }
       : undefined;
 
-    requestPhaseRef.current = strategyPhase === "handoff" ? "handoff" : effectivePhase ?? null;
+    requestPhaseRef.current = shouldUseArtifactRefresh
+      ? null
+      : strategyPhase === "handoff" ? "handoff" : effectivePhase ?? null;
 
     await sendMessage(
       messagePayload as { text: string; files?: FileUIPart[] },
@@ -3266,6 +3266,8 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           isSubsequentEdit,
           repairContext,
           editContext,
+          artifactRefreshMode: shouldUseArtifactRefresh,
+          artifactRefreshMeta,
         },
       }
     );
@@ -3474,18 +3476,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
               onClick={() => {
                 onPhaseAction?.("approve-problem-overview");
                 // Send follow-up message to trigger ideation (Crazy 8's)
-                const storeState = useStrategyStore.getState();
-                const parts: string[] = [];
-                if (storeState.manifestoData) {
-                  parts.push(`## Approved Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
-                }
-                if (storeState.personaData) {
-                  parts.push(`## Approved Personas\n\n${JSON.stringify(storeState.personaData, null, 2)}`);
-                }
-                if (storeState.journeyMapData) {
-                  parts.push(`## Approved Journey Maps\n\n${JSON.stringify(storeState.journeyMapData, null, 2)}`);
-                }
-                const context = parts.join("\n\n");
+                const context = buildStrategyArtifactsContext({ sectionLabel: "Approved" });
                 sendMessage(
                   { text: "The overview, personas, and journey maps are approved. Generate 8 Crazy 8's ideas for solving this problem." },
                   { body: { vfsContext: context, strategyPhase: "ideation" } }
@@ -3551,17 +3542,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 onPhaseAction?.("approve-ideation");
                 const storeState = useStrategyStore.getState();
                 const selectedIdea = storeState.ideaData?.find((i) => i.id === storeState.selectedIdeaId);
-                const parts: string[] = [];
-                if (storeState.manifestoData) {
-                  parts.push(`## Approved Overview\n\n${JSON.stringify(storeState.manifestoData, null, 2)}`);
-                }
-                if (storeState.personaData) {
-                  parts.push(`## Approved Personas\n\n${JSON.stringify(storeState.personaData, null, 2)}`);
-                }
-                if (storeState.journeyMapData) {
-                  parts.push(`## Approved Journey Maps\n\n${JSON.stringify(storeState.journeyMapData, null, 2)}`);
-                }
-                const context = parts.join("\n\n");
+                const context = buildStrategyArtifactsContext({ sectionLabel: "Approved" });
                 const selectedIdeaContext = selectedIdea
                   ? `## Selected Idea: ${selectedIdea.title}\n\n${selectedIdea.description}`
                   : "";

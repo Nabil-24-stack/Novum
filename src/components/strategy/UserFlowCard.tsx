@@ -1,11 +1,22 @@
 "use client";
 
-import { useCallback, useState, useMemo, useEffect, useRef, type PointerEvent } from "react";
-import { FileText, Zap, GitBranch, Database } from "lucide-react";
-import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
-import type { UserFlow, FlowData, PersonaData, StrategyNode } from "@/hooks/useStrategyStore";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Database, FileText, GitBranch, Zap } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import type { FlowData, PersonaData, StrategyNode, UserFlow } from "@/hooks/useStrategyStore";
+import {
+  AddListItemButton,
+  CardDragHandle,
+  EditModeActions,
+  ReadOnlyEditHint,
+  RemoveListItemButton,
+  handleEditorKeyDown,
+  useDragHandle,
+  useEditableCard,
+  useFocusWhenEditing,
+} from "@/components/strategy/editing";
+import { normalizeUserFlowData } from "@/lib/strategy/artifact-edit-sync";
 
-// Persona accent colors — matches PersonaCard.tsx order
 const ACCENT_COLORS = [
   { bg: "bg-blue-100", text: "text-blue-700", stroke: "#3b82f6" },
   { bg: "bg-violet-100", text: "text-violet-700", stroke: "#8b5cf6" },
@@ -14,7 +25,6 @@ const ACCENT_COLORS = [
   { bg: "bg-rose-100", text: "text-rose-700", stroke: "#f43f5e" },
 ] as const;
 
-// Node type styles — matches StrategyFlowNode.tsx
 const TYPE_STYLES: Record<StrategyNode["type"], { bg: string; border: string; iconColor: string }> = {
   page: { bg: "bg-blue-50", border: "border-blue-300", iconColor: "text-blue-500" },
   action: { bg: "bg-emerald-50", border: "border-emerald-300", iconColor: "text-emerald-500" },
@@ -29,19 +39,16 @@ const TYPE_ICONS: Record<StrategyNode["type"], typeof FileText> = {
   data: Database,
 };
 
-// Layout constants
 const NODE_W = 140;
 const NODE_H = 56;
 const GAP = 60;
 const PADDING_X = 24;
-const PADDING_TOP = 100; // space for header
+const PADDING_TOP = 100;
 const PADDING_BOTTOM = 40;
-const ACTION_HEIGHT = 28;
 
 export const USER_FLOW_CARD_WIDTH = 700;
 export const USER_FLOW_CARD_HEIGHT = 280;
 
-// Delay between each node appearing (ms) — matches StrategyFlowCanvas
 const NODE_REVEAL_INTERVAL = 180;
 
 interface UserFlowCardProps {
@@ -51,39 +58,66 @@ interface UserFlowCardProps {
   x: number;
   y: number;
   onMove?: (x: number, y: number) => void;
+  onCommit?: (flow: UserFlow) => void;
 }
 
 function getPersonaColorIndex(personaName: string, personas: PersonaData[] | null): number {
   if (!personas) return 0;
-  const idx = personas.findIndex((p) => p.name === personaName);
-  return idx >= 0 ? idx % ACCENT_COLORS.length : 0;
+  const index = personas.findIndex((persona) => persona.name === personaName);
+  return index >= 0 ? index % ACCENT_COLORS.length : 0;
 }
 
-export function UserFlowCard({ flow, flowData, personas, x, y, onMove }: UserFlowCardProps) {
-  const canvasScale = useCanvasScale();
-  const [isDragging, setIsDragging] = useState(false);
+export function UserFlowCard({
+  flow,
+  flowData,
+  personas,
+  x,
+  y,
+  onMove,
+  onCommit,
+}: UserFlowCardProps) {
+  const {
+    canEdit,
+    isEditing,
+    draft,
+    setDraft,
+    startEditing,
+    cancelEditing,
+    saveEditing,
+  } = useEditableCard({
+    value: normalizeUserFlowData({
+      id: flow.id ?? `flow-${flow.jtbdIndex ?? 0}`,
+      jtbdIndex: flow.jtbdIndex ?? 0,
+      jtbdText: flow.jtbdText ?? "",
+      personaNames: flow.personaNames ?? [],
+      steps: flow.steps ?? [],
+    }),
+    onCommit,
+    normalize: normalizeUserFlowData,
+  });
+  const { isDragging, dragHandleProps } = useDragHandle({ x, y, onMove });
+  const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
 
-  const steps = useMemo(() => flow.steps ?? [], [flow.steps]);
-  const personaNames = useMemo(() => flow.personaNames ?? [], [flow.personaNames]);
+  const steps = useMemo(() => draft.steps ?? [], [draft.steps]);
+  const personaNames = useMemo(() => draft.personaNames ?? [], [draft.personaNames]);
 
-  // Progressive node reveal animation
   const [visibleCount, setVisibleCount] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset for progressive reveal animation
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset the reveal cycle for the current flow shape
     setVisibleCount(0);
 
-    if (steps.length === 0) return;
+    if (steps.length === 0 || isEditing) return;
 
     const startDelay = setTimeout(() => {
       setVisibleCount(1);
 
       timerRef.current = setInterval(() => {
-        setVisibleCount((prev) => {
-          const next = prev + 1;
-          if (next >= steps.length) {
-            if (timerRef.current) clearInterval(timerRef.current);
+        setVisibleCount((previous) => {
+          const next = previous + 1;
+          if (next >= steps.length && timerRef.current) {
+            clearInterval(timerRef.current);
           }
           return next;
         });
@@ -94,223 +128,295 @@ export function UserFlowCard({ flow, flowData, personas, x, y, onMove }: UserFlo
       clearTimeout(startDelay);
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [steps.length]);
+  }, [isEditing, steps.length]);
 
-  // Compute dynamic card width
   const cardWidth = useMemo(
     () => Math.max(USER_FLOW_CARD_WIDTH, steps.length * (NODE_W + GAP) - GAP + PADDING_X * 2),
     [steps.length]
   );
 
-  // Resolve persona colors
   const personaColors = useMemo(
-    () => personaNames.map((name) => {
-      const idx = getPersonaColorIndex(name, personas);
-      return ACCENT_COLORS[idx];
-    }),
+    () =>
+      personaNames.map((name) => {
+        const index = getPersonaColorIndex(name, personas);
+        return ACCENT_COLORS[index];
+      }),
     [personaNames, personas]
   );
 
-  // Primary stroke color (or gradient ID for multi-persona)
-  const gradientId = `uf-grad-${flow.id ?? "tmp"}`;
+  const gradientId = `uf-grad-${draft.id ?? "tmp"}`;
   const useGradient = personaColors.length > 1;
   const strokeColor = personaColors[0]?.stroke ?? "#3b82f6";
 
-  // Drag handlers
-  const handlePointerDown = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    if (!onMove) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    setIsDragging(true);
-  }, [onMove]);
-
-  const handlePointerMove = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    if (!isDragging || !onMove) return;
-    onMove(x + e.movementX / canvasScale, y + e.movementY / canvasScale);
-  }, [isDragging, onMove, x, y, canvasScale]);
-
-  const handlePointerUp = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    e.currentTarget.releasePointerCapture(e.pointerId);
-    setIsDragging(false);
-  }, []);
-
-  // Compute node positions
-  const nodePositions = useMemo(() =>
-    steps.map((_, i) => ({
-      x: PADDING_X + i * (NODE_W + GAP),
-      y: PADDING_TOP,
-    })),
+  const nodePositions = useMemo(
+    () =>
+      steps.map((_, index) => ({
+        x: PADDING_X + index * (NODE_W + GAP),
+        y: PADDING_TOP,
+      })),
     [steps]
   );
 
-  // Resolve IA nodes for each step
-  const resolvedNodes = useMemo(() =>
-    steps.map((step) => flowData?.nodes.find((n) => n.id === step.nodeId)),
-    [steps, flowData]
+  const resolvedNodes = useMemo(
+    () => steps.map((step) => flowData?.nodes.find((node) => node.id === step.nodeId)),
+    [flowData, steps]
   );
 
-  const svgWidth = cardWidth;
-  const svgHeight = USER_FLOW_CARD_HEIGHT;
+  const availableNodes = flowData?.nodes ?? [];
 
   return (
     <div
-      className={`absolute select-none ${isDragging ? "cursor-grabbing" : onMove ? "cursor-grab" : ""}`}
+      className={`absolute ${isEditing ? "" : "select-none"}`}
       style={{
         left: x,
         top: y,
         width: cardWidth,
-        touchAction: onMove ? "none" : undefined,
       }}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
+      onPointerDown={(event) => event.stopPropagation()}
     >
-      <style>{`
-        @keyframes userFlowNodeReveal {
-          from { opacity: 0; transform: scale(0.85) translateY(8px); }
-          to { opacity: 1; transform: scale(1) translateY(0); }
-        }
-      `}</style>
-      <div className="bg-white/90 backdrop-blur-sm border border-neutral-200/60 shadow-lg rounded-2xl overflow-hidden">
-        {/* Header: JTBD + persona badges */}
-        <div className="px-5 pt-4 pb-3">
-          {flow.jtbdText && (
-            <p className="text-xs text-neutral-500 leading-relaxed italic line-clamp-2">
-              &ldquo;{flow.jtbdText}&rdquo;
-            </p>
-          )}
-          {personaNames.length > 0 && (
-            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-              {personaNames.map((name, i) => {
-                const color = personaColors[i];
+      <div className="overflow-hidden rounded-2xl border border-neutral-200/60 bg-white/90 shadow-lg backdrop-blur-sm">
+        <div className="flex items-start justify-between gap-3 px-5 pb-3 pt-4">
+          <div>
+            {draft.jtbdText && (
+              <p className="text-xs italic leading-relaxed text-neutral-500">&ldquo;{draft.jtbdText}&rdquo;</p>
+            )}
+            {personaNames.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {personaNames.map((name, index) => {
+                  const color = personaColors[index];
+                  return (
+                    <span
+                      key={`${name}-${index}`}
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${color.bg} ${color.text}`}
+                    >
+                      {name}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <CardDragHandle
+            isDragging={isDragging}
+            canDrag={Boolean(onMove)}
+            dragHandleProps={dragHandleProps}
+          />
+        </div>
+
+        {isEditing ? (
+          <div className="space-y-4 px-5 pb-5">
+            <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-500">
+              JTBD and persona links stay anchored to the upstream overview and persona artifacts.
+            </div>
+
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                Steps
+              </p>
+              {availableNodes.length > 0 ? (
+                <AddListItemButton
+                  label="Add step"
+                  onClick={() => {
+                    const fallbackNodeId = availableNodes[0]?.id ?? "";
+                    setDraft((current) => ({
+                      ...current,
+                      steps: [
+                        ...current.steps,
+                        { nodeId: fallbackNodeId, action: "" },
+                      ],
+                    }));
+                  }}
+                />
+              ) : (
+                <p className="text-[11px] text-neutral-400">
+                  Add IA nodes before creating more steps.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              {draft.steps.map((step, stepIndex) => (
+                <div key={stepIndex} className="space-y-2 rounded-xl border border-neutral-200/80 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                      Step {stepIndex + 1}
+                    </p>
+                    <RemoveListItemButton
+                      onClick={() =>
+                        setDraft((current) => ({
+                          ...current,
+                          steps: current.steps.filter((_, index) => index !== stepIndex),
+                        }))
+                      }
+                    />
+                  </div>
+
+                  <label className="space-y-1 text-xs font-medium text-neutral-500">
+                    IA node
+                    <select
+                      value={step.nodeId}
+                      disabled={availableNodes.length === 0}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          steps: current.steps.map((item, index) =>
+                            index === stepIndex
+                              ? { ...item, nodeId: event.target.value }
+                              : item
+                          ),
+                        }))
+                      }
+                      className="h-10 w-full rounded-lg border border-neutral-200 bg-white px-3 text-sm text-neutral-700 outline-none focus:border-neutral-400"
+                    >
+                      {availableNodes.length === 0 && (
+                        <option value="">No IA nodes available</option>
+                      )}
+                      {availableNodes.map((node) => (
+                        <option key={node.id} value={node.id}>
+                          {node.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <Input
+                    ref={stepIndex === 0 ? firstInputRef : undefined}
+                    value={step.action}
+                    placeholder="Step action"
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        steps: current.steps.map((item, index) =>
+                          index === stepIndex
+                            ? { ...item, action: event.target.value }
+                            : item
+                        ),
+                      }))
+                    }
+                    onKeyDown={(event) =>
+                      handleEditorKeyDown(event, {
+                        onSave: saveEditing,
+                        onCancel: cancelEditing,
+                      })
+                    }
+                    className="text-sm"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
+          </div>
+        ) : (
+          <div
+            className={canEdit ? "cursor-text" : undefined}
+            onClick={() => {
+              if (canEdit) startEditing();
+            }}
+          >
+            <div className="relative" style={{ height: USER_FLOW_CARD_HEIGHT - PADDING_TOP + PADDING_BOTTOM }}>
+              <svg
+                width={cardWidth}
+                height={USER_FLOW_CARD_HEIGHT - PADDING_TOP + PADDING_BOTTOM}
+                className="absolute inset-0"
+              >
+                {useGradient && (
+                  <defs>
+                    <linearGradient
+                      id={gradientId}
+                      gradientUnits="userSpaceOnUse"
+                      x1={nodePositions[0]?.x ?? 0}
+                      y1={NODE_H / 2}
+                      x2={(nodePositions[nodePositions.length - 1]?.x ?? 0) + NODE_W}
+                      y2={NODE_H / 2}
+                    >
+                      {personaColors.map((color, index) => {
+                        const segmentSize = 1 / personaColors.length;
+                        return [
+                          <stop
+                            key={`${index}-start`}
+                            offset={`${index * segmentSize * 100}%`}
+                            stopColor={color.stroke}
+                          />,
+                          <stop
+                            key={`${index}-end`}
+                            offset={`${(index + 1) * segmentSize * 100}%`}
+                            stopColor={color.stroke}
+                          />,
+                        ];
+                      }).flat()}
+                    </linearGradient>
+                  </defs>
+                )}
+
+                {nodePositions.map((position, index) => {
+                  if (index === 0 || index >= visibleCount) return null;
+                  const previous = nodePositions[index - 1];
+                  const x1 = previous.x + NODE_W;
+                  const y1 = NODE_H / 2;
+                  const x2 = position.x;
+                  const y2 = NODE_H / 2;
+
+                  return (
+                    <g key={`connection-${index}`}>
+                      <line
+                        x1={x1}
+                        y1={y1}
+                        x2={x2}
+                        y2={y2}
+                        stroke={useGradient ? `url(#${gradientId})` : strokeColor}
+                        strokeWidth={2.5}
+                        strokeLinecap="round"
+                      />
+                      <polygon
+                        points={`${x2 - 6},${y2 - 4} ${x2},${y2} ${x2 - 6},${y2 + 4}`}
+                        fill={useGradient ? personaColors[personaColors.length - 1]?.stroke ?? strokeColor : strokeColor}
+                      />
+                    </g>
+                  );
+                })}
+              </svg>
+
+              {nodePositions.map((position, index) => {
+                if (index >= visibleCount) return null;
+                const node = resolvedNodes[index];
+                const type = node?.type ?? "page";
+                const style = TYPE_STYLES[type];
+                const Icon = TYPE_ICONS[type];
+
                 return (
-                  <span
-                    key={name}
-                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${color.bg} ${color.text}`}
+                  <div
+                    key={`${node?.id ?? "node"}-${index}`}
+                    className={`absolute rounded-xl border px-4 py-3 shadow-sm ${style.bg} ${style.border}`}
+                    style={{
+                      left: position.x,
+                      top: 0,
+                      width: NODE_W,
+                      height: NODE_H,
+                    }}
                   >
-                    {name}
-                  </span>
+                    <div className="mb-1 flex items-center gap-2">
+                      <Icon className={`h-4 w-4 ${style.iconColor}`} />
+                      <span className="truncate text-sm font-semibold text-neutral-800">
+                        {node?.label ?? stepLabel(steps[index]?.nodeId ?? "")}
+                      </span>
+                    </div>
+                    <p className="line-clamp-2 text-xs leading-tight text-neutral-500">
+                      {steps[index]?.action}
+                    </p>
+                  </div>
                 );
               })}
             </div>
-          )}
-        </div>
 
-        {/* Flow diagram */}
-        <div className="relative" style={{ height: svgHeight - PADDING_TOP + PADDING_BOTTOM }}>
-          <svg
-            width={svgWidth}
-            height={svgHeight - PADDING_TOP + PADDING_BOTTOM}
-            className="absolute inset-0"
-          >
-            {/* Gradient definition for multi-persona */}
-            {useGradient && (
-              <defs>
-                <linearGradient
-                  id={gradientId}
-                  gradientUnits="userSpaceOnUse"
-                  x1={nodePositions[0]?.x ?? 0}
-                  y1={NODE_H / 2}
-                  x2={(nodePositions[nodePositions.length - 1]?.x ?? 0) + NODE_W}
-                  y2={NODE_H / 2}
-                >
-                  {personaColors.map((color, i) => {
-                    const segmentSize = 1 / personaColors.length;
-                    return [
-                      <stop
-                        key={`${i}-start`}
-                        offset={`${i * segmentSize * 100}%`}
-                        stopColor={color.stroke}
-                      />,
-                      <stop
-                        key={`${i}-end`}
-                        offset={`${(i + 1) * segmentSize * 100}%`}
-                        stopColor={color.stroke}
-                      />,
-                    ];
-                  }).flat()}
-                </linearGradient>
-              </defs>
-            )}
-
-            {/* Connection lines between nodes */}
-            {nodePositions.map((pos, i) => {
-              if (i === 0) return null;
-              if (i >= visibleCount) return null;
-              const prev = nodePositions[i - 1];
-              const x1 = prev.x + NODE_W;
-              const y1 = NODE_H / 2;
-              const x2 = pos.x;
-              const y2 = NODE_H / 2;
-
-              return (
-                <g key={`conn-${i}`}>
-                  <line
-                    x1={x1}
-                    y1={y1}
-                    x2={x2}
-                    y2={y2}
-                    stroke={useGradient ? `url(#${gradientId})` : strokeColor}
-                    strokeWidth={2.5}
-                    strokeLinecap="round"
-                  />
-                  {/* Arrowhead */}
-                  <polygon
-                    points={`${x2 - 6},${y2 - 4} ${x2},${y2} ${x2 - 6},${y2 + 4}`}
-                    fill={useGradient ? personaColors[Math.floor(i / steps.length * personaColors.length)]?.stroke ?? strokeColor : strokeColor}
-                  />
-                </g>
-              );
-            })}
-          </svg>
-
-          {/* Nodes + action annotations */}
-          {steps.map((step, i) => {
-            if (i >= visibleCount) return null;
-
-            const pos = nodePositions[i];
-            const node = resolvedNodes[i];
-            const nodeType = node?.type ?? "page";
-            const style = TYPE_STYLES[nodeType];
-            const Icon = TYPE_ICONS[nodeType];
-            const label = node?.label ?? step.nodeId;
-
-            return (
-              <div
-                key={`${step.nodeId}-${i}`}
-                className="absolute"
-                style={{
-                  left: pos.x,
-                  top: 0,
-                  width: NODE_W,
-                  animation: "userFlowNodeReveal 0.3s ease-out both",
-                }}
-              >
-                {/* Node box */}
-                <div
-                  className={`${style.bg} border ${style.border} rounded-lg flex flex-col items-center justify-center px-2 py-2`}
-                  style={{ height: NODE_H }}
-                >
-                  <div className="flex items-center gap-1.5">
-                    <Icon className={`w-3.5 h-3.5 ${style.iconColor} shrink-0`} />
-                    <span className="text-xs font-semibold text-neutral-800 truncate max-w-[100px]">
-                      {label}
-                    </span>
-                  </div>
-                </div>
-                {/* Action annotation */}
-                <p
-                  className="text-[10px] text-neutral-500 text-center mt-1.5 leading-tight line-clamp-2 px-1"
-                  style={{ minHeight: ACTION_HEIGHT }}
-                >
-                  {step.action}
-                </p>
-              </div>
-            );
-          })}
-        </div>
+            {canEdit && <div className="px-5 pb-5"><ReadOnlyEditHint /></div>}
+          </div>
+        )}
       </div>
     </div>
   );
+}
+
+function stepLabel(nodeId: string) {
+  return nodeId || "Unmapped";
 }

@@ -1,13 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef } from "react";
 import { Check } from "lucide-react";
-import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import type { IdeaData } from "@/hooks/useStrategyStore";
+import {
+  CardDragHandle,
+  EditModeActions,
+  ReadOnlyEditHint,
+  handleEditorKeyDown,
+  useDragHandle,
+  useEditableCard,
+  useFocusWhenEditing,
+} from "@/components/strategy/editing";
+import { normalizeIdeaData } from "@/lib/strategy/artifact-edit-sync";
 
 export const IDEA_CARD_WIDTH = 300;
-
-const DRAG_THRESHOLD = 5;
 
 const STICKY_COLORS = [
   { bg: "bg-yellow-100", border: "border-yellow-300" },
@@ -28,136 +37,184 @@ interface IdeaCardProps {
   onHeightMeasured?: (height: number) => void;
   index: number;
   isSelected?: boolean;
-  onClick?: () => void;
+  onSelect?: () => void;
+  onCommit?: (idea: IdeaData) => void;
 }
 
-export function IdeaCard({ idea, x, y, onMove, onHeightMeasured, index, isSelected, onClick }: IdeaCardProps) {
-  const canvasScale = useCanvasScale();
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
-  const hasDraggedRef = useRef(false);
+export function IdeaCard({
+  idea,
+  x,
+  y,
+  onMove,
+  onHeightMeasured,
+  index,
+  isSelected,
+  onSelect,
+  onCommit,
+}: IdeaCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const lastHeightRef = useRef(0);
   const onHeightMeasuredRef = useRef(onHeightMeasured);
+  const color = STICKY_COLORS[index % STICKY_COLORS.length];
+  const {
+    canEdit,
+    isEditing,
+    draft,
+    setDraft,
+    startEditing,
+    cancelEditing,
+    saveEditing,
+  } = useEditableCard({
+    value: normalizeIdeaData({
+      id: idea.id ?? `idea-${index}`,
+      title: idea.title ?? "",
+      description: idea.description ?? "",
+      illustration: idea.illustration ?? "",
+    }),
+    onCommit,
+    normalize: normalizeIdeaData,
+  });
+  const { isDragging, dragHandleProps } = useDragHandle({ x, y, onMove });
+  const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
+
   useEffect(() => {
     onHeightMeasuredRef.current = onHeightMeasured;
-  });
+  }, [onHeightMeasured]);
 
-  // Measure card height via ResizeObserver and report changes
   useEffect(() => {
-    const el = cardRef.current;
-    if (!el) return;
+    const element = cardRef.current;
+    if (!element) return;
+
     const observer = new ResizeObserver(() => {
-      const height = el.offsetHeight;
+      const height = element.offsetHeight;
       if (height > 0 && Math.abs(height - lastHeightRef.current) > 1) {
         lastHeightRef.current = height;
         onHeightMeasuredRef.current?.(height);
       }
     });
-    observer.observe(el);
+
+    observer.observe(element);
     return () => observer.disconnect();
   }, []);
-
-  const color = STICKY_COLORS[index % STICKY_COLORS.length];
-
-  const handlePointerDown = useCallback(
-    (e: PointerEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      e.stopPropagation();
-      e.currentTarget.setPointerCapture(e.pointerId);
-      dragStartRef.current = { x: e.clientX, y: e.clientY };
-      hasDraggedRef.current = false;
-      setIsDragging(true);
-    },
-    []
-  );
-
-  const handlePointerMove = useCallback(
-    (e: PointerEvent<HTMLDivElement>) => {
-      if (!isDragging || !dragStartRef.current) return;
-
-      if (!hasDraggedRef.current) {
-        const dx = e.clientX - dragStartRef.current.x;
-        const dy = e.clientY - dragStartRef.current.y;
-        if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
-        hasDraggedRef.current = true;
-      }
-
-      if (onMove) {
-        onMove(x + e.movementX / canvasScale, y + e.movementY / canvasScale);
-      }
-    },
-    [isDragging, onMove, x, y, canvasScale]
-  );
-
-  const handlePointerUp = useCallback(
-    (e: PointerEvent<HTMLDivElement>) => {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-      setIsDragging(false);
-
-      if (!hasDraggedRef.current && onClick) {
-        onClick();
-      }
-
-      dragStartRef.current = null;
-      hasDraggedRef.current = false;
-    },
-    [onClick]
-  );
 
   return (
     <div
       ref={cardRef}
-      className={`absolute select-none ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
+      className={`absolute ${isEditing ? "" : "select-none"}`}
       style={{
         left: x,
         top: y,
         width: IDEA_CARD_WIDTH,
-        touchAction: "none",
       }}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
+      onPointerDown={(event) => event.stopPropagation()}
     >
       <div
-        className={`${color.bg} border ${color.border} rounded-xl shadow-md transition-shadow overflow-hidden ${
-          isSelected ? "ring-2 ring-blue-500 shadow-xl" : "hover:shadow-lg"
-        }`}
+        className={`overflow-hidden rounded-xl border shadow-md transition-shadow ${
+          color.bg
+        } ${color.border} ${isSelected ? "ring-2 ring-blue-500 shadow-xl" : "hover:shadow-lg"}`}
         style={{ position: "relative" }}
       >
-        {/* SVG Illustration hero */}
-        {idea.illustration && (
+        {draft.illustration && (
           <div
-            className="bg-black/5 p-3 flex items-center justify-center [&>svg]:max-h-[120px] [&>svg]:w-auto"
-            dangerouslySetInnerHTML={{ __html: idea.illustration }}
+            className="flex items-center justify-center bg-black/5 p-3 [&>svg]:max-h-[120px] [&>svg]:w-auto"
+            dangerouslySetInnerHTML={{ __html: draft.illustration }}
           />
         )}
 
         <div className="p-5">
-          {/* Selected checkmark */}
-          {isSelected && (
-            <div className="absolute top-3 right-3 w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center">
-              <Check className="w-3.5 h-3.5 text-white" />
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-black/10 text-sm font-bold text-black/60">
+                {index + 1}
+              </div>
+              {onSelect && (
+                <button
+                  type="button"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSelect();
+                  }}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                    isSelected
+                      ? "bg-blue-500 text-white"
+                      : "bg-white/70 text-neutral-600 hover:bg-white"
+                  }`}
+                >
+                  <Check className="h-3 w-3" />
+                  {isSelected ? "Selected" : "Set selected"}
+                </button>
+              )}
             </div>
-          )}
-
-          {/* Number badge */}
-          <div className="w-7 h-7 rounded-full bg-black/10 flex items-center justify-center text-sm font-bold text-black/60 mb-3">
-            {index + 1}
+            <CardDragHandle
+              isDragging={isDragging}
+              canDrag={Boolean(onMove)}
+              dragHandleProps={dragHandleProps}
+            />
           </div>
 
-          {/* Title */}
-          {idea.title && (
-            <h3 className="text-base font-bold text-neutral-900 mb-2 leading-tight pr-6">
-              {idea.title}
-            </h3>
-          )}
+          {isEditing ? (
+            <div className="space-y-3">
+              <Input
+                ref={firstInputRef}
+                value={draft.title}
+                placeholder="Idea title"
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, title: event.target.value }))
+                }
+                onKeyDown={(event) =>
+                  handleEditorKeyDown(event, {
+                    onSave: saveEditing,
+                    onCancel: cancelEditing,
+                  })
+                }
+                className="border-black/10 bg-white/90 text-sm"
+              />
 
-          {/* Description */}
-          {idea.description && (
-            <p className="text-sm text-neutral-700 leading-relaxed">
-              {idea.description}
-            </p>
+              <Textarea
+                value={draft.description}
+                placeholder="What makes this direction strong?"
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, description: event.target.value }))
+                }
+                onKeyDown={(event) =>
+                  handleEditorKeyDown(event, {
+                    onSave: saveEditing,
+                    onCancel: cancelEditing,
+                  })
+                }
+                className="min-h-[120px] border-black/10 bg-white/90 text-sm"
+              />
+
+              {draft.illustration && (
+                <p className="text-[11px] text-black/50">
+                  Illustration stays read-only in v1.
+                </p>
+              )}
+
+              <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
+            </div>
+          ) : (
+            <div
+              className={canEdit ? "cursor-text" : undefined}
+              onClick={() => {
+                if (canEdit) startEditing();
+              }}
+            >
+              {draft.title && (
+                <h3 className="pr-6 text-base font-bold leading-tight text-neutral-900">
+                  {draft.title}
+                </h3>
+              )}
+
+              {draft.description && (
+                <p className="mt-2 text-sm leading-relaxed text-neutral-700">
+                  {draft.description}
+                </p>
+              )}
+
+              {canEdit && <ReadOnlyEditHint />}
+            </div>
           )}
         </div>
       </div>

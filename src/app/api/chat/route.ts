@@ -2,6 +2,7 @@ import { streamText, convertToModelMessages } from "ai";
 import {
   DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT,
   PROBLEM_OVERVIEW_SYSTEM_PROMPT,
+  buildArtifactRefreshSystemPrompt,
   buildIdeationSystemPrompt,
   buildSolutionDesignSystemPrompt,
   buildBuildSystemPrompt,
@@ -516,12 +517,14 @@ export async function POST(req: Request) {
     isSubsequentEdit,
     repairContext,
     editContext,
+    artifactRefreshMode,
+    artifactRefreshMeta,
     operationId,
     projectId,
   } = await req.json();
 
   // Determine billing action type
-  const actionType = (strategyPhase === "building" || strategyPhase === "editing")
+  const actionType = (!artifactRefreshMode && (strategyPhase === "building" || strategyPhase === "editing"))
     ? "build_usage" as const
     : "strategy_ai" as const;
 
@@ -543,50 +546,58 @@ export async function POST(req: Request) {
 
   // Select system prompt based on strategy phase
   let basePrompt: string;
-  switch (strategyPhase) {
-    case "problem-overview": {
-      let overviewPrompt = isDeepDive
-        ? buildDeepDiveSystemPrompt(PROBLEM_OVERVIEW_SYSTEM_PROMPT)
-        : PROBLEM_OVERVIEW_SYSTEM_PROMPT;
-      overviewPrompt += INSIGHTS_PROMPT_FRAGMENT;
-      basePrompt = overviewPrompt;
-      break;
+  if (artifactRefreshMode) {
+    basePrompt = buildArtifactRefreshSystemPrompt({
+      explicitArtifacts: artifactRefreshMeta?.explicitArtifacts ?? [],
+      sourcePhase: artifactRefreshMeta?.sourcePhase ?? strategyPhase,
+      allowInsightsRefresh: artifactRefreshMeta?.allowInsightsRefresh === true,
+    });
+  } else {
+    switch (strategyPhase) {
+      case "problem-overview": {
+        let overviewPrompt = isDeepDive
+          ? buildDeepDiveSystemPrompt(PROBLEM_OVERVIEW_SYSTEM_PROMPT)
+          : PROBLEM_OVERVIEW_SYSTEM_PROMPT;
+        overviewPrompt += INSIGHTS_PROMPT_FRAGMENT;
+        basePrompt = overviewPrompt;
+        break;
+      }
+      case "ideation":
+        basePrompt = buildIdeationSystemPrompt();
+        break;
+      case "solution-design":
+        basePrompt = buildSolutionDesignSystemPrompt(vfsContext?.selectedIdeaContext);
+        break;
+      case "building":
+        basePrompt = buildBuildSystemPrompt(
+          vfsContext?.manifestoContext || "",
+          vfsContext?.flowContext || "",
+          vfsContext?.personaContext || "",
+          currentPageId,
+          currentPageName,
+          undefined,
+          { isSubsequentEdit, buildAnyway },
+        ) + "\n\n" + SYSTEM_PROMPT;
+        break;
+      case "editing":
+        basePrompt = buildEditingSystemPrompt(
+          vfsContext?.manifestoContext || "",
+          vfsContext?.flowContext || "",
+          vfsContext?.personaContext || "",
+          vfsContext?.userFlowContext || undefined,
+          {
+            buildAnyway,
+            insightsContext: vfsContext?.insightsContext,
+            existingConnections: vfsContext?.existingConnections,
+            editContext: vfsContext?.editContext,
+            gapContext: vfsContext?.gapContext,
+          },
+        ) + "\n\n" + SYSTEM_PROMPT;
+        break;
+      default:
+        basePrompt = SYSTEM_PROMPT;
+        break;
     }
-    case "ideation":
-      basePrompt = buildIdeationSystemPrompt();
-      break;
-    case "solution-design":
-      basePrompt = buildSolutionDesignSystemPrompt(vfsContext?.selectedIdeaContext);
-      break;
-    case "building":
-      basePrompt = buildBuildSystemPrompt(
-        vfsContext?.manifestoContext || "",
-        vfsContext?.flowContext || "",
-        vfsContext?.personaContext || "",
-        currentPageId,
-        currentPageName,
-        undefined,
-        { isSubsequentEdit, buildAnyway },
-      ) + "\n\n" + SYSTEM_PROMPT;
-      break;
-    case "editing":
-      basePrompt = buildEditingSystemPrompt(
-        vfsContext?.manifestoContext || "",
-        vfsContext?.flowContext || "",
-        vfsContext?.personaContext || "",
-        vfsContext?.userFlowContext || undefined,
-        {
-          buildAnyway,
-          insightsContext: vfsContext?.insightsContext,
-          existingConnections: vfsContext?.existingConnections,
-          editContext: vfsContext?.editContext,
-          gapContext: vfsContext?.gapContext,
-        },
-      ) + "\n\n" + SYSTEM_PROMPT;
-      break;
-    default:
-      basePrompt = SYSTEM_PROMPT;
-      break;
   }
 
   // Dynamic system prompt with VFS context (hidden from chat UI)

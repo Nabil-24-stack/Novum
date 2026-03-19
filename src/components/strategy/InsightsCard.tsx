@@ -1,9 +1,21 @@
 "use client";
 
-import { useCallback, useState, type PointerEvent } from "react";
-import { FileText, Check, Upload, Loader2 } from "lucide-react";
-import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
-import type { InsightsCardData, InsightData } from "@/hooks/useDocumentStore";
+import { Check, FileText, Loader2, Upload } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import type { InsightData, InsightsCardData } from "@/hooks/useDocumentStore";
+import {
+  AddListItemButton,
+  CardDragHandle,
+  EditModeActions,
+  ReadOnlyEditHint,
+  RemoveListItemButton,
+  handleEditorKeyDown,
+  useDragHandle,
+  useEditableCard,
+  useFocusWhenEditing,
+} from "@/components/strategy/editing";
+import { normalizeInsightsData } from "@/lib/strategy/artifact-edit-sync";
 
 interface InsightsCardProps {
   data: Partial<InsightsCardData>;
@@ -12,130 +24,263 @@ interface InsightsCardProps {
   onMove?: (x: number, y: number) => void;
   onUploadMore?: () => void;
   isUploading?: boolean;
+  onCommit?: (data: InsightsCardData) => void;
 }
 
-export function InsightsCard({ data, x, y, onMove, onUploadMore, isUploading }: InsightsCardProps) {
-  const canvasScale = useCanvasScale();
-  const [isDragging, setIsDragging] = useState(false);
+export function InsightsCard({
+  data,
+  x,
+  y,
+  onMove,
+  onUploadMore,
+  isUploading,
+  onCommit,
+}: InsightsCardProps) {
+  const {
+    canEdit,
+    isEditing,
+    draft,
+    setDraft,
+    startEditing,
+    cancelEditing,
+    saveEditing,
+  } = useEditableCard({
+    value: normalizeInsightsData({
+      insights: data.insights ?? [],
+      documents: data.documents ?? [],
+    }),
+    onCommit,
+    normalize: normalizeInsightsData,
+  });
+  const { isDragging, dragHandleProps } = useDragHandle({ x, y, onMove });
+  const firstInputRef = useFocusWhenEditing<HTMLTextAreaElement>(isEditing);
 
-  const handlePointerDown = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    if (!onMove) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    setIsDragging(true);
-  }, [onMove]);
-
-  const handlePointerMove = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    if (!isDragging || !onMove) return;
-    onMove(x + e.movementX / canvasScale, y + e.movementY / canvasScale);
-  }, [isDragging, onMove, x, y, canvasScale]);
-
-  const handlePointerUp = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    e.currentTarget.releasePointerCapture(e.pointerId);
-    setIsDragging(false);
-  }, []);
-
-  const insights = data.insights ?? [];
-  const documents = data.documents ?? [];
-  const hasInsights = insights.length > 0;
-  const hasDocs = documents.length > 0;
+  const hasInsights = draft.insights.length > 0;
+  const hasDocs = draft.documents.length > 0;
 
   return (
     <div
-      className={`absolute select-none ${
-        isDragging ? "cursor-grabbing" : onMove ? "cursor-grab" : ""
-      }`}
+      className={`absolute ${isEditing ? "" : "select-none"}`}
       style={{
         left: x,
         top: y,
         width: 600,
-        touchAction: onMove ? "none" : undefined,
       }}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
+      onPointerDown={(event) => event.stopPropagation()}
     >
-      <div className="bg-white/90 backdrop-blur-sm border border-neutral-200/60 shadow-lg rounded-2xl p-8">
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
-            <FileText className="w-4 h-4 text-blue-600" />
+      <div className="rounded-2xl border border-neutral-200/60 bg-white/90 p-8 shadow-lg backdrop-blur-sm">
+        <div className="mb-6 flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50">
+            <FileText className="h-4 w-4 text-blue-600" />
           </div>
           <h2 className="text-2xl font-bold text-neutral-900">Key Insights</h2>
-          <span className="ml-auto text-xs font-medium bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">
-            {documents.length} doc{documents.length !== 1 ? "s" : ""}
+          <span className="ml-auto rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-600">
+            {draft.documents.length} doc{draft.documents.length !== 1 ? "s" : ""}
           </span>
+          <CardDragHandle
+            isDragging={isDragging}
+            canDrag={Boolean(onMove)}
+            dragHandleProps={dragHandleProps}
+          />
         </div>
 
-        {/* Source Documents */}
-        {hasDocs && (
-          <>
-            <h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider mb-2">
-              Source Documents
-            </h3>
-            <div className="space-y-1.5 mb-6">
-              {documents.map((doc, i) => (
-                <div key={i} className="flex items-center gap-2 text-sm text-neutral-600">
-                  <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                  <span className="truncate">{doc.name}</span>
+        {isEditing ? (
+          <div className="space-y-4">
+            {hasDocs && (
+              <div className="rounded-xl border border-neutral-200/70 bg-neutral-50 p-3">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                  Source Documents
+                </p>
+                <div className="space-y-1.5">
+                  {draft.documents.map((document, index) => (
+                    <div key={`${document.name}-${index}`} className="flex items-center gap-2 text-sm text-neutral-600">
+                      <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                      <span className="truncate">{document.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                Insights
+              </p>
+              <AddListItemButton
+                label="Add insight"
+                onClick={() =>
+                  setDraft((current) => ({
+                    ...current,
+                    insights: [
+                      ...current.insights,
+                      { insight: "", quote: "", sourceDocument: "", source: "conversation" },
+                    ],
+                  }))
+                }
+              />
+            </div>
+
+            <div className="space-y-3">
+              {draft.insights.map((item, index) => (
+                <div key={index} className="space-y-2 rounded-xl border border-neutral-200/80 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                      Insight {index + 1}
+                    </p>
+                    <RemoveListItemButton
+                      onClick={() =>
+                        setDraft((current) => ({
+                          ...current,
+                          insights: current.insights.filter((_, insightIndex) => insightIndex !== index),
+                        }))
+                      }
+                    />
+                  </div>
+
+                  <Textarea
+                    ref={index === 0 ? firstInputRef : undefined}
+                    value={item.insight}
+                    placeholder="What did we learn?"
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        insights: current.insights.map((insight, insightIndex) =>
+                          insightIndex === index
+                            ? { ...insight, insight: event.target.value }
+                            : insight
+                        ),
+                      }))
+                    }
+                    onKeyDown={(event) =>
+                      handleEditorKeyDown(event, {
+                        onSave: saveEditing,
+                        onCancel: cancelEditing,
+                      })
+                    }
+                    className="min-h-[88px] text-sm"
+                  />
+
+                  <Textarea
+                    value={item.quote ?? ""}
+                    placeholder="Optional supporting quote"
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        insights: current.insights.map((insight, insightIndex) =>
+                          insightIndex === index
+                            ? { ...insight, quote: event.target.value }
+                            : insight
+                        ),
+                      }))
+                    }
+                    onKeyDown={(event) =>
+                      handleEditorKeyDown(event, {
+                        onSave: saveEditing,
+                        onCancel: cancelEditing,
+                      })
+                    }
+                    className="min-h-[72px] text-sm"
+                  />
+
+                  <Input
+                    value={item.sourceDocument ?? ""}
+                    placeholder="Source document"
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        insights: current.insights.map((insight, insightIndex) =>
+                          insightIndex === index
+                            ? { ...insight, sourceDocument: event.target.value }
+                            : insight
+                        ),
+                      }))
+                    }
+                    onKeyDown={(event) =>
+                      handleEditorKeyDown(event, {
+                        onSave: saveEditing,
+                        onCancel: cancelEditing,
+                      })
+                    }
+                    className="text-sm"
+                  />
                 </div>
               ))}
             </div>
-            <div className="border-t border-neutral-200/60 mb-5" />
-          </>
-        )}
 
-        {/* Insights List */}
-        {hasInsights && (
-          <>
-            <h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider mb-3">
-              Insights
-            </h3>
-            <ol className="space-y-4">
-              {insights.map((item, index) => (
-                <InsightItem key={index} item={item as InsightData} index={index} />
-              ))}
-            </ol>
-          </>
-        )}
-
-        {/* Streaming placeholder */}
-        {!hasInsights && (
-          <div className="flex items-center gap-2 text-sm text-neutral-400 py-4">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>{hasDocs ? "Analyzing documents..." : "Gathering insights..."}</span>
+            <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
           </div>
-        )}
-
-        {/* Upload More Button */}
-        {onUploadMore && (
-          <>
-            {(hasInsights || hasDocs) && (
-              <div className="border-t border-neutral-200/60 mt-6 mb-5" />
+        ) : (
+          <div
+            className={canEdit ? "cursor-text" : undefined}
+            onClick={() => {
+              if (canEdit) startEditing();
+            }}
+          >
+            {hasDocs && (
+              <>
+                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-neutral-500">
+                  Source Documents
+                </h3>
+                <div className="mb-6 space-y-1.5">
+                  {draft.documents.map((document, index) => (
+                    <div key={`${document.name}-${index}`} className="flex items-center gap-2 text-sm text-neutral-600">
+                      <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                      <span className="truncate">{document.name}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mb-5 border-t border-neutral-200/60" />
+              </>
             )}
-            <button
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                onUploadMore();
-              }}
-              disabled={isUploading}
-              className="w-full py-3 border-2 border-dashed border-neutral-200 rounded-xl text-sm text-neutral-500 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50/50 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isUploading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="w-4 h-4" />
-                  Upload More Documents
-                </>
-              )}
-            </button>
-          </>
+
+            {hasInsights ? (
+              <>
+                <h3 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
+                  Insights
+                </h3>
+                <ol className="space-y-4">
+                  {draft.insights.map((item, index) => (
+                    <InsightItem key={index} item={item as InsightData} index={index} />
+                  ))}
+                </ol>
+              </>
+            ) : (
+              <div className="flex items-center gap-2 py-4 text-sm text-neutral-400">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>{hasDocs ? "Analyzing documents..." : "Gathering insights..."}</span>
+              </div>
+            )}
+
+            {onUploadMore && (
+              <>
+                {(hasInsights || hasDocs) && <div className="mb-5 mt-6 border-t border-neutral-200/60" />}
+                <button
+                  type="button"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onUploadMore();
+                  }}
+                  disabled={isUploading}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-neutral-200 py-3 text-sm text-neutral-500 transition-colors hover:border-blue-300 hover:bg-blue-50/50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isUploading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Uploading...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-4 w-4" />
+                      Upload More Documents
+                    </>
+                  )}
+                </button>
+              </>
+            )}
+
+            {canEdit && <ReadOnlyEditHint />}
+          </div>
         )}
       </div>
     </div>
@@ -146,27 +291,21 @@ function InsightItem({ item, index }: { item: InsightData; index: number }) {
   return (
     <li className="space-y-1.5">
       <div className="flex items-start gap-3">
-        <span className="text-sm font-semibold text-blue-500 mt-0.5 shrink-0 w-5 text-center">
+        <span className="mt-0.5 w-5 shrink-0 text-center text-sm font-semibold text-blue-500">
           {index + 1}
         </span>
-        <p className="text-base font-medium text-neutral-800 leading-relaxed">
-          {item.insight}
-        </p>
+        <p className="text-base font-medium leading-relaxed text-neutral-800">{item.insight}</p>
       </div>
       {item.quote && (
-        <div className="ml-8 border-l-2 border-blue-200 pl-3 py-1">
-          <p className="text-sm text-neutral-500 italic leading-relaxed">
-            &ldquo;{item.quote}&rdquo;
-          </p>
+        <div className="ml-8 border-l-2 border-blue-200 py-1 pl-3">
+          <p className="text-sm italic leading-relaxed text-neutral-500">&ldquo;{item.quote}&rdquo;</p>
           {item.sourceDocument && (
-            <p className="text-xs text-neutral-400 mt-1">
-              — {item.sourceDocument}
-            </p>
+            <p className="mt-1 text-xs text-neutral-400">- {item.sourceDocument}</p>
           )}
         </div>
       )}
       {item.source === "conversation" && !item.quote && (
-        <p className="ml-8 text-xs text-neutral-400 italic">From conversation</p>
+        <p className="ml-8 text-xs italic text-neutral-400">From conversation</p>
       )}
     </li>
   );

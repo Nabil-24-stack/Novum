@@ -1,8 +1,21 @@
 "use client";
 
-import { useCallback, useState, type PointerEvent } from "react";
-import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
+import { useMemo } from "react";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import type { KeyFeaturesData } from "@/hooks/useStrategyStore";
+import {
+  AddListItemButton,
+  CardDragHandle,
+  EditModeActions,
+  ReadOnlyEditHint,
+  RemoveListItemButton,
+  handleEditorKeyDown,
+  useDragHandle,
+  useEditableCard,
+  useFocusWhenEditing,
+} from "@/components/strategy/editing";
+import { normalizeKeyFeaturesData } from "@/lib/strategy/artifact-edit-sync";
 
 export const KEY_FEATURES_CARD_WIDTH = 400;
 
@@ -11,123 +24,233 @@ interface KeyFeaturesCardProps {
   x: number;
   y: number;
   onMove?: (x: number, y: number) => void;
+  onCommit?: (data: KeyFeaturesData) => void;
 }
 
-export function KeyFeaturesCard({ data, x, y, onMove }: KeyFeaturesCardProps) {
-  const canvasScale = useCanvasScale();
-  const [isDragging, setIsDragging] = useState(false);
+export function KeyFeaturesCard({ data, x, y, onMove, onCommit }: KeyFeaturesCardProps) {
+  const {
+    canEdit,
+    isEditing,
+    draft,
+    setDraft,
+    startEditing,
+    cancelEditing,
+    saveEditing,
+  } = useEditableCard({
+    value: normalizeKeyFeaturesData({
+      ideaTitle: data.ideaTitle ?? "",
+      features: data.features ?? [],
+    }),
+    onCommit,
+    normalize: normalizeKeyFeaturesData,
+  });
+  const { isDragging, dragHandleProps } = useDragHandle({ x, y, onMove });
+  const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
 
-  const handlePointerDown = useCallback(
-    (e: PointerEvent<HTMLDivElement>) => {
-      if (!onMove) return;
-      e.preventDefault();
-      e.stopPropagation();
-      e.currentTarget.setPointerCapture(e.pointerId);
-      setIsDragging(true);
-    },
-    [onMove]
-  );
-
-  const handlePointerMove = useCallback(
-    (e: PointerEvent<HTMLDivElement>) => {
-      if (!isDragging || !onMove) return;
-      onMove(x + e.movementX / canvasScale, y + e.movementY / canvasScale);
-    },
-    [isDragging, onMove, x, y, canvasScale]
-  );
-
-  const handlePointerUp = useCallback(
-    (e: PointerEvent<HTMLDivElement>) => {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-      setIsDragging(false);
-    },
-    []
-  );
+  const featuresByPriority = useMemo(() => {
+    return {
+      high: draft.features.filter((feature) => feature.priority === "high"),
+      medium: draft.features.filter((feature) => feature.priority === "medium"),
+      low: draft.features.filter((feature) => feature.priority === "low"),
+    };
+  }, [draft.features]);
 
   return (
     <div
-      className={`absolute select-none ${isDragging ? "cursor-grabbing" : onMove ? "cursor-grab" : ""}`}
+      className={`absolute ${isEditing ? "" : "select-none"}`}
       style={{
         left: x,
         top: y,
         width: KEY_FEATURES_CARD_WIDTH,
-        touchAction: onMove ? "none" : undefined,
       }}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
+      onPointerDown={(event) => event.stopPropagation()}
     >
-      <div className="bg-white border border-neutral-200 rounded-xl shadow-md overflow-hidden">
-        {/* Header */}
-        <div className="px-5 pt-5 pb-3 border-b border-neutral-100">
-          <h3 className="text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-1">
-            Key Features
-          </h3>
-          {data.ideaTitle && (
-            <p className="text-sm font-bold text-neutral-900 leading-tight">
-              {data.ideaTitle}
-            </p>
-          )}
+      <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-md">
+        <div className="flex items-center justify-between gap-3 border-b border-neutral-100 px-5 py-3">
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+              Key Features
+            </h3>
+            {draft.ideaTitle && (
+              <p className="mt-1 text-sm font-bold leading-tight text-neutral-900">
+                {draft.ideaTitle}
+              </p>
+            )}
+          </div>
+          <CardDragHandle
+            isDragging={isDragging}
+            canDrag={Boolean(onMove)}
+            dragHandleProps={dragHandleProps}
+          />
         </div>
 
-        {/* Features grouped by priority */}
-        {data.features && data.features.length > 0 && (
-          <div className="p-5 space-y-4">
-            {(["high", "medium", "low"] as const).map((priority) => {
-              const group = data.features!.filter((f) => f.priority === priority);
-              if (group.length === 0) return null;
-              const config = {
-                high: { label: "High Priority", bg: "bg-red-50", text: "text-red-700", dot: "bg-red-400" },
-                medium: { label: "Medium Priority", bg: "bg-amber-50", text: "text-amber-700", dot: "bg-amber-400" },
-                low: { label: "Low Priority", bg: "bg-slate-50", text: "text-slate-600", dot: "bg-slate-400" },
-              }[priority];
-              return (
-                <div key={priority}>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className={`w-2 h-2 rounded-full ${config.dot}`} />
-                    <span className={`text-xs font-semibold uppercase tracking-wider ${config.text}`}>
-                      {config.label}
-                    </span>
-                  </div>
-                  <div className="space-y-2 ml-4">
-                    {group.map((feature, i) => (
-                      <div key={i} className="min-w-0">
-                        <p className="text-sm font-semibold text-neutral-900 leading-tight">
-                          {feature.name}
-                        </p>
-                        {feature.description && (
-                          <p className="text-sm text-neutral-600 leading-relaxed mt-0.5">
-                            {feature.description}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+        {isEditing ? (
+          <div className="space-y-4 p-5">
+            <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-500">
+              Selected solution label: {draft.ideaTitle || "Not set"}
+            </div>
+
+            {draft.features.map((feature, index) => (
+              <div key={index} className="space-y-2 rounded-xl border border-neutral-200/80 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                    Feature {index + 1}
+                  </p>
+                  <RemoveListItemButton
+                    onClick={() =>
+                      setDraft((current) => ({
+                        ...current,
+                        features: current.features.filter((_, featureIndex) => featureIndex !== index),
+                      }))
+                    }
+                  />
                 </div>
-              );
-            })}
-            {/* Fallback for features without priority (streaming/legacy) */}
-            {data.features && data.features.some((f) => !f.priority) && (
-              <div className="space-y-2">
-                {data.features.filter((f) => !f.priority).map((feature, i) => (
-                  <div key={i} className="flex gap-3">
-                    <div className="w-6 h-6 rounded-full bg-neutral-100 flex items-center justify-center text-xs font-bold text-neutral-500 shrink-0 mt-0.5">
-                      {i + 1}
+
+                <Input
+                  ref={index === 0 ? firstInputRef : undefined}
+                  value={feature.name}
+                  placeholder="Feature name"
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      features: current.features.map((item, featureIndex) =>
+                        featureIndex === index
+                          ? { ...item, name: event.target.value }
+                          : item
+                      ),
+                    }))
+                  }
+                  onKeyDown={(event) =>
+                    handleEditorKeyDown(event, {
+                      onSave: saveEditing,
+                      onCancel: cancelEditing,
+                    })
+                  }
+                  className="text-sm"
+                />
+
+                <Textarea
+                  value={feature.description}
+                  placeholder="Describe why this feature matters."
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      features: current.features.map((item, featureIndex) =>
+                        featureIndex === index
+                          ? { ...item, description: event.target.value }
+                          : item
+                      ),
+                    }))
+                  }
+                  onKeyDown={(event) =>
+                    handleEditorKeyDown(event, {
+                      onSave: saveEditing,
+                      onCancel: cancelEditing,
+                    })
+                  }
+                  className="min-h-[88px] text-sm"
+                />
+
+                <label className="space-y-1 text-xs font-medium text-neutral-500">
+                  Priority
+                  <select
+                    value={feature.priority}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        features: current.features.map((item, featureIndex) =>
+                          featureIndex === index
+                            ? {
+                                ...item,
+                                priority: event.target.value as KeyFeaturesData["features"][number]["priority"],
+                              }
+                            : item
+                        ),
+                      }))
+                    }
+                    className="h-10 w-full rounded-lg border border-neutral-200 bg-white px-3 text-sm text-neutral-700 outline-none focus:border-neutral-400"
+                  >
+                    <option value="high">High priority</option>
+                    <option value="medium">Medium priority</option>
+                    <option value="low">Low priority</option>
+                  </select>
+                </label>
+              </div>
+            ))}
+
+            <AddListItemButton
+              label="Add feature"
+              onClick={() =>
+                setDraft((current) => ({
+                  ...current,
+                  features: [
+                    ...current.features,
+                    { name: "", description: "", priority: "medium" },
+                  ],
+                }))
+              }
+            />
+
+            <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
+          </div>
+        ) : (
+          <div
+            className={canEdit ? "cursor-text p-5" : "p-5"}
+            onClick={() => {
+              if (canEdit) startEditing();
+            }}
+          >
+            <div className="space-y-4">
+              {(["high", "medium", "low"] as const).map((priority) => {
+                const group = featuresByPriority[priority];
+                if (group.length === 0) return null;
+
+                const config = {
+                  high: {
+                    label: "High Priority",
+                    text: "text-red-700",
+                    dot: "bg-red-400",
+                  },
+                  medium: {
+                    label: "Medium Priority",
+                    text: "text-amber-700",
+                    dot: "bg-amber-400",
+                  },
+                  low: {
+                    label: "Low Priority",
+                    text: "text-slate-600",
+                    dot: "bg-slate-400",
+                  },
+                }[priority];
+
+                return (
+                  <div key={priority}>
+                    <div className="mb-2 flex items-center gap-2">
+                      <span className={`h-2 w-2 rounded-full ${config.dot}`} />
+                      <span className={`text-xs font-semibold uppercase tracking-wider ${config.text}`}>
+                        {config.label}
+                      </span>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-neutral-900 leading-tight">
-                        {feature.name}
-                      </p>
-                      {feature.description && (
-                        <p className="text-sm text-neutral-600 leading-relaxed mt-0.5">
-                          {feature.description}
-                        </p>
-                      )}
+                    <div className="ml-4 space-y-2">
+                      {group.map((feature, index) => (
+                        <div key={`${priority}-${index}`} className="min-w-0">
+                          <p className="text-sm font-semibold leading-tight text-neutral-900">
+                            {feature.name}
+                          </p>
+                          {feature.description && (
+                            <p className="mt-0.5 text-sm leading-relaxed text-neutral-600">
+                              {feature.description}
+                            </p>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
+                );
+              })}
+            </div>
+
+            {canEdit && <ReadOnlyEditHint />}
           </div>
         )}
       </div>

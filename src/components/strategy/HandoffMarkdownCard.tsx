@@ -83,8 +83,8 @@ export function HandoffMarkdownCard({
 
   const prdFilename = `${projectName || "project"}-prd.md`;
   const deltaFilename = `${projectName || "project"}-delta.md`;
-  const canDownload = fullMarkdown.trim().length > 0;
-  const canDownloadDelta = Boolean(latestDeltaMarkdown?.trim());
+  const canDownload = fullMarkdown.trim().length > 0 && !isOutdated;
+  const canDownloadDelta = Boolean(latestDeltaMarkdown?.trim()) && !isOutdated;
   const showRegenerate = isOutdated || !canDownload || Boolean(lastError);
 
   return (
@@ -131,6 +131,11 @@ export function HandoffMarkdownCard({
                 PRD-style markdown generated from your current strategy artifacts.
               </p>
               <p className="mt-2 text-xs text-neutral-400">Last generated: {generatedLabel}</p>
+              {isOutdated && (
+                <p className="mt-2 text-xs text-amber-600">
+                  This preview is stale until you regenerate the handoff.
+                </p>
+              )}
             </div>
           </div>
 

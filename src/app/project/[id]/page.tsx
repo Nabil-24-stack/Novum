@@ -37,7 +37,7 @@ import { StrategyAnnotations } from "@/components/flow/StrategyAnnotations";
 import { useAnnotationStore } from "@/hooks/useAnnotationStore";
 import { useAnnotationResolution } from "@/hooks/useAnnotationResolution";
 import { InsightsCard } from "@/components/strategy/InsightsCard";
-import { useDocumentStore } from "@/hooks/useDocumentStore";
+import { useDocumentStore, type InsightsCardData } from "@/hooks/useDocumentStore";
 import { PersonaCard } from "@/components/strategy/PersonaCard";
 import { JourneyMapCard } from "@/components/strategy/JourneyMapCard";
 import { IdeaCard } from "@/components/strategy/IdeaCard";
@@ -51,6 +51,14 @@ import { UserFlowCard, USER_FLOW_CARD_WIDTH, USER_FLOW_CARD_HEIGHT } from "@/com
 import { StrategyFlowCanvas } from "@/components/strategy/StrategyFlowCanvas";
 import { calculateHorizontalLayout, type GroupId, type GroupConfig, type GroupOrigin } from "@/lib/strategy/section-layout";
 import { calculateStrategyLayout } from "@/lib/strategy/strategy-layout";
+import {
+  applyManualIdeaEdit,
+  applyManualJourneyMapEdit,
+  applyManualKeyFeaturesEdit,
+  applyManualManifestoEdit,
+  applyManualPersonaEdit,
+  applyManualUserFlowEdit,
+} from "@/lib/strategy/artifact-edit-sync";
 import { initializeTestAPI, updateTestAPI } from "@/lib/ast/test-utils";
 import { PublishDialog } from "@/components/editor/PublishDialog";
 import { AccountMenu } from "@/components/billing/AccountMenu";
@@ -440,6 +448,176 @@ export default function ProjectEditor() {
     () => getDirtyHandoffSections(handoffSnapshot, handoffState.baselineSnapshot),
     [handoffSnapshot, handoffState.baselineSnapshot]
   );
+
+  const markStrategyEditedAfterBuild = useCallback(() => {
+    if (completedPages.length > 0) {
+      useStrategyStore.getState().setStrategyUpdatedAfterBuild(true);
+    }
+  }, [completedPages.length]);
+
+  const handleInsightsCommit = useCallback((nextInsights: InsightsCardData) => {
+    if (!nextInsights) return;
+    useDocumentStore.getState().setInsightsData(nextInsights);
+    markStrategyEditedAfterBuild();
+  }, [markStrategyEditedAfterBuild]);
+
+  const handleManifestoCommit = useCallback((nextManifesto: NonNullable<typeof manifestoData>) => {
+    const result = applyManualManifestoEdit(
+      {
+        manifestoData,
+        personaData,
+        journeyMapData,
+        ideaData,
+        selectedIdeaId,
+        keyFeaturesData,
+        userFlowsData,
+      },
+      nextManifesto
+    );
+
+    useStrategyStore.getState().setManifestoData(result.manifestoData);
+    if (result.userFlowsData !== null) {
+      useStrategyStore.getState().setUserFlowsData(result.userFlowsData);
+    }
+  }, [
+    ideaData,
+    journeyMapData,
+    keyFeaturesData,
+    manifestoData,
+    personaData,
+    selectedIdeaId,
+    userFlowsData,
+  ]);
+
+  const handlePersonaCommit = useCallback((personaIndex: number, nextPersona: NonNullable<typeof personaData>[number]) => {
+    const result = applyManualPersonaEdit(
+      {
+        manifestoData,
+        personaData,
+        journeyMapData,
+        ideaData,
+        selectedIdeaId,
+        keyFeaturesData,
+        userFlowsData,
+      },
+      personaIndex,
+      nextPersona
+    );
+
+    useStrategyStore.getState().setPersonaData(result.personaData);
+    if (result.journeyMapData !== null) {
+      useStrategyStore.getState().setJourneyMapData(result.journeyMapData);
+    }
+    if (result.userFlowsData !== null) {
+      useStrategyStore.getState().setUserFlowsData(result.userFlowsData);
+    }
+  }, [
+    ideaData,
+    journeyMapData,
+    keyFeaturesData,
+    manifestoData,
+    personaData,
+    selectedIdeaId,
+    userFlowsData,
+  ]);
+
+  const handleJourneyMapCommit = useCallback((journeyMapIndex: number, nextJourneyMap: NonNullable<typeof journeyMapData>[number]) => {
+    const nextJourneyMaps = applyManualJourneyMapEdit(
+      {
+        manifestoData,
+        personaData,
+        journeyMapData,
+        ideaData,
+        selectedIdeaId,
+        keyFeaturesData,
+        userFlowsData,
+      },
+      journeyMapIndex,
+      nextJourneyMap
+    );
+
+    useStrategyStore.getState().setJourneyMapData(nextJourneyMaps);
+  }, [
+    ideaData,
+    journeyMapData,
+    keyFeaturesData,
+    manifestoData,
+    personaData,
+    selectedIdeaId,
+    userFlowsData,
+  ]);
+
+  const handleIdeaCommit = useCallback((ideaIndex: number, nextIdea: NonNullable<typeof ideaData>[number]) => {
+    const result = applyManualIdeaEdit(
+      {
+        manifestoData,
+        personaData,
+        journeyMapData,
+        ideaData,
+        selectedIdeaId,
+        keyFeaturesData,
+        userFlowsData,
+      },
+      ideaIndex,
+      nextIdea
+    );
+
+    useStrategyStore.getState().setIdeaData(result.ideaData);
+    if (result.keyFeaturesData) {
+      useStrategyStore.getState().setKeyFeaturesData(result.keyFeaturesData);
+    }
+
+    if (ideaData?.[ideaIndex]?.id === selectedIdeaId) {
+      markStrategyEditedAfterBuild();
+    }
+  }, [
+    ideaData,
+    journeyMapData,
+    keyFeaturesData,
+    manifestoData,
+    markStrategyEditedAfterBuild,
+    personaData,
+    selectedIdeaId,
+    userFlowsData,
+  ]);
+
+  const handleSelectedIdeaChange = useCallback((nextSelectedIdeaId: string | null) => {
+    if (selectedIdeaId === nextSelectedIdeaId) return;
+    useStrategyStore.getState().setSelectedIdeaId(nextSelectedIdeaId);
+    markStrategyEditedAfterBuild();
+  }, [markStrategyEditedAfterBuild, selectedIdeaId]);
+
+  const handleKeyFeaturesCommit = useCallback((nextKeyFeatures: NonNullable<typeof keyFeaturesData>) => {
+    const result = applyManualKeyFeaturesEdit(nextKeyFeatures);
+
+    useStrategyStore.getState().setKeyFeaturesData(result);
+  }, []);
+
+  const handleUserFlowCommit = useCallback((userFlowIndex: number, nextUserFlow: NonNullable<typeof userFlowsData>[number]) => {
+    const nextUserFlows = applyManualUserFlowEdit(
+      {
+        manifestoData,
+        personaData,
+        journeyMapData,
+        ideaData,
+        selectedIdeaId,
+        keyFeaturesData,
+        userFlowsData,
+      },
+      userFlowIndex,
+      nextUserFlow
+    );
+
+    useStrategyStore.getState().setUserFlowsData(nextUserFlows);
+  }, [
+    ideaData,
+    journeyMapData,
+    keyFeaturesData,
+    manifestoData,
+    personaData,
+    selectedIdeaId,
+    userFlowsData,
+  ]);
 
   // Annotation store + resolution
   const annotationActiveFrames = useAnnotationStore((s) => s.activeFrames);
@@ -2507,6 +2685,7 @@ export default function ProjectEditor() {
                   onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("insights", { x: nx, y: ny }))}
                   onUploadMore={() => documentInputRef.current?.click()}
                   isUploading={isDocUploading}
+                  onCommit={insightsData ? handleInsightsCommit : undefined}
                 />
               );
             })()}
@@ -2540,6 +2719,7 @@ export default function ProjectEditor() {
                     });
                     setRightPanelTab("chat");
                   }}
+                  onCommit={manifestoData ? handleManifestoCommit : undefined}
                 />
               );
             })()}
@@ -2567,6 +2747,7 @@ export default function ProjectEditor() {
                   coveragePercent={coverageSummary?.personaCoverage.find(
                     (p) => p.personaName === (persona as { name?: string }).name
                   )?.coveragePercent}
+                  onCommit={personaData ? (nextPersona) => handlePersonaCommit(index, nextPersona) : undefined}
                 />
               );
             });
@@ -2601,6 +2782,7 @@ export default function ProjectEditor() {
                         )
                       : undefined
                   }
+                  onCommit={journeyMapData ? (nextJourneyMap) => handleJourneyMapCommit(index, nextJourneyMap) : undefined}
                 />
               );
             });
@@ -2622,11 +2804,9 @@ export default function ProjectEditor() {
                   y={pos?.y ?? getIdeaRowY(Math.floor(index / 4), g.y)}
                   index={index}
                   isSelected={idea.id === selectedIdeaId}
-                  onClick={() => {
+                  onSelect={() => {
                     if (idea.id) {
-                      useStrategyStore.getState().setSelectedIdeaId(
-                        idea.id === selectedIdeaId ? null : idea.id
-                      );
+                      handleSelectedIdeaChange(idea.id === selectedIdeaId ? null : idea.id);
                     }
                   }}
                   onMove={(nx, ny) => {
@@ -2638,6 +2818,7 @@ export default function ProjectEditor() {
                     });
                   }}
                   onHeightMeasured={(h) => handleIdeaHeightMeasured(index, h)}
+                  onCommit={ideaData ? (nextIdea) => handleIdeaCommit(index, nextIdea) : undefined}
                 />
               );
             });
@@ -2652,6 +2833,7 @@ export default function ProjectEditor() {
                   x={keyFeaturesPosition?.x ?? g.x}
                   y={keyFeaturesPosition?.y ?? g.y}
                   onMove={(nx, ny) => setKeyFeaturesPosition({ x: nx, y: ny })}
+                  onCommit={keyFeaturesData ? handleKeyFeaturesCommit : undefined}
                 />
               );
             })()}
@@ -2686,6 +2868,7 @@ export default function ProjectEditor() {
                     updated[index] = { x: nx, y: ny };
                     return updated;
                   })}
+                  onCommit={userFlowsData ? (nextUserFlow) => handleUserFlowCommit(index, nextUserFlow) : undefined}
                 />
               );
             })}

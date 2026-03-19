@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:unit": "node --test --experimental-strip-types src/lib/ai/*.test.ts src/lib/handoff/*.test.ts"
+    "test:unit": "node --test --experimental-strip-types src/lib/ai/*.test.ts src/lib/handoff/*.test.ts src/lib/strategy/*.test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.36",

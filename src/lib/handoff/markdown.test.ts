@@ -142,3 +142,75 @@ test("builds delta markdown for changed sections only", () => {
   assert.match(markdown, /## Key Features/);
   assert.doesNotMatch(markdown, /## Personas/);
 });
+
+test("non-selected idea edits do not dirty the handoff snapshot", () => {
+  const selectedIdeaId = "idea-1";
+  const baselineIdeas = [
+    { id: "idea-1", title: "Living handoff", description: "A canvas-native PRD compiler.", illustration: "" },
+    { id: "idea-2", title: "Roadmap board", description: "A planning board.", illustration: "" },
+  ];
+  const currentIdeas = [
+    baselineIdeas[0],
+    { ...baselineIdeas[1], description: "A planning board with release tracking." },
+  ];
+
+  const baseline = buildHandoffSnapshot({
+    productOverview: null,
+    insights: null,
+    personas: null,
+    journeyHighlights: null,
+    selectedSolution: baselineIdeas.find((idea) => idea.id === selectedIdeaId) ?? null,
+    keyFeatures: null,
+    informationArchitecture: null,
+    userFlows: null,
+  });
+
+  const current = buildHandoffSnapshot({
+    productOverview: null,
+    insights: null,
+    personas: null,
+    journeyHighlights: null,
+    selectedSolution: currentIdeas.find((idea) => idea.id === selectedIdeaId) ?? null,
+    keyFeatures: null,
+    informationArchitecture: null,
+    userFlows: null,
+  });
+
+  assert.deepEqual(getDirtyHandoffSections(current, baseline), []);
+});
+
+test("selected idea edits dirty the selected-solution handoff section", () => {
+  const baseline = buildHandoffSnapshot({
+    productOverview: null,
+    insights: null,
+    personas: null,
+    journeyHighlights: null,
+    selectedSolution: {
+      id: "idea-1",
+      title: "Living handoff",
+      description: "A canvas-native PRD compiler.",
+      illustration: "",
+    },
+    keyFeatures: null,
+    informationArchitecture: null,
+    userFlows: null,
+  });
+
+  const current = buildHandoffSnapshot({
+    productOverview: null,
+    insights: null,
+    personas: null,
+    journeyHighlights: null,
+    selectedSolution: {
+      id: "idea-1",
+      title: "Living handoff",
+      description: "A live PRD compiler with editable artifacts.",
+      illustration: "",
+    },
+    keyFeatures: null,
+    informationArchitecture: null,
+    userFlows: null,
+  });
+
+  assert.deepEqual(getDirtyHandoffSections(current, baseline), ["selected-solution"]);
+});

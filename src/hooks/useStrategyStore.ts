@@ -1,9 +1,9 @@
 "use client";
 
 import { create } from "zustand";
-import type { CoverageDisplayState } from "@/lib/product-brain/types";
-import type { HandoffState, ProductMode } from "@/lib/handoff/types";
-import { createEmptyHandoffState } from "@/lib/handoff/types";
+import type { CoverageDisplayState } from "../lib/product-brain/types.ts";
+import type { HandoffState, ProductMode } from "../lib/handoff/types.ts";
+import { createEmptyHandoffState } from "../lib/handoff/types.ts";
 
 export type StrategyPhase =
   | "hero"
@@ -285,7 +285,10 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
 
   setStreamingPersonas: (data) => set({ streamingPersonas: data }),
 
-  setFlowData: (data) => set({ flowData: data }),
+  setFlowData: (data) => {
+    const afterBuild = get().completedPages.length > 0;
+    set({ flowData: data, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+  },
 
   setConfidenceData: (data) =>
     set((state) => {
@@ -367,11 +370,17 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
 
   setDeepDive: (v) => set({ isDeepDive: v }),
 
-  setKeyFeaturesData: (data) => set({ keyFeaturesData: data, streamingKeyFeatures: null }),
+  setKeyFeaturesData: (data) => {
+    const afterBuild = get().completedPages.length > 0;
+    set({ keyFeaturesData: data, streamingKeyFeatures: null, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+  },
 
   setStreamingKeyFeatures: (data) => set({ streamingKeyFeatures: data }),
 
-  setUserFlowsData: (data) => set({ userFlowsData: data, streamingUserFlows: null }),
+  setUserFlowsData: (data) => {
+    const afterBuild = get().completedPages.length > 0;
+    set({ userFlowsData: data, streamingUserFlows: null, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+  },
 
   setStreamingUserFlows: (data) => set({ streamingUserFlows: data }),
 
