@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { PersonaData } from "@/hooks/useStrategyStore";
 import {
+  ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   AddListItemButton,
   CardDragHandle,
   EditModeActions,
@@ -100,7 +101,7 @@ export function PersonaCard({
         </div>
 
         {isEditing ? (
-          <div className="space-y-4">
+          <div className={`space-y-4 ${ARTIFACT_EDITOR_FIELDS_CLASSNAME}`}>
             <div className="grid gap-3">
               <Input
                 ref={firstInputRef}

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { InsightData, InsightsCardData } from "@/hooks/useDocumentStore";
 import {
+  ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   AddListItemButton,
   CardDragHandle,
   EditModeActions,
@@ -85,7 +86,7 @@ export function InsightsCard({
         </div>
 
         {isEditing ? (
-          <div className="space-y-4">
+          <div className={`space-y-4 ${ARTIFACT_EDITOR_FIELDS_CLASSNAME}`}>
             {hasDocs && (
               <div className="rounded-xl border border-neutral-200/70 bg-neutral-50 p-3">
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">

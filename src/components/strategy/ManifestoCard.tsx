@@ -10,6 +10,7 @@ import type {
   JtbdCoverage,
 } from "@/lib/product-brain/types";
 import {
+  ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   AddListItemButton,
   CardDragHandle,
   EditModeActions,
@@ -99,7 +100,7 @@ export function ManifestoCard({
         </div>
 
         {isEditing ? (
-          <div className="space-y-4">
+          <div className={`space-y-4 ${ARTIFACT_EDITOR_FIELDS_CLASSNAME}`}>
             <Input
               ref={firstInputRef}
               value={draft.title}

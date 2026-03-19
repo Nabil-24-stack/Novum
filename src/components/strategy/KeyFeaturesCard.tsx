@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import type { KeyFeaturesData } from "@/hooks/useStrategyStore";
 import {
+  ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   AddListItemButton,
   CardDragHandle,
   EditModeActions,
@@ -85,7 +86,7 @@ export function KeyFeaturesCard({ data, x, y, onMove, onCommit }: KeyFeaturesCar
         </div>
 
         {isEditing ? (
-          <div className="space-y-4 p-5">
+          <div className={`space-y-4 p-5 ${ARTIFACT_EDITOR_FIELDS_CLASSNAME}`}>
             <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-500">
               Selected solution label: {draft.ideaTitle || "Not set"}
             </div>

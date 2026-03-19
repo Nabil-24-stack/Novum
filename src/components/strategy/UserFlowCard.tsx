@@ -5,6 +5,7 @@ import { Database, FileText, GitBranch, Zap } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import type { FlowData, PersonaData, StrategyNode, UserFlow } from "@/hooks/useStrategyStore";
 import {
+  ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   AddListItemButton,
   CardDragHandle,
   EditModeActions,
@@ -204,7 +205,7 @@ export function UserFlowCard({
         </div>
 
         {isEditing ? (
-          <div className="space-y-4 px-5 pb-5">
+          <div className={`space-y-4 px-5 pb-5 ${ARTIFACT_EDITOR_FIELDS_CLASSNAME}`}>
             <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-500">
               JTBD and persona links stay anchored to the upstream overview and persona artifacts.
             </div>

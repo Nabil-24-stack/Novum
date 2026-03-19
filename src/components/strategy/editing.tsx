@@ -12,6 +12,11 @@ import {
 import { Check, GripHorizontal, Plus, Trash2, X } from "lucide-react";
 import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
 
+export const ARTIFACT_EDITOR_FIELDS_CLASSNAME =
+  "[&_input]:border-neutral-300 [&_input]:bg-white [&_input]:text-neutral-900 [&_input]:placeholder:text-neutral-400 " +
+  "[&_textarea]:border-neutral-300 [&_textarea]:bg-white [&_textarea]:text-neutral-900 [&_textarea]:placeholder:text-neutral-400 " +
+  "[&_select]:border-neutral-300 [&_select]:bg-white [&_select]:text-neutral-900";
+
 export function cloneEditableValue<T>(value: T): T {
   if (typeof structuredClone === "function") {
     return structuredClone(value);

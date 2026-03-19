@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { IdeaData } from "@/hooks/useStrategyStore";
 import {
+  ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   CardDragHandle,
   EditModeActions,
   ReadOnlyEditHint,
@@ -154,7 +155,7 @@ export function IdeaCard({
           </div>
 
           {isEditing ? (
-            <div className="space-y-3">
+            <div className={`space-y-3 ${ARTIFACT_EDITOR_FIELDS_CLASSNAME}`}>
               <Input
                 ref={firstInputRef}
                 value={draft.title}

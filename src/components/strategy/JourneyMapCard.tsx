@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { JourneyMapData, JourneyStage } from "@/hooks/useStrategyStore";
 import {
+  ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   AddListItemButton,
   CardDragHandle,
   EditModeActions,
@@ -178,7 +179,7 @@ export function JourneyMapCard({
         </div>
 
         {isEditing ? (
-          <div className="space-y-4 p-5">
+          <div className={`space-y-4 p-5 ${ARTIFACT_EDITOR_FIELDS_CLASSNAME}`}>
             <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-500">
               Persona label follows the linked persona card in v1.
             </div>
