@@ -6,13 +6,14 @@ import { Textarea } from "@/components/ui/textarea";
 import type { InsightData, InsightsCardData } from "@/hooks/useDocumentStore";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
+  ARTIFACT_IDLE_CARD_CLASSNAME,
+  ARTIFACT_SELECTED_CARD_CLASSNAME,
   AddListItemButton,
-  CardDragHandle,
   EditModeActions,
   ReadOnlyEditHint,
   RemoveListItemButton,
   handleEditorKeyDown,
-  useDragHandle,
+  useArtifactCardInteraction,
   useEditableCard,
   useFocusWhenEditing,
 } from "@/components/strategy/editing";
@@ -26,6 +27,8 @@ interface InsightsCardProps {
   onUploadMore?: () => void;
   isUploading?: boolean;
   onCommit?: (data: InsightsCardData) => void;
+  isSelected?: boolean;
+  onSelect?: () => void;
 }
 
 export function InsightsCard({
@@ -36,6 +39,8 @@ export function InsightsCard({
   onUploadMore,
   isUploading,
   onCommit,
+  isSelected = false,
+  onSelect,
 }: InsightsCardProps) {
   const {
     canEdit,
@@ -53,7 +58,14 @@ export function InsightsCard({
     onCommit,
     normalize: normalizeInsightsData,
   });
-  const { isDragging, dragHandleProps } = useDragHandle({ x, y, onMove });
+  const { isDragging, cardInteractionProps } = useArtifactCardInteraction({
+    x,
+    y,
+    isEditing,
+    onMove,
+    onSelect,
+    onEdit: startEditing,
+  });
   const firstInputRef = useFocusWhenEditing<HTMLTextAreaElement>(isEditing);
 
   const hasInsights = draft.insights.length > 0;
@@ -66,10 +78,15 @@ export function InsightsCard({
         left: x,
         top: y,
         width: 600,
+        touchAction: isEditing ? undefined : "none",
       }}
-      onPointerDown={(event) => event.stopPropagation()}
+      {...cardInteractionProps}
     >
-      <div className="rounded-2xl border border-neutral-200/60 bg-white/90 p-8 shadow-lg backdrop-blur-sm">
+      <div
+        className={`rounded-2xl border border-neutral-200/60 bg-white/90 p-8 shadow-lg backdrop-blur-sm ${ARTIFACT_IDLE_CARD_CLASSNAME} ${
+          isSelected ? ARTIFACT_SELECTED_CARD_CLASSNAME : ""
+        } ${!isEditing ? (isDragging ? "cursor-grabbing" : "cursor-grab") : ""}`}
+      >
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50">
             <FileText className="h-4 w-4 text-blue-600" />
@@ -78,11 +95,6 @@ export function InsightsCard({
           <span className="ml-auto rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-600">
             {draft.documents.length} doc{draft.documents.length !== 1 ? "s" : ""}
           </span>
-          <CardDragHandle
-            isDragging={isDragging}
-            canDrag={Boolean(onMove)}
-            dragHandleProps={dragHandleProps}
-          />
         </div>
 
         {isEditing ? (
@@ -211,12 +223,7 @@ export function InsightsCard({
             <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
           </div>
         ) : (
-          <div
-            className={canEdit ? "cursor-text" : undefined}
-            onClick={() => {
-              if (canEdit) startEditing();
-            }}
-          >
+          <div>
             {hasDocs && (
               <>
                 <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-neutral-500">

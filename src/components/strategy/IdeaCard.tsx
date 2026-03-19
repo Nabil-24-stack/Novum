@@ -7,11 +7,12 @@ import { Textarea } from "@/components/ui/textarea";
 import type { IdeaData } from "@/hooks/useStrategyStore";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
-  CardDragHandle,
+  ARTIFACT_IDLE_CARD_CLASSNAME,
+  ARTIFACT_SELECTED_CARD_CLASSNAME,
   EditModeActions,
   ReadOnlyEditHint,
   handleEditorKeyDown,
-  useDragHandle,
+  useArtifactCardInteraction,
   useEditableCard,
   useFocusWhenEditing,
 } from "@/components/strategy/editing";
@@ -37,8 +38,10 @@ interface IdeaCardProps {
   onMove?: (x: number, y: number) => void;
   onHeightMeasured?: (height: number) => void;
   index: number;
-  isSelected?: boolean;
-  onSelect?: () => void;
+  isActive?: boolean;
+  onSelectArtifact?: () => void;
+  isSelectedIdea?: boolean;
+  onToggleSelectedIdea?: () => void;
   onCommit?: (idea: IdeaData) => void;
 }
 
@@ -49,8 +52,10 @@ export function IdeaCard({
   onMove,
   onHeightMeasured,
   index,
-  isSelected,
-  onSelect,
+  isActive = false,
+  onSelectArtifact,
+  isSelectedIdea = false,
+  onToggleSelectedIdea,
   onCommit,
 }: IdeaCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
@@ -75,7 +80,14 @@ export function IdeaCard({
     onCommit,
     normalize: normalizeIdeaData,
   });
-  const { isDragging, dragHandleProps } = useDragHandle({ x, y, onMove });
+  const { isDragging, cardInteractionProps } = useArtifactCardInteraction({
+    x,
+    y,
+    isEditing,
+    onMove,
+    onSelect: onSelectArtifact,
+    onEdit: startEditing,
+  });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
 
   useEffect(() => {
@@ -106,13 +118,16 @@ export function IdeaCard({
         left: x,
         top: y,
         width: IDEA_CARD_WIDTH,
+        touchAction: isEditing ? undefined : "none",
       }}
-      onPointerDown={(event) => event.stopPropagation()}
+      {...cardInteractionProps}
     >
       <div
-        className={`overflow-hidden rounded-xl border shadow-md transition-shadow ${
+        className={`overflow-hidden rounded-xl border shadow-md ${
           color.bg
-        } ${color.border} ${isSelected ? "ring-2 ring-blue-500 shadow-xl" : "hover:shadow-lg"}`}
+        } ${color.border} ${ARTIFACT_IDLE_CARD_CLASSNAME} ${
+          isActive || isSelectedIdea ? ARTIFACT_SELECTED_CARD_CLASSNAME : "hover:shadow-lg"
+        } ${!isEditing ? (isDragging ? "cursor-grabbing" : "cursor-grab") : ""}`}
         style={{ position: "relative" }}
       >
         {draft.illustration && (
@@ -128,30 +143,25 @@ export function IdeaCard({
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-black/10 text-sm font-bold text-black/60">
                 {index + 1}
               </div>
-              {onSelect && (
+              {onToggleSelectedIdea && (
                 <button
                   type="button"
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    onSelect();
+                    onToggleSelectedIdea();
                   }}
                   className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-                    isSelected
+                    isSelectedIdea
                       ? "bg-blue-500 text-white"
                       : "bg-white/70 text-neutral-600 hover:bg-white"
                   }`}
                 >
                   <Check className="h-3 w-3" />
-                  {isSelected ? "Selected" : "Set selected"}
+                  {isSelectedIdea ? "Selected" : "Set selected"}
                 </button>
               )}
             </div>
-            <CardDragHandle
-              isDragging={isDragging}
-              canDrag={Boolean(onMove)}
-              dragHandleProps={dragHandleProps}
-            />
           </div>
 
           {isEditing ? (
@@ -196,12 +206,7 @@ export function IdeaCard({
               <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
             </div>
           ) : (
-            <div
-              className={canEdit ? "cursor-text" : undefined}
-              onClick={() => {
-                if (canEdit) startEditing();
-              }}
-            >
+            <div>
               {draft.title && (
                 <h3 className="pr-6 text-base font-bold leading-tight text-neutral-900">
                   {draft.title}

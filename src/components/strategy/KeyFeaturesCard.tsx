@@ -6,13 +6,14 @@ import { Input } from "@/components/ui/input";
 import type { KeyFeaturesData } from "@/hooks/useStrategyStore";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
+  ARTIFACT_IDLE_CARD_CLASSNAME,
+  ARTIFACT_SELECTED_CARD_CLASSNAME,
   AddListItemButton,
-  CardDragHandle,
   EditModeActions,
   ReadOnlyEditHint,
   RemoveListItemButton,
   handleEditorKeyDown,
-  useDragHandle,
+  useArtifactCardInteraction,
   useEditableCard,
   useFocusWhenEditing,
 } from "@/components/strategy/editing";
@@ -26,9 +27,19 @@ interface KeyFeaturesCardProps {
   y: number;
   onMove?: (x: number, y: number) => void;
   onCommit?: (data: KeyFeaturesData) => void;
+  isSelected?: boolean;
+  onSelect?: () => void;
 }
 
-export function KeyFeaturesCard({ data, x, y, onMove, onCommit }: KeyFeaturesCardProps) {
+export function KeyFeaturesCard({
+  data,
+  x,
+  y,
+  onMove,
+  onCommit,
+  isSelected = false,
+  onSelect,
+}: KeyFeaturesCardProps) {
   const {
     canEdit,
     isEditing,
@@ -45,7 +56,14 @@ export function KeyFeaturesCard({ data, x, y, onMove, onCommit }: KeyFeaturesCar
     onCommit,
     normalize: normalizeKeyFeaturesData,
   });
-  const { isDragging, dragHandleProps } = useDragHandle({ x, y, onMove });
+  const { isDragging, cardInteractionProps } = useArtifactCardInteraction({
+    x,
+    y,
+    isEditing,
+    onMove,
+    onSelect,
+    onEdit: startEditing,
+  });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
 
   const featuresByPriority = useMemo(() => {
@@ -63,11 +81,16 @@ export function KeyFeaturesCard({ data, x, y, onMove, onCommit }: KeyFeaturesCar
         left: x,
         top: y,
         width: KEY_FEATURES_CARD_WIDTH,
+        touchAction: isEditing ? undefined : "none",
       }}
-      onPointerDown={(event) => event.stopPropagation()}
+      {...cardInteractionProps}
     >
-      <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-md">
-        <div className="flex items-center justify-between gap-3 border-b border-neutral-100 px-5 py-3">
+      <div
+        className={`overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-md ${ARTIFACT_IDLE_CARD_CLASSNAME} ${
+          isSelected ? ARTIFACT_SELECTED_CARD_CLASSNAME : ""
+        } ${!isEditing ? (isDragging ? "cursor-grabbing" : "cursor-grab") : ""}`}
+      >
+        <div className="border-b border-neutral-100 px-5 py-3">
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
               Key Features
@@ -78,11 +101,6 @@ export function KeyFeaturesCard({ data, x, y, onMove, onCommit }: KeyFeaturesCar
               </p>
             )}
           </div>
-          <CardDragHandle
-            isDragging={isDragging}
-            canDrag={Boolean(onMove)}
-            dragHandleProps={dragHandleProps}
-          />
         </div>
 
         {isEditing ? (
@@ -196,10 +214,7 @@ export function KeyFeaturesCard({ data, x, y, onMove, onCommit }: KeyFeaturesCar
           </div>
         ) : (
           <div
-            className={canEdit ? "cursor-text p-5" : "p-5"}
-            onClick={() => {
-              if (canEdit) startEditing();
-            }}
+            className={canEdit ? "p-5" : "p-5"}
           >
             <div className="space-y-4">
               {(["high", "medium", "low"] as const).map((priority) => {

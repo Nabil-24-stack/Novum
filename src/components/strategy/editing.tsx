@@ -7,15 +7,30 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Check, GripHorizontal, Plus, Trash2, X } from "lucide-react";
+import { Check, Plus, Trash2, X } from "lucide-react";
 import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
 
 export const ARTIFACT_EDITOR_FIELDS_CLASSNAME =
   "[&_input]:border-neutral-300 [&_input]:bg-white [&_input]:text-neutral-900 [&_input]:placeholder:text-neutral-400 " +
   "[&_textarea]:border-neutral-300 [&_textarea]:bg-white [&_textarea]:text-neutral-900 [&_textarea]:placeholder:text-neutral-400 " +
   "[&_select]:border-neutral-300 [&_select]:bg-white [&_select]:text-neutral-900";
+export const ARTIFACT_SELECTED_CARD_CLASSNAME = "ring-2 ring-blue-500 border-blue-300 shadow-xl";
+export const ARTIFACT_IDLE_CARD_CLASSNAME = "transition-shadow";
+
+const DRAG_THRESHOLD_PX = 5;
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    ? Boolean(
+        target.closest(
+          "button, input, textarea, select, a, [role='button'], [data-artifact-no-drag='true']"
+        )
+      )
+    : false;
+}
 
 export function cloneEditableValue<T>(value: T): T {
   if (typeof structuredClone === "function") {
@@ -63,47 +78,95 @@ export function useEditableCard<T>(params: {
   };
 }
 
-export function useDragHandle(params: {
+export function useArtifactCardInteraction(params: {
   x: number;
   y: number;
+  isEditing: boolean;
   onMove?: (x: number, y: number) => void;
+  onSelect?: () => void;
+  onEdit?: () => void;
 }) {
-  const { x, y, onMove } = params;
+  const { x, y, isEditing, onMove, onSelect, onEdit } = params;
   const canvasScale = useCanvasScale();
   const [isDragging, setIsDragging] = useState(false);
+  const gestureRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    dragging: boolean;
+  } | null>(null);
 
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
-      if (!onMove) return;
-      event.preventDefault();
+      if (isEditing || event.button !== 0 || isInteractiveTarget(event.target)) return;
       event.stopPropagation();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      setIsDragging(true);
+      onSelect?.();
+      gestureRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        dragging: false,
+      };
+      if (onMove) {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }
     },
-    [onMove]
+    [isEditing, onMove, onSelect]
   );
 
   const handlePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
-      if (!isDragging || !onMove) return;
+      const gesture = gestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId || !onMove) return;
+      const deltaX = event.clientX - gesture.startX;
+      const deltaY = event.clientY - gesture.startY;
+      if (!gesture.dragging && Math.hypot(deltaX, deltaY) < DRAG_THRESHOLD_PX) return;
+      if (!gesture.dragging) {
+        gesture.dragging = true;
+        setIsDragging(true);
+      }
+      event.preventDefault();
+      event.stopPropagation();
       onMove(x + event.movementX / canvasScale, y + event.movementY / canvasScale);
     },
-    [canvasScale, isDragging, onMove, x, y]
+    [canvasScale, onMove, x, y]
   );
 
   const handlePointerUp = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    gestureRef.current = null;
     setIsDragging(false);
   }, []);
 
+  const handlePointerCancel = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    gestureRef.current = null;
+    setIsDragging(false);
+  }, []);
+
+  const handleDoubleClick = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    if (isEditing || !onEdit || isInteractiveTarget(event.target)) return;
+    event.stopPropagation();
+    onSelect?.();
+    onEdit();
+  }, [isEditing, onEdit, onSelect]);
+
   return {
     isDragging,
-    dragHandleProps: {
+    cardInteractionProps: {
       onPointerDown: handlePointerDown,
       onPointerMove: handlePointerMove,
       onPointerUp: handlePointerUp,
+      onPointerCancel: handlePointerCancel,
+      onDoubleClick: handleDoubleClick,
     },
   };
 }
@@ -142,31 +205,6 @@ export function handleEditorKeyDown(
     event.stopPropagation();
     actions.onSave();
   }
-}
-
-export function CardDragHandle(props: {
-  isDragging: boolean;
-  canDrag: boolean;
-  dragHandleProps: {
-    onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
-    onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
-    onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
-  };
-  label?: string;
-}) {
-  const { isDragging, canDrag, dragHandleProps, label = "Drag card" } = props;
-
-  return (
-    <div
-      className={`inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-[11px] font-medium text-neutral-500 ${
-        canDrag ? (isDragging ? "cursor-grabbing" : "cursor-grab") : "cursor-default opacity-60"
-      }`}
-      {...(canDrag ? dragHandleProps : {})}
-    >
-      <GripHorizontal className="h-3.5 w-3.5" />
-      {label}
-    </div>
-  );
 }
 
 export function EditModeActions(props: {
@@ -254,7 +292,7 @@ export function RemoveListItemButton(props: {
 export function ReadOnlyEditHint() {
   return (
     <p className="mt-4 text-[11px] text-neutral-400">
-      Click anywhere in this card to edit it inline.
+      Single-click to select, drag to move, or double-click to edit.
     </p>
   );
 }

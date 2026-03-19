@@ -6,13 +6,14 @@ import { Input } from "@/components/ui/input";
 import type { FlowData, PersonaData, StrategyNode, UserFlow } from "@/hooks/useStrategyStore";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
+  ARTIFACT_IDLE_CARD_CLASSNAME,
+  ARTIFACT_SELECTED_CARD_CLASSNAME,
   AddListItemButton,
-  CardDragHandle,
   EditModeActions,
   ReadOnlyEditHint,
   RemoveListItemButton,
   handleEditorKeyDown,
-  useDragHandle,
+  useArtifactCardInteraction,
   useEditableCard,
   useFocusWhenEditing,
 } from "@/components/strategy/editing";
@@ -60,6 +61,8 @@ interface UserFlowCardProps {
   y: number;
   onMove?: (x: number, y: number) => void;
   onCommit?: (flow: UserFlow) => void;
+  isSelected?: boolean;
+  onSelect?: () => void;
 }
 
 function getPersonaColorIndex(personaName: string, personas: PersonaData[] | null): number {
@@ -76,6 +79,8 @@ export function UserFlowCard({
   y,
   onMove,
   onCommit,
+  isSelected = false,
+  onSelect,
 }: UserFlowCardProps) {
   const {
     canEdit,
@@ -96,7 +101,14 @@ export function UserFlowCard({
     onCommit,
     normalize: normalizeUserFlowData,
   });
-  const { isDragging, dragHandleProps } = useDragHandle({ x, y, onMove });
+  const { isDragging, cardInteractionProps } = useArtifactCardInteraction({
+    x,
+    y,
+    isEditing,
+    onMove,
+    onSelect,
+    onEdit: startEditing,
+  });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
 
   const steps = useMemo(() => draft.steps ?? [], [draft.steps]);
@@ -172,11 +184,16 @@ export function UserFlowCard({
         left: x,
         top: y,
         width: cardWidth,
+        touchAction: isEditing ? undefined : "none",
       }}
-      onPointerDown={(event) => event.stopPropagation()}
+      {...cardInteractionProps}
     >
-      <div className="overflow-hidden rounded-2xl border border-neutral-200/60 bg-white/90 shadow-lg backdrop-blur-sm">
-        <div className="flex items-start justify-between gap-3 px-5 pb-3 pt-4">
+      <div
+        className={`overflow-hidden rounded-2xl border border-neutral-200/60 bg-white/90 shadow-lg backdrop-blur-sm ${ARTIFACT_IDLE_CARD_CLASSNAME} ${
+          isSelected ? ARTIFACT_SELECTED_CARD_CLASSNAME : ""
+        } ${!isEditing ? (isDragging ? "cursor-grabbing" : "cursor-grab") : ""}`}
+      >
+        <div className="px-5 pb-3 pt-4">
           <div>
             {draft.jtbdText && (
               <p className="text-xs italic leading-relaxed text-neutral-500">&ldquo;{draft.jtbdText}&rdquo;</p>
@@ -197,11 +214,6 @@ export function UserFlowCard({
               </div>
             )}
           </div>
-          <CardDragHandle
-            isDragging={isDragging}
-            canDrag={Boolean(onMove)}
-            dragHandleProps={dragHandleProps}
-          />
         </div>
 
         {isEditing ? (
@@ -309,12 +321,7 @@ export function UserFlowCard({
             <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
           </div>
         ) : (
-          <div
-            className={canEdit ? "cursor-text" : undefined}
-            onClick={() => {
-              if (canEdit) startEditing();
-            }}
-          >
+          <div>
             <div className="relative" style={{ height: USER_FLOW_CARD_HEIGHT - PADDING_TOP + PADDING_BOTTOM }}>
               <svg
                 width={cardWidth}

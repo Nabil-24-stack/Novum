@@ -7,13 +7,14 @@ import { Textarea } from "@/components/ui/textarea";
 import type { PersonaData } from "@/hooks/useStrategyStore";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
+  ARTIFACT_IDLE_CARD_CLASSNAME,
+  ARTIFACT_SELECTED_CARD_CLASSNAME,
   AddListItemButton,
-  CardDragHandle,
   EditModeActions,
   ReadOnlyEditHint,
   RemoveListItemButton,
   handleEditorKeyDown,
-  useDragHandle,
+  useArtifactCardInteraction,
   useEditableCard,
   useFocusWhenEditing,
 } from "@/components/strategy/editing";
@@ -35,6 +36,8 @@ interface PersonaCardProps {
   index: number;
   coveragePercent?: number;
   onCommit?: (persona: PersonaData) => void;
+  isSelected?: boolean;
+  onSelect?: () => void;
 }
 
 export function PersonaCard({
@@ -45,6 +48,8 @@ export function PersonaCard({
   index,
   coveragePercent,
   onCommit,
+  isSelected = false,
+  onSelect,
 }: PersonaCardProps) {
   const accent = ACCENT_COLORS[index] ?? ACCENT_COLORS[0];
   const {
@@ -67,7 +72,14 @@ export function PersonaCard({
     onCommit,
     normalize: normalizePersonaData,
   });
-  const { isDragging, dragHandleProps } = useDragHandle({ x, y, onMove });
+  const { isDragging, cardInteractionProps } = useArtifactCardInteraction({
+    x,
+    y,
+    isEditing,
+    onMove,
+    onSelect,
+    onEdit: startEditing,
+  });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
 
   const initials = useMemo(() => {
@@ -87,17 +99,17 @@ export function PersonaCard({
         left: x,
         top: y,
         width: 320,
+        touchAction: isEditing ? undefined : "none",
       }}
-      onPointerDown={(event) => event.stopPropagation()}
+      {...cardInteractionProps}
     >
-      <div className="rounded-2xl border border-neutral-200/60 bg-white/90 p-6 shadow-lg backdrop-blur-sm">
-        <div className="mb-4 flex items-start justify-between gap-3">
+      <div
+        className={`rounded-2xl border border-neutral-200/60 bg-white/90 p-6 shadow-lg backdrop-blur-sm ${ARTIFACT_IDLE_CARD_CLASSNAME} ${
+          isSelected ? ARTIFACT_SELECTED_CARD_CLASSNAME : ""
+        } ${!isEditing ? (isDragging ? "cursor-grabbing" : "cursor-grab") : ""}`}
+      >
+        <div className="mb-4">
           <h2 className="text-lg font-bold text-neutral-900">Persona {index + 1}</h2>
-          <CardDragHandle
-            isDragging={isDragging}
-            canDrag={Boolean(onMove)}
-            dragHandleProps={dragHandleProps}
-          />
         </div>
 
         {isEditing ? (
@@ -193,12 +205,7 @@ export function PersonaCard({
             <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
           </div>
         ) : (
-          <div
-            className={canEdit ? "cursor-text" : undefined}
-            onClick={() => {
-              if (canEdit) startEditing();
-            }}
-          >
+          <div>
             {(draft.name || draft.role) && (
               <div className="mb-4 flex items-center gap-3">
                 <div

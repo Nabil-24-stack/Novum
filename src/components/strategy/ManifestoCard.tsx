@@ -11,13 +11,14 @@ import type {
 } from "@/lib/product-brain/types";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
+  ARTIFACT_IDLE_CARD_CLASSNAME,
+  ARTIFACT_SELECTED_CARD_CLASSNAME,
   AddListItemButton,
-  CardDragHandle,
   EditModeActions,
   ReadOnlyEditHint,
   RemoveListItemButton,
   handleEditorKeyDown,
-  useDragHandle,
+  useArtifactCardInteraction,
   useEditableCard,
   useFocusWhenEditing,
 } from "@/components/strategy/editing";
@@ -34,6 +35,8 @@ interface ManifestoCardProps {
   coverageProgressNote?: string | null;
   onAddressGaps?: () => void;
   onCommit?: (manifestoData: ManifestoData) => void;
+  isSelected?: boolean;
+  onSelect?: () => void;
 }
 
 export function ManifestoCard({
@@ -47,6 +50,8 @@ export function ManifestoCard({
   coverageProgressNote,
   onAddressGaps,
   onCommit,
+  isSelected = false,
+  onSelect,
 }: ManifestoCardProps) {
   const {
     canEdit,
@@ -67,7 +72,14 @@ export function ManifestoCard({
     onCommit,
     normalize: normalizeManifestoData,
   });
-  const { isDragging, dragHandleProps } = useDragHandle({ x, y, onMove });
+  const { isDragging, cardInteractionProps } = useArtifactCardInteraction({
+    x,
+    y,
+    isEditing,
+    onMove,
+    onSelect,
+    onEdit: startEditing,
+  });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
 
   const hasTitle = Boolean(draft.title.trim());
@@ -83,20 +95,20 @@ export function ManifestoCard({
         left: x,
         top: y,
         width: 600,
+        touchAction: isEditing ? undefined : "none",
       }}
-      onPointerDown={(event) => event.stopPropagation()}
+      {...cardInteractionProps}
     >
-      <div className="rounded-2xl border border-neutral-200/60 bg-white/90 p-8 shadow-lg backdrop-blur-sm">
-        <div className="mb-6 flex items-start justify-between gap-3">
+      <div
+        className={`rounded-2xl border border-neutral-200/60 bg-white/90 p-8 shadow-lg backdrop-blur-sm ${ARTIFACT_IDLE_CARD_CLASSNAME} ${
+          isSelected ? ARTIFACT_SELECTED_CARD_CLASSNAME : ""
+        } ${!isEditing ? (isDragging ? "cursor-grabbing" : "cursor-grab") : ""}`}
+      >
+        <div className="mb-6">
           <div>
             <h2 className="text-2xl font-bold text-neutral-900">Overview</h2>
             {hasTitle && <p className="mt-1 text-sm text-neutral-500">{draft.title}</p>}
           </div>
-          <CardDragHandle
-            isDragging={isDragging}
-            canDrag={Boolean(onMove)}
-            dragHandleProps={dragHandleProps}
-          />
         </div>
 
         {isEditing ? (
@@ -168,12 +180,7 @@ export function ManifestoCard({
             <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
           </div>
         ) : (
-          <div
-            className={canEdit ? "cursor-text" : undefined}
-            onClick={() => {
-              if (canEdit) startEditing();
-            }}
-          >
+          <div>
             {hasProblem && (
               <>
                 <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-neutral-500">

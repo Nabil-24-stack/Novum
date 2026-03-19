@@ -7,13 +7,14 @@ import { Textarea } from "@/components/ui/textarea";
 import type { JourneyMapData, JourneyStage } from "@/hooks/useStrategyStore";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
+  ARTIFACT_IDLE_CARD_CLASSNAME,
+  ARTIFACT_SELECTED_CARD_CLASSNAME,
   AddListItemButton,
-  CardDragHandle,
   EditModeActions,
   ReadOnlyEditHint,
   RemoveListItemButton,
   handleEditorKeyDown,
-  useDragHandle,
+  useArtifactCardInteraction,
   useEditableCard,
   useFocusWhenEditing,
 } from "@/components/strategy/editing";
@@ -116,6 +117,8 @@ interface JourneyMapCardProps {
   index: number;
   coveredStageIndices?: Set<number>;
   onCommit?: (journeyMap: JourneyMapData) => void;
+  isSelected?: boolean;
+  onSelect?: () => void;
 }
 
 export function JourneyMapCard({
@@ -126,6 +129,8 @@ export function JourneyMapCard({
   index,
   coveredStageIndices,
   onCommit,
+  isSelected = false,
+  onSelect,
 }: JourneyMapCardProps) {
   const accent = PERSONA_ACCENT_COLORS[index % PERSONA_ACCENT_COLORS.length];
   const {
@@ -144,7 +149,14 @@ export function JourneyMapCard({
     onCommit,
     normalize: normalizeJourneyMapData,
   });
-  const { isDragging, dragHandleProps } = useDragHandle({ x, y, onMove });
+  const { isDragging, cardInteractionProps } = useArtifactCardInteraction({
+    x,
+    y,
+    isEditing,
+    onMove,
+    onSelect,
+    onEdit: startEditing,
+  });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
 
   const stageCount = draft.stages.length;
@@ -157,10 +169,15 @@ export function JourneyMapCard({
         left: x,
         top: y,
         width: cardWidth,
+        touchAction: isEditing ? undefined : "none",
       }}
-      onPointerDown={(event) => event.stopPropagation()}
+      {...cardInteractionProps}
     >
-      <div className="overflow-hidden rounded-2xl border border-neutral-200/60 bg-white/90 shadow-lg backdrop-blur-sm">
+      <div
+        className={`overflow-hidden rounded-2xl border border-neutral-200/60 bg-white/90 shadow-lg backdrop-blur-sm ${ARTIFACT_IDLE_CARD_CLASSNAME} ${
+          isSelected ? ARTIFACT_SELECTED_CARD_CLASSNAME : ""
+        } ${!isEditing ? (isDragging ? "cursor-grabbing" : "cursor-grab") : ""}`}
+      >
         <div className="flex items-center justify-between gap-3 border-b border-neutral-200/60 px-5 py-3">
           <div className="flex items-center gap-2">
             <Footprints className="h-4 w-4 shrink-0 text-neutral-400" />
@@ -171,11 +188,6 @@ export function JourneyMapCard({
               </span>
             )}
           </div>
-          <CardDragHandle
-            isDragging={isDragging}
-            canDrag={Boolean(onMove)}
-            dragHandleProps={dragHandleProps}
-          />
         </div>
 
         {isEditing ? (
@@ -337,12 +349,7 @@ export function JourneyMapCard({
             <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
           </div>
         ) : (
-          <div
-            className={canEdit ? "cursor-text" : undefined}
-            onClick={() => {
-              if (canEdit) startEditing();
-            }}
-          >
+          <div>
             {stageCount > 0 && (
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse" style={{ minWidth: 100 + stageCount * 150 }}>

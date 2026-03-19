@@ -223,6 +223,7 @@ export default function ProjectEditor() {
         }
         const project = await res.json();
         setProjectName(project.name);
+        setSelectedArtifactId(null);
 
         // Hydrate VFS files
         if (project.files && Object.keys(project.files).length > 0) {
@@ -674,6 +675,7 @@ export default function ProjectEditor() {
   const [groupPositions, setGroupPositions] = useState<Map<GroupId, { x: number; y: number }>>(
     () => new Map()
   );
+  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
   // Y offset to push FlowFrames below strategy content during building
   const [flowLayoutOffset, setFlowLayoutOffset] = useState({ x: 0, y: 0 });
 
@@ -1464,6 +1466,14 @@ export default function ProjectEditor() {
   const canvasSelectNode = useCanvasStore((s) => s.selectNode);
   const canvasRemoveNode = useCanvasStore((s) => s.removeNode);
   const canvasDeselectAll = useCanvasStore((s) => s.deselectAll);
+  const handleCanvasBackgroundClick = useCallback(() => {
+    canvasDeselectAll();
+    setSelectedArtifactId(null);
+  }, [canvasDeselectAll]);
+  const selectArtifact = useCallback((artifactId: string) => {
+    canvasDeselectAll();
+    setSelectedArtifactId(artifactId);
+  }, [canvasDeselectAll]);
 
   // Auto-switch to Design tab when canvas node is selected
   useEffect(() => {
@@ -2665,7 +2675,7 @@ export default function ProjectEditor() {
             activeTool={isEarlyStrategyPhase ? "cursor" : canvasTool.activeTool}
             onToolChange={isEarlyStrategyPhase ? undefined : handleToolChange}
             isDrawingActive={isEarlyStrategyPhase ? false : canvasTool.drawState.isDrawing}
-            onCanvasClick={canvasDeselectAll}
+            onCanvasClick={handleCanvasBackgroundClick}
             hideChrome={isFrameExpanded}
           >
             {/* Strategy artifacts — placed directly on canvas, left to right */}
@@ -2686,6 +2696,8 @@ export default function ProjectEditor() {
                   onUploadMore={() => documentInputRef.current?.click()}
                   isUploading={isDocUploading}
                   onCommit={insightsData ? handleInsightsCommit : undefined}
+                  isSelected={selectedArtifactId === "insights"}
+                  onSelect={() => selectArtifact("insights")}
                 />
               );
             })()}
@@ -2720,6 +2732,8 @@ export default function ProjectEditor() {
                     setRightPanelTab("chat");
                   }}
                   onCommit={manifestoData ? handleManifestoCommit : undefined}
+                  isSelected={selectedArtifactId === "product-overview"}
+                  onSelect={() => selectArtifact("product-overview")}
                 />
               );
             })()}
@@ -2732,6 +2746,7 @@ export default function ProjectEditor() {
               const g = getGroupOrigin("personas");
               if (!g) return null;
               const pos = personaPositions[index];
+              const artifactId = `persona-${index}`;
               return (
                 <PersonaCard
                   key={index}
@@ -2748,6 +2763,8 @@ export default function ProjectEditor() {
                     (p) => p.personaName === (persona as { name?: string }).name
                   )?.coveragePercent}
                   onCommit={personaData ? (nextPersona) => handlePersonaCommit(index, nextPersona) : undefined}
+                  isSelected={selectedArtifactId === artifactId}
+                  onSelect={() => selectArtifact(artifactId)}
                 />
               );
             });
@@ -2761,6 +2778,7 @@ export default function ProjectEditor() {
               const g = getGroupOrigin("journey-maps");
               if (!g) return null;
               const pos = journeyMapPositions[index];
+              const artifactId = `journey-${index}`;
               return (
                 <JourneyMapCard
                   key={index}
@@ -2783,6 +2801,8 @@ export default function ProjectEditor() {
                       : undefined
                   }
                   onCommit={journeyMapData ? (nextJourneyMap) => handleJourneyMapCommit(index, nextJourneyMap) : undefined}
+                  isSelected={selectedArtifactId === artifactId}
+                  onSelect={() => selectArtifact(artifactId)}
                 />
               );
             });
@@ -2796,6 +2816,7 @@ export default function ProjectEditor() {
               const g = getGroupOrigin("ideas");
               if (!g) return null;
               const pos = ideaPositions[index];
+              const artifactId = `idea-${idea.id ?? index}`;
               return (
                 <IdeaCard
                   key={idea.id ?? index}
@@ -2803,8 +2824,10 @@ export default function ProjectEditor() {
                   x={pos?.x ?? g.x + (index % 4) * IDEA_CARD_COL_WIDTH}
                   y={pos?.y ?? getIdeaRowY(Math.floor(index / 4), g.y)}
                   index={index}
-                  isSelected={idea.id === selectedIdeaId}
-                  onSelect={() => {
+                  isActive={selectedArtifactId === artifactId}
+                  onSelectArtifact={() => selectArtifact(artifactId)}
+                  isSelectedIdea={idea.id === selectedIdeaId}
+                  onToggleSelectedIdea={() => {
                     if (idea.id) {
                       handleSelectedIdeaChange(idea.id === selectedIdeaId ? null : idea.id);
                     }
@@ -2834,6 +2857,8 @@ export default function ProjectEditor() {
                   y={keyFeaturesPosition?.y ?? g.y}
                   onMove={(nx, ny) => setKeyFeaturesPosition({ x: nx, y: ny })}
                   onCommit={keyFeaturesData ? handleKeyFeaturesCommit : undefined}
+                  isSelected={selectedArtifactId === "key-features"}
+                  onSelect={() => selectArtifact("key-features")}
                 />
               );
             })()}
@@ -2855,6 +2880,7 @@ export default function ProjectEditor() {
               const g = getGroupOrigin("user-flows");
               if (!g) return null;
               const pos = userFlowPositions[index];
+              const artifactId = `user-flow-${flow.id ?? index}`;
               return (
                 <UserFlowCard
                   key={flow.id ?? `flow-${index}`}
@@ -2869,6 +2895,8 @@ export default function ProjectEditor() {
                     return updated;
                   })}
                   onCommit={userFlowsData ? (nextUserFlow) => handleUserFlowCommit(index, nextUserFlow) : undefined}
+                  isSelected={selectedArtifactId === artifactId}
+                  onSelect={() => selectArtifact(artifactId)}
                 />
               );
             })}
