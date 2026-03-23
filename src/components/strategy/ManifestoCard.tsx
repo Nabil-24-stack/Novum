@@ -37,6 +37,7 @@ interface ManifestoCardProps {
   onCommit?: (manifestoData: ManifestoData) => void;
   isSelected?: boolean;
   onSelect?: () => void;
+  onSingleClickConfirmed?: () => void;
 }
 
 export function ManifestoCard({
@@ -52,6 +53,7 @@ export function ManifestoCard({
   onCommit,
   isSelected = false,
   onSelect,
+  onSingleClickConfirmed,
 }: ManifestoCardProps) {
   const {
     canEdit,
@@ -78,6 +80,7 @@ export function ManifestoCard({
     isEditing,
     onMove,
     onSelect,
+    onSingleClickConfirmed,
     onEdit: startEditing,
   });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);

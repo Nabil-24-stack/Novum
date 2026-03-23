@@ -29,6 +29,7 @@ interface KeyFeaturesCardProps {
   onCommit?: (data: KeyFeaturesData) => void;
   isSelected?: boolean;
   onSelect?: () => void;
+  onSingleClickConfirmed?: () => void;
 }
 
 export function KeyFeaturesCard({
@@ -39,6 +40,7 @@ export function KeyFeaturesCard({
   onCommit,
   isSelected = false,
   onSelect,
+  onSingleClickConfirmed,
 }: KeyFeaturesCardProps) {
   const {
     canEdit,
@@ -62,6 +64,7 @@ export function KeyFeaturesCard({
     isEditing,
     onMove,
     onSelect,
+    onSingleClickConfirmed,
     onEdit: startEditing,
   });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);

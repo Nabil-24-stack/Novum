@@ -40,6 +40,7 @@ interface IdeaCardProps {
   index: number;
   isActive?: boolean;
   onSelectArtifact?: () => void;
+  onSingleClickConfirmed?: () => void;
   isSelectedIdea?: boolean;
   onToggleSelectedIdea?: () => void;
   onCommit?: (idea: IdeaData) => void;
@@ -54,6 +55,7 @@ export function IdeaCard({
   index,
   isActive = false,
   onSelectArtifact,
+  onSingleClickConfirmed,
   isSelectedIdea = false,
   onToggleSelectedIdea,
   onCommit,
@@ -86,6 +88,7 @@ export function IdeaCard({
     isEditing,
     onMove,
     onSelect: onSelectArtifact,
+    onSingleClickConfirmed,
     onEdit: startEditing,
   });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);

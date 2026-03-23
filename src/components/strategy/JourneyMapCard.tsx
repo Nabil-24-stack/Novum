@@ -119,6 +119,7 @@ interface JourneyMapCardProps {
   onCommit?: (journeyMap: JourneyMapData) => void;
   isSelected?: boolean;
   onSelect?: () => void;
+  onSingleClickConfirmed?: () => void;
 }
 
 export function JourneyMapCard({
@@ -131,6 +132,7 @@ export function JourneyMapCard({
   onCommit,
   isSelected = false,
   onSelect,
+  onSingleClickConfirmed,
 }: JourneyMapCardProps) {
   const accent = PERSONA_ACCENT_COLORS[index % PERSONA_ACCENT_COLORS.length];
   const {
@@ -155,6 +157,7 @@ export function JourneyMapCard({
     isEditing,
     onMove,
     onSelect,
+    onSingleClickConfirmed,
     onEdit: startEditing,
   });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);

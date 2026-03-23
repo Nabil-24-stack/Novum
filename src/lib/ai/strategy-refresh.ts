@@ -2,6 +2,7 @@ export type StrategyRefreshArtifactFamily =
   | "overview"
   | "personas"
   | "journey-maps"
+  | "ideas"
   | "features"
   | "ia"
   | "user-flows"
@@ -43,14 +44,24 @@ const STRATEGY_REFRESH_PATTERNS: Array<[StrategyRefreshArtifactFamily, RegExp[]]
     ],
   ],
   [
+    "ideas",
+    [
+      /\bideas\b/,
+      /\bidea\s+\d+\b/,
+      /\bidea card\b/,
+      /\bselected idea\b/,
+      /\bapproved idea\b/,
+      /\bcrazy 8s\b/,
+      /\bcrazy 8's\b/,
+    ],
+  ],
+  [
     "features",
     [
       /\bfeature\b/,
       /\bfeatures\b/,
       /\bkey feature\b/,
       /\bkey features\b/,
-      /\bselected idea\b/,
-      /\bapproved idea\b/,
     ],
   ],
   [
@@ -102,7 +113,7 @@ export function resolveStrategyRefreshRequestPhase(
 
   const solutionOnly = explicitArtifacts.length > 0 &&
     explicitArtifacts.every((artifact) =>
-      artifact === "features" || artifact === "ia" || artifact === "user-flows"
+      artifact === "ideas" || artifact === "features" || artifact === "ia" || artifact === "user-flows"
     );
 
   return solutionOnly ? "solution-design" : "problem-overview";

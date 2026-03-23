@@ -38,16 +38,18 @@ test("artifact refresh prompt requires Updated and Unchanged summaries", () => {
 
 test("artifact refresh prompt limits allowed blocks and encodes dependency rules", () => {
   const prompt = buildArtifactRefreshSystemPrompt({
-    explicitArtifacts: ["personas", "ia"],
+    explicitArtifacts: ["personas", "ideas", "ia"],
     sourcePhase: "handoff",
   });
 
   assert.match(prompt, /type="manifesto"/);
   assert.match(prompt, /type="personas"/);
   assert.match(prompt, /type="journey-maps"/);
+  assert.match(prompt, /type="ideas"/);
   assert.match(prompt, /type="features"/);
   assert.match(prompt, /type="ia"/);
   assert.match(prompt, /type="user-flows"/);
   assert.match(prompt, /Persona changes: ALWAYS re-evaluate journey maps plus downstream solution artifacts/);
+  assert.match(prompt, /Idea changes: re-evaluate the selected ideas first/);
   assert.match(prompt, /IA and user-flow changes: re-evaluate each other/);
 });

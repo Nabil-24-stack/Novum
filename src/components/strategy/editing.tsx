@@ -21,6 +21,7 @@ export const ARTIFACT_SELECTED_CARD_CLASSNAME = "ring-2 ring-blue-500 border-blu
 export const ARTIFACT_IDLE_CARD_CLASSNAME = "transition-shadow";
 
 const DRAG_THRESHOLD_PX = 5;
+const SINGLE_CLICK_CONFIRM_DELAY_MS = 220;
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement
@@ -84,9 +85,10 @@ export function useArtifactCardInteraction(params: {
   isEditing: boolean;
   onMove?: (x: number, y: number) => void;
   onSelect?: () => void;
+  onSingleClickConfirmed?: () => void;
   onEdit?: () => void;
 }) {
-  const { x, y, isEditing, onMove, onSelect, onEdit } = params;
+  const { x, y, isEditing, onMove, onSelect, onSingleClickConfirmed, onEdit } = params;
   const canvasScale = useCanvasScale();
   const [isDragging, setIsDragging] = useState(false);
   const gestureRef = useRef<{
@@ -95,11 +97,22 @@ export function useArtifactCardInteraction(params: {
     startY: number;
     dragging: boolean;
   } | null>(null);
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressNextClickRef = useRef(false);
+
+  const cancelPendingSingleClick = useCallback(() => {
+    if (!clickTimerRef.current) return;
+    clearTimeout(clickTimerRef.current);
+    clickTimerRef.current = null;
+  }, []);
+
+  useEffect(() => cancelPendingSingleClick, [cancelPendingSingleClick]);
 
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       if (isEditing || event.button !== 0 || isInteractiveTarget(event.target)) return;
       event.stopPropagation();
+      suppressNextClickRef.current = false;
       onSelect?.();
       gestureRef.current = {
         pointerId: event.pointerId,
@@ -124,12 +137,14 @@ export function useArtifactCardInteraction(params: {
       if (!gesture.dragging) {
         gesture.dragging = true;
         setIsDragging(true);
+        suppressNextClickRef.current = true;
+        cancelPendingSingleClick();
       }
       event.preventDefault();
       event.stopPropagation();
       onMove(x + event.movementX / canvasScale, y + event.movementY / canvasScale);
     },
-    [canvasScale, onMove, x, y]
+    [cancelPendingSingleClick, canvasScale, onMove, x, y]
   );
 
   const handlePointerUp = useCallback((event: ReactPointerEvent<HTMLElement>) => {
@@ -138,6 +153,7 @@ export function useArtifactCardInteraction(params: {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    suppressNextClickRef.current = gesture.dragging;
     gestureRef.current = null;
     setIsDragging(false);
   }, []);
@@ -148,16 +164,37 @@ export function useArtifactCardInteraction(params: {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    cancelPendingSingleClick();
+    suppressNextClickRef.current = false;
     gestureRef.current = null;
     setIsDragging(false);
-  }, []);
+  }, [cancelPendingSingleClick]);
+
+  const handleClick = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    if (isEditing || isInteractiveTarget(event.target)) return;
+    event.stopPropagation();
+
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false;
+      return;
+    }
+
+    cancelPendingSingleClick();
+    if (event.detail !== 1 || !onSingleClickConfirmed) return;
+
+    clickTimerRef.current = setTimeout(() => {
+      clickTimerRef.current = null;
+      onSingleClickConfirmed();
+    }, SINGLE_CLICK_CONFIRM_DELAY_MS);
+  }, [cancelPendingSingleClick, isEditing, onSingleClickConfirmed]);
 
   const handleDoubleClick = useCallback((event: ReactMouseEvent<HTMLElement>) => {
     if (isEditing || !onEdit || isInteractiveTarget(event.target)) return;
     event.stopPropagation();
+    cancelPendingSingleClick();
     onSelect?.();
     onEdit();
-  }, [isEditing, onEdit, onSelect]);
+  }, [cancelPendingSingleClick, isEditing, onEdit, onSelect]);
 
   return {
     isDragging,
@@ -166,6 +203,7 @@ export function useArtifactCardInteraction(params: {
       onPointerMove: handlePointerMove,
       onPointerUp: handlePointerUp,
       onPointerCancel: handlePointerCancel,
+      onClick: handleClick,
       onDoubleClick: handleDoubleClick,
     },
   };

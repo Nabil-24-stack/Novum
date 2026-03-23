@@ -38,6 +38,7 @@ interface PersonaCardProps {
   onCommit?: (persona: PersonaData) => void;
   isSelected?: boolean;
   onSelect?: () => void;
+  onSingleClickConfirmed?: () => void;
 }
 
 export function PersonaCard({
@@ -50,6 +51,7 @@ export function PersonaCard({
   onCommit,
   isSelected = false,
   onSelect,
+  onSingleClickConfirmed,
 }: PersonaCardProps) {
   const accent = ACCENT_COLORS[index] ?? ACCENT_COLORS[0];
   const {
@@ -78,6 +80,7 @@ export function PersonaCard({
     isEditing,
     onMove,
     onSelect,
+    onSingleClickConfirmed,
     onEdit: startEditing,
   });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);

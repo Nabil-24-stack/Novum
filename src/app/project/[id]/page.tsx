@@ -13,6 +13,7 @@ import { useMaterializer } from "@/hooks/useMaterializer";
 import { useCanvasStore } from "@/hooks/useCanvasStore";
 import { useCanvasKeyboard } from "@/hooks/useCanvasKeyboard";
 import { useChatContextStore, type PinnedElement } from "@/hooks/useChatContextStore";
+import { useStrategyArtifactSelectionStore } from "@/hooks/useStrategyArtifactSelectionStore";
 import { useStrategyStore } from "@/hooks/useStrategyStore";
 import { useProductBrainStore } from "@/hooks/useProductBrainStore";
 import { computeCoverage } from "@/lib/product-brain/coverage";
@@ -210,6 +211,7 @@ export default function ProjectEditor() {
     useDocumentStore.getState().reset();
     useCanvasStore.getState().clearNodes();
     useChatContextStore.getState().clearPinnedElements();
+    useStrategyArtifactSelectionStore.getState().clearArtifactSelection();
     useAnnotationStore.getState().closeAll();
     useStreamingStore.getState().resetTransientState();
 
@@ -223,7 +225,6 @@ export default function ProjectEditor() {
         }
         const project = await res.json();
         setProjectName(project.name);
-        setSelectedArtifactId(null);
 
         // Hydrate VFS files
         if (project.files && Object.keys(project.files).length > 0) {
@@ -675,7 +676,6 @@ export default function ProjectEditor() {
   const [groupPositions, setGroupPositions] = useState<Map<GroupId, { x: number; y: number }>>(
     () => new Map()
   );
-  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
   // Y offset to push FlowFrames below strategy content during building
   const [flowLayoutOffset, setFlowLayoutOffset] = useState({ x: 0, y: 0 });
 
@@ -1466,14 +1466,23 @@ export default function ProjectEditor() {
   const canvasSelectNode = useCanvasStore((s) => s.selectNode);
   const canvasRemoveNode = useCanvasStore((s) => s.removeNode);
   const canvasDeselectAll = useCanvasStore((s) => s.deselectAll);
+  const activeArtifactId = useStrategyArtifactSelectionStore((s) => s.activeArtifactId);
+  const setActiveArtifact = useStrategyArtifactSelectionStore((s) => s.setActiveArtifact);
+  const setChatScopedArtifact = useStrategyArtifactSelectionStore((s) => s.setChatScopedArtifact);
+  const clearArtifactSelection = useStrategyArtifactSelectionStore((s) => s.clearArtifactSelection);
   const handleCanvasBackgroundClick = useCallback(() => {
     canvasDeselectAll();
-    setSelectedArtifactId(null);
-  }, [canvasDeselectAll]);
+    clearArtifactSelection();
+  }, [canvasDeselectAll, clearArtifactSelection]);
   const selectArtifact = useCallback((artifactId: string) => {
     canvasDeselectAll();
-    setSelectedArtifactId(artifactId);
-  }, [canvasDeselectAll]);
+    setActiveArtifact(artifactId);
+  }, [canvasDeselectAll, setActiveArtifact]);
+  const scopeArtifactToChat = useCallback((artifactId: string) => {
+    const { activeArtifactId: currentActiveArtifactId } = useStrategyArtifactSelectionStore.getState();
+    if (currentActiveArtifactId !== artifactId) return;
+    setChatScopedArtifact(artifactId);
+  }, [setChatScopedArtifact]);
 
   // Auto-switch to Design tab when canvas node is selected
   useEffect(() => {
@@ -2696,8 +2705,9 @@ export default function ProjectEditor() {
                   onUploadMore={() => documentInputRef.current?.click()}
                   isUploading={isDocUploading}
                   onCommit={insightsData ? handleInsightsCommit : undefined}
-                  isSelected={selectedArtifactId === "insights"}
+                  isSelected={activeArtifactId === "insights"}
                   onSelect={() => selectArtifact("insights")}
+                  onSingleClickConfirmed={() => scopeArtifactToChat("insights")}
                 />
               );
             })()}
@@ -2732,8 +2742,9 @@ export default function ProjectEditor() {
                     setRightPanelTab("chat");
                   }}
                   onCommit={manifestoData ? handleManifestoCommit : undefined}
-                  isSelected={selectedArtifactId === "product-overview"}
+                  isSelected={activeArtifactId === "product-overview"}
                   onSelect={() => selectArtifact("product-overview")}
+                  onSingleClickConfirmed={() => scopeArtifactToChat("product-overview")}
                 />
               );
             })()}
@@ -2763,8 +2774,9 @@ export default function ProjectEditor() {
                     (p) => p.personaName === (persona as { name?: string }).name
                   )?.coveragePercent}
                   onCommit={personaData ? (nextPersona) => handlePersonaCommit(index, nextPersona) : undefined}
-                  isSelected={selectedArtifactId === artifactId}
+                  isSelected={activeArtifactId === artifactId}
                   onSelect={() => selectArtifact(artifactId)}
+                  onSingleClickConfirmed={() => scopeArtifactToChat(artifactId)}
                 />
               );
             });
@@ -2801,8 +2813,9 @@ export default function ProjectEditor() {
                       : undefined
                   }
                   onCommit={journeyMapData ? (nextJourneyMap) => handleJourneyMapCommit(index, nextJourneyMap) : undefined}
-                  isSelected={selectedArtifactId === artifactId}
+                  isSelected={activeArtifactId === artifactId}
                   onSelect={() => selectArtifact(artifactId)}
+                  onSingleClickConfirmed={() => scopeArtifactToChat(artifactId)}
                 />
               );
             });
@@ -2824,8 +2837,9 @@ export default function ProjectEditor() {
                   x={pos?.x ?? g.x + (index % 4) * IDEA_CARD_COL_WIDTH}
                   y={pos?.y ?? getIdeaRowY(Math.floor(index / 4), g.y)}
                   index={index}
-                  isActive={selectedArtifactId === artifactId}
+                  isActive={activeArtifactId === artifactId}
                   onSelectArtifact={() => selectArtifact(artifactId)}
+                  onSingleClickConfirmed={() => scopeArtifactToChat(artifactId)}
                   isSelectedIdea={idea.id === selectedIdeaId}
                   onToggleSelectedIdea={() => {
                     if (idea.id) {
@@ -2857,8 +2871,9 @@ export default function ProjectEditor() {
                   y={keyFeaturesPosition?.y ?? g.y}
                   onMove={(nx, ny) => setKeyFeaturesPosition({ x: nx, y: ny })}
                   onCommit={keyFeaturesData ? handleKeyFeaturesCommit : undefined}
-                  isSelected={selectedArtifactId === "key-features"}
+                  isSelected={activeArtifactId === "key-features"}
                   onSelect={() => selectArtifact("key-features")}
+                  onSingleClickConfirmed={() => scopeArtifactToChat("key-features")}
                 />
               );
             })()}
@@ -2895,8 +2910,9 @@ export default function ProjectEditor() {
                     return updated;
                   })}
                   onCommit={userFlowsData ? (nextUserFlow) => handleUserFlowCommit(index, nextUserFlow) : undefined}
-                  isSelected={selectedArtifactId === artifactId}
+                  isSelected={activeArtifactId === artifactId}
                   onSelect={() => selectArtifact(artifactId)}
+                  onSingleClickConfirmed={() => scopeArtifactToChat(artifactId)}
                 />
               );
             })}

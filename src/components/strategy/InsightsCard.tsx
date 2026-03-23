@@ -29,6 +29,7 @@ interface InsightsCardProps {
   onCommit?: (data: InsightsCardData) => void;
   isSelected?: boolean;
   onSelect?: () => void;
+  onSingleClickConfirmed?: () => void;
 }
 
 export function InsightsCard({
@@ -41,6 +42,7 @@ export function InsightsCard({
   onCommit,
   isSelected = false,
   onSelect,
+  onSingleClickConfirmed,
 }: InsightsCardProps) {
   const {
     canEdit,
@@ -64,6 +66,7 @@ export function InsightsCard({
     isEditing,
     onMove,
     onSelect,
+    onSingleClickConfirmed,
     onEdit: startEditing,
   });
   const firstInputRef = useFocusWhenEditing<HTMLTextAreaElement>(isEditing);

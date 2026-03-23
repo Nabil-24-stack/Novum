@@ -623,6 +623,7 @@ const STRATEGY_REFRESH_ARTIFACT_LABELS: Record<StrategyRefreshArtifactFamily, st
   overview: "overview",
   personas: "personas",
   "journey-maps": "journey maps",
+  ideas: "ideas",
   features: "features",
   ia: "information architecture",
   "user-flows": "user flows",
@@ -673,6 +674,7 @@ Only these block types are allowed after the summary:
 - \`type="manifesto"\`
 - \`type="personas"\`
 - \`type="journey-maps"\`
+- \`type="ideas"\`
 - \`type="features"\`
 - \`type="ia"\`
 - \`type="user-flows"\`
@@ -680,7 +682,6 @@ Only these block types are allowed after the summary:
 Never output:
 - \`type="options"\`
 - \`type="confidence"\`
-- \`type="ideas"\`
 - \`type="page-built"\`
 - \`type="decision-connections"\`
 - code blocks or file edits
@@ -699,7 +700,8 @@ ${insightsRule}
 - Overview, target-user, JTBD, or HMW changes: re-evaluate personas, journey maps, features, IA, and user flows.
 - Persona changes: ALWAYS re-evaluate journey maps plus downstream solution artifacts. Update the overview only if the title, problem statement, target user, JTBDs, or HMWs truly changed.
 - Journey map changes: re-evaluate features, IA, and user flows only when new pain points or opportunities materially change them.
-- Idea or feature changes: re-evaluate features, IA, and user flows only.
+- Idea changes: re-evaluate the selected ideas first, then refresh features, IA, and user flows only if the idea change materially requires it.
+- Feature changes: re-evaluate features, IA, and user flows only.
 - IA and user-flow changes: re-evaluate each other, but do NOT change overview, personas, or journey maps unless the user explicitly asked or the request makes them invalid.
 - Insights should stay unchanged unless explicitly requested in this refresh mode.
 
@@ -708,6 +710,7 @@ ${insightsRule}
 - Emit COMPLETE replacement blocks for changed artifacts.
 - Omit unchanged blocks entirely.
 - Preserve existing names and references unless the request truly changes them.
+- If you emit \`type="ideas"\`, output the complete updated ideas array.
 - Keep \`personaName\`, \`jtbdIndex\`, \`jtbdText\`, \`personaNames\`, and IA \`nodeId\` references internally consistent.
 - Do not invent brand-new downstream artifacts if they do not exist yet, unless the request explicitly asks for them.
 

@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Database, FileText, GitBranch, Zap } from "lucide-react";
-import { Input } from "@/components/ui/input";
+import { ArrowRight, Database, FileText, GitBranch, Zap } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import type { FlowData, PersonaData, StrategyNode, UserFlow } from "@/hooks/useStrategyStore";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
@@ -41,12 +41,12 @@ const TYPE_ICONS: Record<StrategyNode["type"], typeof FileText> = {
   data: Database,
 };
 
-const NODE_W = 140;
-const NODE_H = 56;
-const GAP = 60;
+const NODE_W = 180;
+const NODE_H = 92;
+const GAP = 52;
 const PADDING_X = 24;
-const PADDING_TOP = 100;
-const PADDING_BOTTOM = 40;
+const PADDING_TOP = 10;
+const PADDING_BOTTOM = 10;
 
 export const USER_FLOW_CARD_WIDTH = 700;
 export const USER_FLOW_CARD_HEIGHT = 280;
@@ -63,6 +63,7 @@ interface UserFlowCardProps {
   onCommit?: (flow: UserFlow) => void;
   isSelected?: boolean;
   onSelect?: () => void;
+  onSingleClickConfirmed?: () => void;
 }
 
 function getPersonaColorIndex(personaName: string, personas: PersonaData[] | null): number {
@@ -81,6 +82,7 @@ export function UserFlowCard({
   onCommit,
   isSelected = false,
   onSelect,
+  onSingleClickConfirmed,
 }: UserFlowCardProps) {
   const {
     canEdit,
@@ -107,9 +109,10 @@ export function UserFlowCard({
     isEditing,
     onMove,
     onSelect,
+    onSingleClickConfirmed,
     onEdit: startEditing,
   });
-  const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
+  const firstInputRef = useFocusWhenEditing<HTMLTextAreaElement>(isEditing);
 
   const steps = useMemo(() => draft.steps ?? [], [draft.steps]);
   const personaNames = useMemo(() => draft.personaNames ?? [], [draft.personaNames]);
@@ -247,85 +250,124 @@ export function UserFlowCard({
               )}
             </div>
 
-            <div className="space-y-3">
-              {draft.steps.map((step, stepIndex) => (
-                <div key={stepIndex} className="space-y-2 rounded-xl border border-neutral-200/80 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                      Step {stepIndex + 1}
-                    </p>
-                    <RemoveListItemButton
-                      onClick={() =>
-                        setDraft((current) => ({
-                          ...current,
-                          steps: current.steps.filter((_, index) => index !== stepIndex),
-                        }))
-                      }
-                    />
-                  </div>
+            {draft.steps.length > 0 ? (
+              <div className="-mx-1 overflow-x-auto pb-1">
+                <div className="flex min-w-max items-start gap-4 px-1">
+                  {draft.steps.map((step, stepIndex) => {
+                    const node = resolvedNodes[stepIndex];
+                    const type = node?.type ?? "page";
+                    const style = TYPE_STYLES[type];
+                    const Icon = TYPE_ICONS[type];
 
-                  <label className="space-y-1 text-xs font-medium text-neutral-500">
-                    IA node
-                    <select
-                      value={step.nodeId}
-                      disabled={availableNodes.length === 0}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          steps: current.steps.map((item, index) =>
-                            index === stepIndex
-                              ? { ...item, nodeId: event.target.value }
-                              : item
-                          ),
-                        }))
-                      }
-                      className="h-10 w-full rounded-lg border border-neutral-200 bg-white px-3 text-sm text-neutral-700 outline-none focus:border-neutral-400"
-                    >
-                      {availableNodes.length === 0 && (
-                        <option value="">No IA nodes available</option>
-                      )}
-                      {availableNodes.map((node) => (
-                        <option key={node.id} value={node.id}>
-                          {node.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                    return (
+                      <div key={stepIndex} className="flex items-start gap-4">
+                        {stepIndex > 0 && (
+                          <div className="flex h-[148px] items-center text-blue-500/80">
+                            <ArrowRight className="h-4 w-4" />
+                          </div>
+                        )}
 
-                  <Input
-                    ref={stepIndex === 0 ? firstInputRef : undefined}
-                    value={step.action}
-                    placeholder="Step action"
-                    onChange={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        steps: current.steps.map((item, index) =>
-                          index === stepIndex
-                            ? { ...item, action: event.target.value }
-                            : item
-                        ),
-                      }))
-                    }
-                    onKeyDown={(event) =>
-                      handleEditorKeyDown(event, {
-                        onSave: saveEditing,
-                        onCancel: cancelEditing,
-                      })
-                    }
-                    className="text-sm"
-                  />
+                        <div
+                          className={`w-[180px] shrink-0 rounded-xl border p-4 shadow-sm ${style.bg} ${style.border}`}
+                        >
+                          <div className="mb-3 flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <Icon className={`h-4 w-4 shrink-0 ${style.iconColor}`} />
+                                <span className="truncate text-sm font-semibold text-neutral-800">
+                                  {node?.label ?? stepLabel(step.nodeId)}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-500">
+                                Step {stepIndex + 1}
+                              </p>
+                            </div>
+                            <RemoveListItemButton
+                              onClick={() =>
+                                setDraft((current) => ({
+                                  ...current,
+                                  steps: current.steps.filter((_, index) => index !== stepIndex),
+                                }))
+                              }
+                            />
+                          </div>
+
+                          <div className="space-y-3">
+                            <label className="block space-y-1 text-xs font-medium text-neutral-500">
+                              <span>IA node</span>
+                              <select
+                                value={step.nodeId}
+                                disabled={availableNodes.length === 0}
+                                onChange={(event) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    steps: current.steps.map((item, index) =>
+                                      index === stepIndex
+                                        ? { ...item, nodeId: event.target.value }
+                                        : item
+                                    ),
+                                  }))
+                                }
+                                className="h-10 w-full rounded-lg border border-neutral-200 bg-white/95 px-3 text-sm text-neutral-700 outline-none focus:border-neutral-400"
+                              >
+                                {availableNodes.length === 0 && (
+                                  <option value="">No IA nodes available</option>
+                                )}
+                                {availableNodes.map((availableNode) => (
+                                  <option key={availableNode.id} value={availableNode.id}>
+                                    {availableNode.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+
+                            <label className="block space-y-1 text-xs font-medium text-neutral-500">
+                              <span>Action</span>
+                              <Textarea
+                                ref={stepIndex === 0 ? firstInputRef : undefined}
+                                value={step.action}
+                                placeholder="Describe what happens in this step"
+                                rows={4}
+                                onChange={(event) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    steps: current.steps.map((item, index) =>
+                                      index === stepIndex
+                                        ? { ...item, action: event.target.value }
+                                        : item
+                                    ),
+                                  }))
+                                }
+                                onKeyDown={(event) =>
+                                  handleEditorKeyDown(event, {
+                                    onSave: saveEditing,
+                                    onCancel: cancelEditing,
+                                  })
+                                }
+                                className="min-h-[96px] resize-none bg-white/95 text-sm leading-relaxed"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-4 py-6 text-center text-sm text-neutral-500">
+                No flow steps yet. Add a step to map this user flow onto the IA.
+              </div>
+            )}
 
             <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
           </div>
         ) : (
           <div>
-            <div className="relative" style={{ height: USER_FLOW_CARD_HEIGHT - PADDING_TOP + PADDING_BOTTOM }}>
+            <div className="relative" style={{ height: NODE_H + PADDING_TOP + PADDING_BOTTOM }}>
               <svg
                 width={cardWidth}
-                height={USER_FLOW_CARD_HEIGHT - PADDING_TOP + PADDING_BOTTOM}
+                height={NODE_H + PADDING_TOP + PADDING_BOTTOM}
                 className="absolute inset-0"
               >
                 {useGradient && (
@@ -334,9 +376,9 @@ export function UserFlowCard({
                       id={gradientId}
                       gradientUnits="userSpaceOnUse"
                       x1={nodePositions[0]?.x ?? 0}
-                      y1={NODE_H / 2}
+                      y1={(nodePositions[0]?.y ?? PADDING_TOP) + NODE_H / 2}
                       x2={(nodePositions[nodePositions.length - 1]?.x ?? 0) + NODE_W}
-                      y2={NODE_H / 2}
+                      y2={(nodePositions[0]?.y ?? PADDING_TOP) + NODE_H / 2}
                     >
                       {personaColors.map((color, index) => {
                         const segmentSize = 1 / personaColors.length;
@@ -361,9 +403,9 @@ export function UserFlowCard({
                   if (index === 0 || index >= visibleCount) return null;
                   const previous = nodePositions[index - 1];
                   const x1 = previous.x + NODE_W;
-                  const y1 = NODE_H / 2;
+                  const y1 = previous.y + NODE_H / 2;
                   const x2 = position.x;
-                  const y2 = NODE_H / 2;
+                  const y2 = position.y + NODE_H / 2;
 
                   return (
                     <g key={`connection-${index}`}>
@@ -395,21 +437,21 @@ export function UserFlowCard({
                 return (
                   <div
                     key={`${node?.id ?? "node"}-${index}`}
-                    className={`absolute rounded-xl border px-4 py-3 shadow-sm ${style.bg} ${style.border}`}
+                    className={`absolute overflow-hidden rounded-xl border px-4 py-3 shadow-sm ${style.bg} ${style.border}`}
                     style={{
                       left: position.x,
-                      top: 0,
+                      top: position.y,
                       width: NODE_W,
                       height: NODE_H,
                     }}
                   >
-                    <div className="mb-1 flex items-center gap-2">
-                      <Icon className={`h-4 w-4 ${style.iconColor}`} />
+                    <div className="mb-2 flex min-w-0 items-center gap-2">
+                      <Icon className={`h-4 w-4 shrink-0 ${style.iconColor}`} />
                       <span className="truncate text-sm font-semibold text-neutral-800">
                         {node?.label ?? stepLabel(steps[index]?.nodeId ?? "")}
                       </span>
                     </div>
-                    <p className="line-clamp-2 text-xs leading-tight text-neutral-500">
+                    <p className="line-clamp-2 overflow-hidden text-xs leading-5 text-neutral-500">
                       {steps[index]?.action}
                     </p>
                   </div>

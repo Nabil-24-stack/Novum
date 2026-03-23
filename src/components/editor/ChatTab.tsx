@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useCallback, useMemo, DragEvent, Clipboard
 import { Send, Loader2, X, ImagePlus, ArrowRight, Check, AlertTriangle, Square, FileText, RotateCcw, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { useChatContextStore, type PinnedElement, type AddressGapsPayload } from "@/hooks/useChatContextStore";
+import { useStrategyArtifactSelectionStore } from "@/hooks/useStrategyArtifactSelectionStore";
 import { useStreamingStore } from "@/hooks/useStreamingStore";
 import { useProductBrainStore } from "@/hooks/useProductBrainStore";
 import {
@@ -34,6 +35,7 @@ import {
   resolveStrategyRefreshRequestPhase,
   type StrategyRefreshArtifactFamily,
 } from "@/lib/ai/strategy-refresh";
+import { resolveSelectedStrategyArtifactContext } from "@/lib/ai/strategy-artifact-context";
 import { trackEvent } from "@/lib/analytics/track-event";
 import { useBillingStore } from "@/hooks/useBillingStore";
 import { notifyUsageChanged, useBillingStatus } from "@/hooks/useBillingStatus";
@@ -306,6 +308,22 @@ function buildStrategyArtifactsContext(options?: {
   }
 
   return sections.join("\n\n");
+}
+
+function appendSelectedStrategyArtifactContext(
+  baseContext: string,
+  selectedArtifactContext: ReturnType<typeof resolveSelectedStrategyArtifactContext>,
+): string {
+  if (!selectedArtifactContext) return baseContext;
+  return baseContext
+    ? `${baseContext}\n\n${selectedArtifactContext.promptContext}`
+    : selectedArtifactContext.promptContext;
+}
+
+function dedupeArtifactFamilies(
+  families: StrategyRefreshArtifactFamily[],
+): StrategyRefreshArtifactFamily[] {
+  return [...new Set(families)];
 }
 
 function findPageNodeByComponentName(
@@ -1334,16 +1352,20 @@ export function ChatTab({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { pinnedElements, unpinElement, clearPinnedElements } = useChatContextStore();
+  const chatScopedArtifactId = useStrategyArtifactSelectionStore((s) => s.chatScopedArtifactId);
+  const clearArtifactSelection = useStrategyArtifactSelectionStore((s) => s.clearArtifactSelection);
   const pendingAddressGaps = useChatContextStore((s) => s.pendingAddressGaps);
   const manifestoData = useStrategyStore((s) => s.manifestoData);
   const personaData = useStrategyStore((s) => s.personaData);
   const journeyMapData = useStrategyStore((s) => s.journeyMapData);
   const ideaData = useStrategyStore((s) => s.ideaData);
+  const keyFeaturesData = useStrategyStore((s) => s.keyFeaturesData);
   const selectedIdeaId = useStrategyStore((s) => s.selectedIdeaId);
   const flowData = useStrategyStore((s) => s.flowData);
   const confidenceData = useStrategyStore((s) => s.confidenceData);
   const isDeepDive = useStrategyStore((s) => s.isDeepDive);
   const uploadedDocuments = useDocumentStore((s) => s.documents);
+  const insightsData = useDocumentStore((s) => s.insightsData);
   const isDocUploading = useDocumentStore((s) => s.isUploading);
   const pendingReanalysis = useDocumentStore((s) => s.pendingReanalysis);
   const docFileInputRef = useRef<HTMLInputElement>(null);
@@ -1367,6 +1389,29 @@ export function ChatTab({
   const verificationPausedPageId = useStreamingStore((s) => s.verificationPausedPageId);
   const requestRepairInChat = useStreamingStore((s) => s.requestRepairInChat);
   const isHandoffProject = productMode === "handoff-v1";
+  const selectedStrategyArtifactContext = useMemo(
+    () =>
+      resolveSelectedStrategyArtifactContext({
+        selectedArtifactId: chatScopedArtifactId,
+        insightsData,
+        manifestoData,
+        personaData,
+        journeyMapData,
+        ideaData,
+        keyFeaturesData,
+        userFlowsData,
+      }),
+    [
+      chatScopedArtifactId,
+      ideaData,
+      insightsData,
+      journeyMapData,
+      keyFeaturesData,
+      manifestoData,
+      personaData,
+      userFlowsData,
+    ],
+  );
 
   // Strategy alignment check state
   const [alignmentCheckPending, setAlignmentCheckPending] = useState(false);
@@ -3052,7 +3097,10 @@ export function ChatTab({
     const preflightArtifactFamilies: StrategyRefreshArtifactFamily[] =
       strategyPhase === "hero" || activeRepairContext
         ? []
-        : detectStrategyRefreshArtifactFamilies(effectiveInput.trim());
+        : dedupeArtifactFamilies([
+            ...(selectedStrategyArtifactContext ? [selectedStrategyArtifactContext.family] : []),
+            ...detectStrategyRefreshArtifactFamilies(effectiveInput.trim()),
+          ]);
     const preflightArtifactRefresh = preflightArtifactFamilies.length > 0;
 
     if ((!hasText && !hasImages) || isLoading || isAiEditing) return;
@@ -3137,7 +3185,10 @@ export function ChatTab({
       requestStrategyPhase === "solution-design";
 
     if (usesStrategyArtifactsContext) {
-      vfsContext = buildStrategyArtifactsContext();
+      vfsContext = appendSelectedStrategyArtifactContext(
+        buildStrategyArtifactsContext(),
+        selectedStrategyArtifactContext,
+      );
     } else if (requestStrategyPhase === "building" || requestStrategyPhase === "editing") {
       // In build phase, send full VFS context plus strategy context
       vfsContext = buildBuildingPhaseVfsContext(files);
@@ -3784,9 +3835,20 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Pinned Element Chips */}
-      {pinnedElements.length > 0 && (
+      {/* Chat Context Chips */}
+      {(selectedStrategyArtifactContext || pinnedElements.length > 0) && (
         <div className="px-4 pt-3 pb-1 border-t border-neutral-200 flex flex-wrap items-center gap-1.5">
+          {selectedStrategyArtifactContext && (
+            <span className="inline-flex items-center gap-1 bg-sky-50 text-sky-700 text-xs font-medium rounded-md border border-sky-200 px-2 py-1">
+              Canvas: {selectedStrategyArtifactContext.label}
+              <button
+                onClick={clearArtifactSelection}
+                className="hover:text-sky-900 transition-colors"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          )}
           {pinnedElements.map((el) => (
             <span
               key={el.id}
