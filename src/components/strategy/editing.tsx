@@ -12,6 +12,7 @@ import {
 } from "react";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
+import { resolveArtifactDraftChange } from "@/lib/strategy/artifact-edit-sync";
 
 export const ARTIFACT_EDITOR_FIELDS_CLASSNAME =
   "[&_input]:border-neutral-300 [&_input]:bg-white [&_input]:text-neutral-900 [&_input]:placeholder:text-neutral-400 " +
@@ -50,23 +51,36 @@ export function useEditableCard<T>(params: {
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState<T>(() => cloneEditableValue(value));
   const liveValue = useMemo(() => cloneEditableValue(value), [value]);
+  const normalizedBaselineRef = useRef<T | null>(null);
 
   const startEditing = useCallback(() => {
     if (!onCommit) return;
+    normalizedBaselineRef.current = normalize
+      ? normalize(cloneEditableValue(liveValue))
+      : cloneEditableValue(liveValue);
     setDraft(cloneEditableValue(liveValue));
     setIsEditing(true);
-  }, [liveValue, onCommit]);
+  }, [liveValue, normalize, onCommit]);
 
   const cancelEditing = useCallback(() => {
+    normalizedBaselineRef.current = null;
     setIsEditing(false);
   }, []);
 
   const saveEditing = useCallback(() => {
     if (!onCommit) return;
-    const nextValue = normalize ? normalize(draft) : draft;
-    onCommit(nextValue);
+    const result = resolveArtifactDraftChange({
+      baseline: normalizedBaselineRef.current ?? liveValue,
+      nextValue: draft,
+      normalize,
+    });
+
+    normalizedBaselineRef.current = null;
+    if (result.changed) {
+      onCommit(result.normalizedNextValue);
+    }
     setIsEditing(false);
-  }, [draft, normalize, onCommit]);
+  }, [draft, liveValue, normalize, onCommit]);
 
   return {
     canEdit: Boolean(onCommit),

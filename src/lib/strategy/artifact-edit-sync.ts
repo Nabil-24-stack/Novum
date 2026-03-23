@@ -20,6 +20,10 @@ export interface StrategyArtifactState {
   userFlowsData: UserFlow[] | null;
 }
 
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value ?? null);
+}
+
 function trimText(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
@@ -151,6 +155,27 @@ export function normalizeUserFlowData(data: UserFlow): UserFlow {
     steps: (data.steps ?? [])
       .map(normalizeUserFlowStep)
       .filter((step): step is UserFlowStep => Boolean(step)),
+  };
+}
+
+export function resolveArtifactDraftChange<T>(params: {
+  baseline: T;
+  nextValue: T;
+  normalize?: (value: T) => T;
+}): {
+  normalizedBaseline: T;
+  normalizedNextValue: T;
+  changed: boolean;
+} {
+  const { baseline, nextValue, normalize } = params;
+  const normalizeValue = normalize ?? ((value: T) => value);
+  const normalizedBaseline = normalizeValue(baseline);
+  const normalizedNextValue = normalizeValue(nextValue);
+
+  return {
+    normalizedBaseline,
+    normalizedNextValue,
+    changed: stableStringify(normalizedBaseline) !== stableStringify(normalizedNextValue),
   };
 }
 
