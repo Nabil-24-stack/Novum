@@ -713,6 +713,7 @@ ${insightsRule}
 - Preserve existing names and references unless the request truly changes them.
 - If you emit \`type="ideas"\`, output the complete updated ideas array.
 - Keep \`personaName\`, \`jtbdIndex\`, \`jtbdText\`, \`personaNames\`, and IA \`nodeId\` references internally consistent.
+- If you emit \`type="ia"\`, preserve and update page-node \`jtbdIds\` and \`featureIds\` traceability fields alongside labels and descriptions.
 - Do not invent brand-new downstream artifacts if they do not exist yet, unless the request explicitly asks for them.
 
 ## CLARIFICATION THRESHOLD
@@ -786,9 +787,23 @@ Rules:
 \`\`\`json type="ia"
 {
   "nodes": [
-    { "id": "dashboard", "label": "Dashboard", "type": "page", "description": "Main app view with overview" },
+    {
+      "id": "dashboard",
+      "label": "Dashboard",
+      "type": "page",
+      "description": "Main app view with overview",
+      "jtbdIds": ["JTBD-1"],
+      "featureIds": ["feature-1", "feature-2"]
+    },
     { "id": "fetch-data", "label": "Fetch Data", "type": "action", "description": "Load user data from API" },
-    { "id": "settings", "label": "Settings", "type": "page", "description": "User preferences and config" }
+    {
+      "id": "settings",
+      "label": "Settings",
+      "type": "page",
+      "description": "User preferences and config",
+      "jtbdIds": ["JTBD-2"],
+      "featureIds": ["feature-3"]
+    }
   ],
   "connections": [
     { "from": "dashboard", "to": "fetch-data", "label": "On Load" },
@@ -839,7 +854,10 @@ After the IA, output user flows mapping each JTBD to a persona-driven path throu
 - Start directly with the main application screen (Dashboard, Inbox, Editor). Do NOT include landing/marketing pages
 - Include 3-8 nodes for a reasonable scope
 - Every \`page\` node becomes a real page in the built app
+- Every \`page\` node MUST include \`jtbdIds\` with one or more valid manifesto JTBD IDs
+- Every \`page\` node SHOULD include \`featureIds\` when a feature clearly anchors that page; omit \`featureIds\` only when the mapping is genuinely unclear
 - \`action\`/\`decision\`/\`data\` nodes are for planning context only
+- Non-page nodes MUST omit \`jtbdIds\` and \`featureIds\`
 - Keep descriptions brief (5-10 words)
 - Make the flow left-to-right (entry on left, deeper pages on right)
 

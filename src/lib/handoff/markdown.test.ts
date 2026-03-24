@@ -5,6 +5,7 @@ import {
   buildProblemMarkdown,
   buildSolutionMarkdown,
 } from "./markdown.ts";
+import { getHandoffWarningMessage } from "./validation.ts";
 import {
   buildHandoffSnapshot,
   getDirtyHandoffSections,
@@ -129,6 +130,228 @@ test("builds deterministic problem and solution markdown", () => {
   assert.match(solutionMarkdown, /feature-1: Regenerate markdown/);
   assert.match(solutionMarkdown, /Solves For: jtbd-1: Keep strategy synced with build context\. \(Personas: Avery\)/);
   assert.match(solutionMarkdown, /### home: Home/);
+  assert.match(solutionMarkdown, /Supports JTBDs: jtbd-1: Keep strategy synced with build context\./);
+  assert.match(solutionMarkdown, /Anchoring Features: feature-1: Regenerate markdown/);
+});
+
+test("screen descriptions prefer explicit page linkage when present", () => {
+  const snapshot = buildHandoffSnapshot({
+    productOverview: {
+      title: "TrimLog",
+      problemStatement: "Users need fast nutrition planning.",
+      targetUser: "Weight-loss users",
+      environmentContext: "During meal planning and review.",
+      jtbd: [jtbd("jtbd-1", "Set goals without friction.")],
+      hmw: [],
+    },
+    insights: null,
+    personas: null,
+    journeyHighlights: null,
+    selectedSolution: {
+      id: "idea-1",
+      title: "Guided setup",
+      description: "A guided setup flow for goal creation.",
+      illustration: "",
+    },
+    keyFeatures: {
+      ideaTitle: "Guided setup",
+      features: [feature({ id: "feature-setup", name: "Goal Setup", jtbdIds: ["jtbd-1"] })],
+    },
+    informationArchitecture: {
+      nodes: [
+        {
+          id: "onboarding",
+          label: "Onboarding",
+          type: "page",
+          description: "Set calorie goal and macro targets",
+          jtbdIds: ["jtbd-1"],
+          featureIds: ["feature-setup"],
+        },
+      ],
+      connections: [],
+    },
+    userFlows: null,
+  });
+
+  const solutionMarkdown = buildSolutionMarkdown({ snapshot });
+
+  assert.match(solutionMarkdown, /### onboarding: Onboarding/);
+  assert.match(solutionMarkdown, /Supports JTBDs: jtbd-1: Set goals without friction\./);
+  assert.match(solutionMarkdown, /Anchoring Features: feature-setup: Goal Setup/);
+});
+
+test("legacy screen descriptions fall back to text-matched features when flow links are missing", () => {
+  const snapshot = buildHandoffSnapshot({
+    productOverview: {
+      title: "TrimLog",
+      problemStatement: "Users need setup guidance.",
+      targetUser: "Weight-loss users",
+      environmentContext: "During onboarding and account maintenance.",
+      jtbd: [jtbd("jtbd-1", "Set goals without friction.")],
+      hmw: [],
+    },
+    insights: null,
+    personas: null,
+    journeyHighlights: null,
+    selectedSolution: {
+      id: "idea-1",
+      title: "Guided setup",
+      description: "A guided setup flow for goal creation.",
+      illustration: "",
+    },
+    keyFeatures: {
+      ideaTitle: "Guided setup",
+      features: [
+        feature({
+          id: "feature-setup",
+          name: "Goal Setup & Onboarding",
+          description: "Set calorie goal, macro targets, and goal weight with smart defaults.",
+          jtbdIds: ["jtbd-1"],
+        }),
+      ],
+    },
+    informationArchitecture: {
+      nodes: [
+        {
+          id: "settings",
+          label: "Settings",
+          type: "page",
+          description: "Edit goals, macro targets, and account preferences",
+        },
+      ],
+      connections: [],
+    },
+    userFlows: null,
+  });
+
+  const solutionMarkdown = buildSolutionMarkdown({ snapshot });
+
+  assert.match(solutionMarkdown, /### settings: Settings/);
+  assert.match(solutionMarkdown, /Supports JTBDs: jtbd-1: Set goals without friction\./);
+  assert.match(solutionMarkdown, /Anchoring Features: feature-setup: Goal Setup & Onboarding/);
+});
+
+test("unresolved page linkage is flagged in solution markdown and warning state", () => {
+  const snapshot = buildHandoffSnapshot({
+    productOverview: {
+      title: "TrimLog",
+      problemStatement: "Users need reporting context.",
+      targetUser: "Weight-loss users",
+      environmentContext: "During weekly review.",
+      jtbd: [jtbd("jtbd-1", "Review weekly performance.")],
+      hmw: [],
+    },
+    insights: null,
+    personas: null,
+    journeyHighlights: null,
+    selectedSolution: {
+      id: "idea-1",
+      title: "Reporting workspace",
+      description: "A reporting workspace with multiple report actions.",
+      illustration: "",
+    },
+    keyFeatures: {
+      ideaTitle: "Reporting workspace",
+      features: [
+        feature({
+          id: "feature-overview",
+          name: "Reports Review",
+          description: "Review performance reports and history.",
+          jtbdIds: ["jtbd-1"],
+          painPointIds: [],
+        }),
+        feature({
+          id: "feature-history",
+          name: "Reports History",
+          description: "Review performance reports and history.",
+          jtbdIds: ["jtbd-1"],
+          painPointIds: [],
+        }),
+      ],
+    },
+    informationArchitecture: {
+      nodes: [
+        {
+          id: "reports",
+          label: "Reports",
+          type: "page",
+          description: "Review performance reports and history",
+        },
+      ],
+      connections: [],
+    },
+    userFlows: null,
+  });
+
+  const solutionMarkdown = buildSolutionMarkdown({ snapshot });
+  const warningMessage = getHandoffWarningMessage(snapshot);
+
+  assert.match(solutionMarkdown, /Supports JTBDs: Unresolved linkage: no JTBD mapping could be derived for this page\./);
+  assert.match(solutionMarkdown, /Anchoring Features: Unresolved linkage: no feature mapping could be derived for this page\./);
+  assert.doesNotMatch(solutionMarkdown, /No JTBDs linked yet\./);
+  assert.doesNotMatch(solutionMarkdown, /No features linked yet\./);
+  assert.equal(
+    warningMessage,
+    "1 screen still has unresolved linkage: reports (JTBDs, features)."
+  );
+});
+
+test("solution markdown compacts pain point references while problem markdown keeps full pain detail", () => {
+  const fullPainPointText =
+    "Food search in other apps returns 50 results for chicken breast -- she never knows which one is right";
+  const snapshot = buildHandoffSnapshot({
+    productOverview: {
+      title: "TrimLog",
+      problemStatement: "Meal logging takes too long.",
+      targetUser: "Weight-loss users",
+      environmentContext: "During daily meal logging.",
+      jtbd: [jtbd("jtbd-1", "Log meals quickly.")],
+      hmw: [],
+    },
+    insights: null,
+    personas: [
+      {
+        name: "Maya",
+        role: "Office administrator",
+        bio: "Needs fast logging.",
+        goals: ["Log meals quickly"],
+        painPoints: [painPoint("persona-pain-1", fullPainPointText)],
+        quote: "I need food search to be faster.",
+      },
+    ],
+    journeyHighlights: null,
+    selectedSolution: {
+      id: "idea-1",
+      title: "Fast search",
+      description: "A fast search-driven logging flow.",
+      illustration: "",
+    },
+    keyFeatures: {
+      ideaTitle: "Fast search",
+      features: [feature({ painPointIds: ["persona-pain-1"] })],
+    },
+    informationArchitecture: {
+      nodes: [{ id: "search", label: "Search", type: "page", description: "Search and log food" }],
+      connections: [],
+    },
+    userFlows: [
+      {
+        id: "flow-1",
+        jtbdIndex: 0,
+        jtbdText: "Log meals quickly.",
+        personaNames: ["Maya"],
+        steps: [{ nodeId: "search", action: "Searches for a meal" }],
+      },
+    ],
+  });
+
+  const problemMarkdown = buildProblemMarkdown({ snapshot });
+  const solutionMarkdown = buildSolutionMarkdown({ snapshot });
+
+  assert.match(problemMarkdown, /Food search in other apps returns 50 results for chicken breast -- she never knows which one is right/);
+  assert.match(solutionMarkdown, /Resolves Pain Points: persona-pain-1 \(food search in other apps returns 50 results.../);
+  assert.doesNotMatch(solutionMarkdown, /Persona: Maya/);
+  assert.doesNotMatch(solutionMarkdown, /she never knows which one is right/);
 });
 
 test("builds actionable delta markdown for changed sections only", () => {

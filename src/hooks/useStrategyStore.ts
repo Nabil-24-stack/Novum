@@ -136,6 +136,8 @@ export interface StrategyNode {
   label: string;
   type: "page" | "action" | "decision" | "data";
   description?: string;
+  jtbdIds?: string[];    // Optional page-level JTBD traceability for exports
+  featureIds?: string[]; // Optional page-level feature traceability for exports
 }
 
 export interface StrategyConnection {
@@ -305,6 +307,53 @@ function normalizeUserFlowState(data: UserFlow): UserFlow {
   };
 }
 
+function normalizeStrategyNodeState(node: StrategyNode): StrategyNode | null {
+  const id = trimText(node.id);
+  const label = trimText(node.label);
+  const description = trimText(node.description);
+
+  if (!id && !label && !description) {
+    return null;
+  }
+
+  return {
+    id,
+    label,
+    type: node.type,
+    ...(description ? { description } : {}),
+    ...(node.type === "page"
+      ? {
+          ...(Array.isArray(node.jtbdIds)
+            ? { jtbdIds: normalizeIdList(node.jtbdIds) }
+            : {}),
+          ...(Array.isArray(node.featureIds)
+            ? { featureIds: normalizeIdList(node.featureIds) }
+            : {}),
+        }
+      : {}),
+  };
+}
+
+function normalizeFlowState(data: FlowData): FlowData {
+  return {
+    nodes: (data.nodes ?? [])
+      .map(normalizeStrategyNodeState)
+      .filter((node): node is StrategyNode => Boolean(node)),
+    connections: (data.connections ?? [])
+      .map((connection) => ({
+        from: trimText(connection.from),
+        to: trimText(connection.to),
+        label: trimText(connection.label),
+      }))
+      .filter((connection) => connection.from && connection.to)
+      .map((connection) => ({
+        from: connection.from,
+        to: connection.to,
+        ...(connection.label ? { label: connection.label } : {}),
+      })),
+  };
+}
+
 interface StrategyState {
   phase: StrategyPhase;
   userPrompt: string;
@@ -469,7 +518,10 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
 
   setFlowData: (data) => {
     const afterBuild = get().completedPages.length > 0;
-    set({ flowData: data, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+    set({
+      flowData: normalizeFlowState(data),
+      ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}),
+    });
   },
 
   setConfidenceData: (data) =>
@@ -607,6 +659,9 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
       journeyMapData: data.journeyMapData
         ? data.journeyMapData.map((journeyMap) => normalizeJourneyMapState(journeyMap, null))
         : initialState.journeyMapData,
+      flowData: data.flowData
+        ? normalizeFlowState(data.flowData)
+        : initialState.flowData,
       keyFeaturesData: data.keyFeaturesData
         ? normalizeKeyFeaturesState(data.keyFeaturesData, null)
         : initialState.keyFeaturesData,

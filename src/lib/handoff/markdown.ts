@@ -4,6 +4,11 @@ import type {
 } from "./types.ts";
 import { getExportableFeatures } from "./snapshot.ts";
 import { HANDOFF_SECTION_LABELS } from "./types.ts";
+import {
+  resolvePageTraceability,
+  UNRESOLVED_FEATURE_LINKAGE_TEXT,
+  UNRESOLVED_JTBD_LINKAGE_TEXT,
+} from "./validation.ts";
 
 function bulletList(items: string[]): string {
   if (items.length === 0) return "- None captured yet.";
@@ -28,29 +33,38 @@ function getJtbdRegistry(snapshot: HandoffSnapshot) {
 }
 
 function getPainPointRegistry(snapshot: HandoffSnapshot) {
-  const registry = new Map<string, { text: string; source: string }>();
+  const registry = new Map<string, string>();
 
   for (const persona of snapshot.personas ?? []) {
     for (const painPoint of persona.painPoints) {
-      registry.set(painPoint.id, {
-        text: painPoint.text,
-        source: `Persona: ${persona.name}`,
-      });
+      registry.set(painPoint.id, painPoint.text);
     }
   }
 
   for (const journeyMap of snapshot.journeyHighlights ?? []) {
     for (const stage of journeyMap.stages) {
       for (const painPoint of stage.painPoints) {
-        registry.set(painPoint.id, {
-          text: painPoint.text,
-          source: `Journey: ${journeyMap.personaName} / ${stage.stage}`,
-        });
+        registry.set(painPoint.id, painPoint.text);
       }
     }
   }
 
   return registry;
+}
+
+function buildPainPointShortLabel(text: string): string {
+  const firstClause =
+    text
+      .split(/\s(?:-|--|---)\s|\s[–—]\s|[;|]/)
+      .map((part) => part.trim())
+      .find(Boolean) ?? text.trim();
+  const normalized = firstClause.replace(/["']/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!normalized) return "unknown pain point";
+  if (normalized.length <= 48) return normalized;
+
+  const truncated = normalized.slice(0, 48);
+  const lastSpace = truncated.lastIndexOf(" ");
+  return `${(lastSpace > 24 ? truncated.slice(0, lastSpace) : truncated).trim()}...`;
 }
 
 function formatInsightLine(insight: NonNullable<HandoffSnapshot["insights"]>["insights"][number]): string {
@@ -199,10 +213,10 @@ function buildFeatures(snapshot: HandoffSnapshot): string {
         feature.painPointIds.length > 0
           ? feature.painPointIds
               .map((painPointId) => {
-                const painPoint = painPointRegistry.get(painPointId);
-                return painPoint
-                  ? `${painPointId}: ${painPoint.text} (${painPoint.source})`
-                  : `${painPointId}: Unknown pain point`;
+                const painPointText = painPointRegistry.get(painPointId);
+                return painPointText
+                  ? `${painPointId} (${buildPainPointShortLabel(painPointText)})`
+                  : `${painPointId} (unknown pain point)`;
               })
               .join("; ")
           : "None linked.";
@@ -272,24 +286,6 @@ function buildUserFlows(snapshot: HandoffSnapshot): string {
     .join("\n\n");
 }
 
-function buildPageJtbdMap(snapshot: HandoffSnapshot): Map<string, Set<string>> {
-  const pageJtbds = new Map<string, Set<string>>();
-  const jtbdItems = snapshot.productOverview?.jtbd ?? [];
-
-  for (const flow of snapshot.userFlows ?? []) {
-    const jtbdId = jtbdItems[flow.jtbdIndex]?.id;
-    if (!jtbdId) continue;
-
-    for (const step of flow.steps) {
-      const set = pageJtbds.get(step.nodeId) ?? new Set<string>();
-      set.add(jtbdId);
-      pageJtbds.set(step.nodeId, set);
-    }
-  }
-
-  return pageJtbds;
-}
-
 function buildScreenDescriptions(snapshot: HandoffSnapshot): string {
   const architecture = snapshot.informationArchitecture;
   if (!architecture) {
@@ -301,30 +297,33 @@ function buildScreenDescriptions(snapshot: HandoffSnapshot): string {
     return "- No page nodes are available for screen descriptions.";
   }
 
-  const pageJtbds = buildPageJtbdMap(snapshot);
   const jtbdRegistry = getJtbdRegistry(snapshot);
+  const featureRegistry = new Map(
+    getExportableFeatures(snapshot.keyFeatures).map((feature) => [feature.id, feature])
+  );
+  const pageTraceability = resolvePageTraceability(snapshot);
 
-  return pageNodes
+  return pageTraceability
     .map((page) => {
-      const relevantJtbdIds = [...(pageJtbds.get(page.id) ?? new Set<string>())];
-      const relevantFeatures = getExportableFeatures(snapshot.keyFeatures).filter((feature) =>
-        feature.jtbdIds.some((jtbdId) => relevantJtbdIds.includes(jtbdId))
-      );
-
       return [
-        `### ${page.id}: ${page.label}`,
-        `- Purpose: ${formatText(page.description)}`,
+        `### ${page.pageId}: ${page.pageLabel}`,
+        `- Purpose: ${formatText(page.pageDescription)}`,
         `- Supports JTBDs: ${
-          relevantJtbdIds.length > 0
-            ? relevantJtbdIds
+          page.jtbdIds.length > 0
+            ? page.jtbdIds
                 .map((jtbdId) => `${jtbdId}: ${jtbdRegistry.get(jtbdId) ?? "Unknown JTBD"}`)
                 .join("; ")
-            : "No JTBDs linked yet."
+            : UNRESOLVED_JTBD_LINKAGE_TEXT
         }`,
         `- Anchoring Features: ${
-          relevantFeatures.length > 0
-            ? relevantFeatures.map((feature) => `${feature.id}: ${feature.name}`).join("; ")
-            : "No features linked yet."
+          page.featureIds.length > 0
+            ? page.featureIds
+                .map((featureId) => {
+                  const feature = featureRegistry.get(featureId);
+                  return feature ? `${feature.id}: ${feature.name}` : `${featureId}: Unknown feature`;
+                })
+                .join("; ")
+            : UNRESOLVED_FEATURE_LINKAGE_TEXT
         }`,
       ].join("\n");
     })

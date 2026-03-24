@@ -89,9 +89,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import {
   buildHandoffSnapshot,
   getDirtyHandoffSections,
-  getParkedFeatureWarning,
   hasMeaningfulHandoffSnapshot,
 } from "@/lib/handoff/snapshot";
+import { getHandoffWarningMessage } from "@/lib/handoff/validation";
 import { getTraceableText, getTraceableTexts } from "@/lib/strategy/traceable";
 
 type ViewMode = "app" | "design-system";
@@ -477,9 +477,9 @@ export default function ProjectEditor() {
     () => getDirtyHandoffSections(handoffSnapshot, handoffState.baselineSnapshot),
     [handoffSnapshot, handoffState.baselineSnapshot]
   );
-  const handoffParkedFeatureWarning = useMemo(
-    () => getParkedFeatureWarning(handoffSnapshot.keyFeatures),
-    [handoffSnapshot.keyFeatures]
+  const handoffWarningMessage = useMemo(
+    () => getHandoffWarningMessage(handoffSnapshot),
+    [handoffSnapshot]
   );
   const canGenerateHandoff = useMemo(
     () => hasMeaningfulHandoffSnapshot(handoffSnapshot),
@@ -2969,7 +2969,7 @@ export default function ProjectEditor() {
                   isOutdated={handoffState.isOutdated}
                   generatedAt={handoffState.generatedAt}
                   lastError={handoffState.lastError}
-                  warningMessage={handoffParkedFeatureWarning}
+                  warningMessage={handoffWarningMessage}
                   isGenerating={handoffGenerationStatus === "generating"}
                   canGenerate={canGenerateHandoff}
                   onMove={(nx, ny) =>

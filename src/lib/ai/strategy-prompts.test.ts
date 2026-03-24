@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT,
+  SOLUTION_DESIGN_SYSTEM_PROMPT,
   buildArtifactRefreshSystemPrompt,
   buildFoundationPrompt,
 } from "./strategy-prompts.ts";
@@ -52,4 +53,11 @@ test("artifact refresh prompt limits allowed blocks and encodes dependency rules
   assert.match(prompt, /Persona changes: ALWAYS re-evaluate journey maps plus downstream solution artifacts/);
   assert.match(prompt, /Idea changes: re-evaluate the selected ideas first/);
   assert.match(prompt, /IA and user-flow changes: re-evaluate each other/);
+});
+
+test("solution design prompt requires page-level IA traceability fields", () => {
+  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /"jtbdIds": \["JTBD-1"\]/);
+  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /"featureIds": \["feature-1", "feature-2"\]/);
+  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /Every `page` node MUST include `jtbdIds`/);
+  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /Non-page nodes MUST omit `jtbdIds` and `featureIds`/);
 });
