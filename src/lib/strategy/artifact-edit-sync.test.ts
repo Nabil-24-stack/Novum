@@ -283,6 +283,26 @@ test("resolveArtifactDraftChange ignores whitespace-only insight and persona edi
   assert.equal(personaResult.changed, false);
 });
 
+test("normalizeInsightsData tolerates malformed insight fields", () => {
+  const normalized = normalizeInsightsData({
+    documents: [],
+    insights: [
+      {
+        id: undefined as unknown as string,
+        insight: undefined as unknown as string,
+        quote: " Supporting quote ",
+        sourceDocument: undefined as unknown as string,
+      },
+    ],
+  });
+
+  assert.equal(normalized.insights.length, 1);
+  assert.equal(normalized.insights[0]?.insight, "");
+  assert.equal(normalized.insights[0]?.quote, "Supporting quote");
+  assert.equal(normalized.insights[0]?.sourceDocument, "");
+  assert.match(normalized.insights[0]?.id ?? "", /^insight-/);
+});
+
 test("resolveArtifactDraftChange ignores canonicalized empty journey stages", () => {
   const baseline: JourneyMapData = {
     personaName: "Avery",

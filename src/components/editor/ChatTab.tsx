@@ -579,6 +579,10 @@ interface OptionBlock {
   options: string[];
 }
 
+function trimString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 // Module-scoped sets to survive component remounts (e.g., docked → floating switch)
 const processedBlocksSet = new Set<string>();
 const processedStrategyBlocksSet = new Set<string>();
@@ -1310,8 +1314,13 @@ function extractOptionBlocks(text: string): OptionBlock[] {
   while ((match = OPTIONS_REGEX.exec(text)) !== null) {
     try {
       const parsed = JSON.parse(match[1]);
-      if (parsed.question && Array.isArray(parsed.options) && parsed.options.length >= 2) {
-        blocks.push({ question: parsed.question, options: parsed.options });
+      const question = trimString(parsed?.question);
+      const options = Array.isArray(parsed?.options)
+        ? parsed.options.map((option: unknown) => trimString(option)).filter(Boolean)
+        : [];
+
+      if (question && options.length >= 2) {
+        blocks.push({ question, options });
       }
     } catch {
       // Skip invalid JSON

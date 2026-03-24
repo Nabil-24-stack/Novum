@@ -34,13 +34,32 @@ export function isTraceableTextItem(value: unknown): value is TraceableTextItem 
   );
 }
 
+function trimString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeExistingTraceableItem(value: unknown): TraceableTextItem | null {
+  if (!isTraceableTextItem(value)) return null;
+
+  const id = trimString(value.id);
+  const text = trimString(value.text);
+  if (!id || !text) return null;
+
+  return { id, text };
+}
+
 export function getTraceableText(value: TraceableTextLike | null | undefined): string {
-  if (!value) return "";
-  return typeof value === "string" ? value : value.text;
+  if (typeof value === "string") return value;
+  const normalizedValue = normalizeExistingTraceableItem(value);
+  if (normalizedValue) return normalizedValue.text;
+  if (value && typeof value === "object" && "text" in value && typeof value.text === "string") {
+    return value.text;
+  }
+  return "";
 }
 
 export function getTraceableTexts(values: TraceableTextLike[] | null | undefined): string[] {
-  return (values ?? []).map(getTraceableText).map((value) => value.trim()).filter(Boolean);
+  return (values ?? []).map(getTraceableText).map(trimString).filter(Boolean);
 }
 
 export function normalizeTraceableTextList(params: {
@@ -53,8 +72,11 @@ export function normalizeTraceableTextList(params: {
   const previousByText = new Map<string, TraceableTextItem[]>();
   const usedIds = new Set<string>();
 
-  for (const item of previousItems) {
-    const key = item.text.trim();
+  for (const previousItem of previousItems) {
+    const item = normalizeExistingTraceableItem(previousItem);
+    if (!item) continue;
+
+    const key = item.text;
     const queue = previousByText.get(key);
     if (queue) {
       queue.push(item);
@@ -65,18 +87,19 @@ export function normalizeTraceableTextList(params: {
 
   return (values ?? [])
     .map((item, index) => {
-      const text = getTraceableText(item).trim();
+      const text = trimString(getTraceableText(item));
       if (!text) return null;
 
-      if (isTraceableTextItem(item) && item.id.trim()) {
-        usedIds.add(item.id);
+      const normalizedItem = normalizeExistingTraceableItem(item);
+      if (normalizedItem) {
+        usedIds.add(normalizedItem.id);
         return {
-          id: item.id.trim(),
+          id: normalizedItem.id,
           text,
         };
       }
 
-      const sameIndex = previousItems[index];
+      const sameIndex = normalizeExistingTraceableItem(previousItems[index]);
       if (sameIndex && !usedIds.has(sameIndex.id)) {
         usedIds.add(sameIndex.id);
         return {

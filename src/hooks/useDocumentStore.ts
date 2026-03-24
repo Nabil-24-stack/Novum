@@ -48,6 +48,10 @@ const initialState = {
   pendingReanalysis: false,
 };
 
+function trimText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function normalizeInsightsData(
   data: InsightsCardData,
   previous: InsightsCardData | null
@@ -57,7 +61,9 @@ function normalizeInsightsData(
   const usedIds = new Set<string>();
 
   for (const insight of previousInsights) {
-    const key = insight.insight.trim();
+    const key = trimText(insight?.insight);
+    if (!key) continue;
+
     const queue = previousByText.get(key);
     if (queue) {
       queue.push(insight);
@@ -69,31 +75,36 @@ function normalizeInsightsData(
   return {
     documents: data.documents ?? [],
     insights: (data.insights ?? []).flatMap((item, index) => {
-        const insightText = item.insight.trim();
-        const quote = item.quote?.trim();
-        const sourceDocument = item.sourceDocument?.trim();
+        const itemValue = item && typeof item === "object" ? item : {};
+        const itemId = trimText((itemValue as Partial<InsightData>).id);
+        const insightText = trimText((itemValue as Partial<InsightData>).insight);
+        const quote = trimText((itemValue as Partial<InsightData>).quote);
+        const sourceDocument = trimText((itemValue as Partial<InsightData>).sourceDocument);
+        const source = (itemValue as Partial<InsightData>).source;
         if (!insightText && !quote && !sourceDocument) return [];
 
-        if (item.id?.trim()) {
-          usedIds.add(item.id);
+        if (itemId) {
+          usedIds.add(itemId);
           return [{
-            ...item,
-            id: item.id.trim(),
+            ...itemValue,
+            id: itemId,
             insight: insightText,
             quote,
             sourceDocument,
+            source,
           }];
         }
 
         const sameIndex = previousInsights[index];
-        if (sameIndex && !usedIds.has(sameIndex.id)) {
+        if (sameIndex?.id && !usedIds.has(sameIndex.id)) {
           usedIds.add(sameIndex.id);
           return [{
-            ...item,
+            ...itemValue,
             id: sameIndex.id,
             insight: insightText,
             quote,
             sourceDocument,
+            source,
           }];
         }
 
@@ -102,11 +113,12 @@ function normalizeInsightsData(
         if (match) {
           usedIds.add(match.id);
           return [{
-            ...item,
+            ...itemValue,
             id: match.id,
             insight: insightText,
             quote,
             sourceDocument,
+            source,
           }];
         }
 
@@ -116,11 +128,12 @@ function normalizeInsightsData(
         );
         usedIds.add(id);
         return [{
-          ...item,
+          ...itemValue,
           id,
           insight: insightText,
           quote,
           sourceDocument,
+          source,
         }];
       }),
   };

@@ -249,11 +249,11 @@ function normalizeFeatureState(
   const nextDescription = trimText(feature.description);
   const previousBySignature = previousFeatures.find(
     (item) =>
-      item.name.trim().toLowerCase() === nextName.toLowerCase() &&
-      item.description.trim().toLowerCase() === nextDescription.toLowerCase()
+      trimText(item?.name).toLowerCase() === nextName.toLowerCase() &&
+      trimText(item?.description).toLowerCase() === nextDescription.toLowerCase()
   );
   const previousByName = previousFeatures.find(
-    (item) => item.name.trim().toLowerCase() === nextName.toLowerCase()
+    (item) => trimText(item?.name).toLowerCase() === nextName.toLowerCase()
   );
   const sameIndex = previousFeatures[index];
 
