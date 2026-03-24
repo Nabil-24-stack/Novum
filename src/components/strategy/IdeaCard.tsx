@@ -80,7 +80,7 @@ export function IdeaCard({
     y,
     isEditing,
     onMove,
-    onSingleClickConfirmed: onSelectIdea,
+    onSelect: onSelectIdea,
     onEdit: startEditing,
   });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
