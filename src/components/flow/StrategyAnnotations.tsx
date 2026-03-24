@@ -7,6 +7,7 @@ import type { FlowNodePosition } from "@/lib/flow/types";
 import type { ManifestoData, PersonaData } from "@/hooks/useStrategyStore";
 import type { InsightsCardData } from "@/hooks/useDocumentStore";
 import type { AnnotationElementBounds } from "@/hooks/useAnnotationStore";
+import { getTraceableTexts } from "@/lib/strategy/traceable";
 
 interface StrategyAnnotationsProps {
   pageId: string;
@@ -62,7 +63,8 @@ export function StrategyAnnotations({
   // Build card data with horizontal alignment to target element
   const cards = connections.map((conn) => {
     const b = bounds.get(conn.id);
-    const jtbdText = conn.jtbdIndices[0] != null ? manifestoData.jtbd[conn.jtbdIndices[0]] : null;
+    const jtbdTexts = getTraceableTexts(manifestoData.jtbd);
+    const jtbdText = conn.jtbdIndices[0] != null ? jtbdTexts[conn.jtbdIndices[0]] : null;
     const persona = personaData.find((p) => conn.personaNames.includes(p.name));
     const personaIndex = persona ? personaData.indexOf(persona) : -1;
     const insight =

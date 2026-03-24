@@ -5,14 +5,15 @@ import { resolveSelectedStrategyArtifactContext } from "./strategy-artifact-cont
 
 const baseInput = {
   insightsData: {
-    insights: [{ insight: "Users need clarity", source: "conversation" as const }],
+    insights: [{ id: "insight-1", insight: "Users need clarity", source: "conversation" as const }],
     documents: [{ name: "Research.pdf", uploadedAt: "2026-03-20T00:00:00.000Z" }],
   },
   manifestoData: {
     title: "Clarity Hub",
     problemStatement: "Teams lose context.",
     targetUser: "Product teams",
-    jtbd: ["Track decisions"],
+    environmentContext: "Inside product planning and implementation reviews.",
+    jtbd: [{ id: "jtbd-1", text: "Track decisions" }],
     hmw: ["Reduce confusion"],
   },
   personaData: [
@@ -21,7 +22,7 @@ const baseInput = {
       role: "PM",
       bio: "Runs planning.",
       goals: ["Stay aligned"],
-      painPoints: ["Missing context"],
+      painPoints: [{ id: "persona-pain-1", text: "Missing context" }],
       quote: "I need one source of truth.",
     },
   ],
@@ -34,7 +35,7 @@ const baseInput = {
           actions: ["Collect notes"],
           thoughts: ["What changed?"],
           emotion: "anxious",
-          painPoints: ["Scattered docs"],
+          painPoints: [{ id: "journey-pain-1", text: "Scattered docs" }],
           opportunities: ["Summarize changes"],
         },
       ],
@@ -51,7 +52,14 @@ const baseInput = {
   keyFeaturesData: {
     ideaTitle: "Decision Timeline",
     features: [
-      { name: "Timeline", description: "Chronological updates", priority: "high" as const },
+      {
+        id: "feature-1",
+        name: "Timeline",
+        description: "Chronological updates",
+        priority: "high" as const,
+        jtbdIds: ["jtbd-1"],
+        painPointIds: ["persona-pain-1"],
+      },
     ],
   },
   userFlowsData: [

@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import type { KeyFeaturesData } from "@/hooks/useStrategyStore";
+import type { TraceableTextItem } from "@/lib/strategy/traceable";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   ARTIFACT_IDLE_CARD_CLASSNAME,
@@ -23,6 +24,8 @@ export const KEY_FEATURES_CARD_WIDTH = 400;
 
 interface KeyFeaturesCardProps {
   data: Partial<KeyFeaturesData>;
+  jtbdOptions: TraceableTextItem[];
+  painPointOptions: { id: string; label: string; source: string }[];
   x: number;
   y: number;
   onMove?: (x: number, y: number) => void;
@@ -34,6 +37,8 @@ interface KeyFeaturesCardProps {
 
 export function KeyFeaturesCard({
   data,
+  jtbdOptions,
+  painPointOptions,
   x,
   y,
   onMove,
@@ -76,6 +81,7 @@ export function KeyFeaturesCard({
       low: draft.features.filter((feature) => feature.priority === "low"),
     };
   }, [draft.features]);
+  const unmappedFeatureCount = draft.features.filter((feature) => feature.jtbdIds.length === 0).length;
 
   return (
     <div
@@ -112,8 +118,12 @@ export function KeyFeaturesCard({
               Selected solution label: {draft.ideaTitle || "Not set"}
             </div>
 
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              Features without a JTBD link stay parked in Novum and are excluded from exported build files until linked.
+            </div>
+
             {draft.features.map((feature, index) => (
-              <div key={index} className="space-y-2 rounded-xl border border-neutral-200/80 p-3">
+              <div key={feature.id || index} className="space-y-2 rounded-xl border border-neutral-200/80 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
                     Feature {index + 1}
@@ -197,6 +207,50 @@ export function KeyFeaturesCard({
                     <option value="low">Low priority</option>
                   </select>
                 </label>
+
+                <TraceabilitySelector
+                  label="Links to JTBDs"
+                  description="Required. Tie this feature to the job(s) it helps the user complete."
+                  options={jtbdOptions.map((jtbd) => ({
+                    id: jtbd.id,
+                    label: jtbd.text,
+                    meta: jtbd.id.toUpperCase(),
+                  }))}
+                  selectedIds={feature.jtbdIds}
+                  onChange={(nextIds) =>
+                    setDraft((current) => ({
+                      ...current,
+                      features: current.features.map((item, featureIndex) =>
+                        featureIndex === index ? { ...item, jtbdIds: nextIds } : item
+                      ),
+                    }))
+                  }
+                />
+
+                <TraceabilitySelector
+                  label="Links to pain points"
+                  description="Optional. Add specific friction points this feature resolves."
+                  options={painPointOptions.map((painPoint) => ({
+                    id: painPoint.id,
+                    label: painPoint.label,
+                    meta: painPoint.source,
+                  }))}
+                  selectedIds={feature.painPointIds}
+                  onChange={(nextIds) =>
+                    setDraft((current) => ({
+                      ...current,
+                      features: current.features.map((item, featureIndex) =>
+                        featureIndex === index ? { ...item, painPointIds: nextIds } : item
+                      ),
+                    }))
+                  }
+                />
+
+                {feature.jtbdIds.length === 0 && (
+                  <p className="text-xs font-medium text-red-600">
+                    This feature is parked until you link it to at least one JTBD.
+                  </p>
+                )}
               </div>
             ))}
 
@@ -207,7 +261,14 @@ export function KeyFeaturesCard({
                   ...current,
                   features: [
                     ...current.features,
-                    { name: "", description: "", priority: "medium" },
+                    {
+                      id: "",
+                      name: "",
+                      description: "",
+                      priority: "medium",
+                      jtbdIds: [],
+                      painPointIds: [],
+                    },
                   ],
                 }))
               }
@@ -261,6 +322,26 @@ export function KeyFeaturesCard({
                               {feature.description}
                             </p>
                           )}
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {feature.jtbdIds.length > 0 ? (
+                              feature.jtbdIds.map((jtbdId) => {
+                                const jtbd = jtbdOptions.find((item) => item.id === jtbdId);
+                                if (!jtbd) return null;
+                                return (
+                                  <span
+                                    key={jtbdId}
+                                    className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700"
+                                  >
+                                    {jtbd.id.toUpperCase()}
+                                  </span>
+                                );
+                              })
+                            ) : (
+                              <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-700">
+                                Parked
+                              </span>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -269,10 +350,70 @@ export function KeyFeaturesCard({
               })}
             </div>
 
+            {unmappedFeatureCount > 0 && (
+              <p className="mt-4 text-xs font-medium text-amber-700">
+                {unmappedFeatureCount} parked feature{unmappedFeatureCount === 1 ? "" : "s"} will stay in Novum and be excluded from exported files until linked.
+              </p>
+            )}
+
             {canEdit && <ReadOnlyEditHint />}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function TraceabilitySelector(props: {
+  label: string;
+  description: string;
+  options: { id: string; label: string; meta: string }[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const { label, description, options, selectedIds, onChange } = props;
+
+  return (
+    <div className="space-y-2 rounded-lg border border-neutral-200 bg-neutral-50/70 p-3">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
+        <p className="mt-1 text-xs text-neutral-500">{description}</p>
+      </div>
+
+      {options.length > 0 ? (
+        <div className="space-y-2">
+          {options.map((option) => {
+            const checked = selectedIds.includes(option.id);
+            return (
+              <label
+                key={option.id}
+                className="flex cursor-pointer items-start gap-2 rounded-lg border border-transparent bg-white px-2 py-2 text-sm hover:border-neutral-200"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) =>
+                    onChange(
+                      event.target.checked
+                        ? [...selectedIds, option.id]
+                        : selectedIds.filter((id) => id !== option.id)
+                    )
+                  }
+                  className="mt-0.5 h-4 w-4 rounded border-neutral-300"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm text-neutral-800">{option.label}</span>
+                  <span className="block text-[11px] uppercase tracking-wider text-neutral-400">
+                    {option.meta}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-xs text-neutral-500">No options available yet.</p>
+      )}
     </div>
   );
 }

@@ -10,6 +10,7 @@ import type {
   PersonaData,
   JourneyMapData,
 } from "@/hooks/useStrategyStore";
+import { getTraceableText } from "@/lib/strategy/traceable";
 
 /**
  * Computes a CoverageSummary from the product brain connections and strategy data.
@@ -28,13 +29,13 @@ export function computeCoverage(
   );
 
   // --- JTBD Coverage ---
-  const jtbdCoverage: JtbdCoverage[] = manifesto.jtbd.map((text, index) => {
+  const jtbdCoverage: JtbdCoverage[] = manifesto.jtbd.map((jtbd, index) => {
     const matching = allConnections.filter((c) =>
       Array.isArray(c.jtbdIndices) && c.jtbdIndices.includes(index)
     );
     return {
       index,
-      text,
+      text: getTraceableText(jtbd),
       addressed: matching.length > 0,
       addressedBy: matching.map((c) => ({
         pageId: c.pageId,
@@ -117,9 +118,9 @@ export function computeCoverage(
       const coveredIndices = new Set(
         personaConns.flatMap((c) => c.jtbdIndices ?? [])
       );
-      manifesto.jtbd.forEach((text, index) => {
+      manifesto.jtbd.forEach((jtbd, index) => {
         if (!coveredIndices.has(index)) {
-          gaps.push(`${persona.name}: JTBD #${index + 1} — "${text}"`);
+          gaps.push(`${persona.name}: JTBD #${index + 1} — "${getTraceableText(jtbd)}"`);
         }
       });
     });

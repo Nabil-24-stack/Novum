@@ -43,6 +43,7 @@ import { checkRouteConsistency } from "@/lib/ai/route-consistency";
 import type { AutoAnnotationRequest } from "@/lib/ai/annotation-targets";
 import { parseStreamingContent } from "@/lib/streaming-parser";
 import { runVerificationLoop } from "@/lib/verification/verify-loop";
+import { getTraceableText, getTraceableTexts } from "@/lib/strategy/traceable";
 import type { FileUIPart } from "ai";
 
 const FILE_CODE_BLOCK_RE = /```\w*\s+file="[^"]+"/;
@@ -157,10 +158,10 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
   const ctx: Record<string, string> = {
     vfs,
     manifestoContext: storeState.manifestoData
-      ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\nWhat ${storeState.manifestoData.targetUser} Need To Get Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}\nHow Might We:\n${storeState.manifestoData.hmw.map((q, i) => `${i + 1}. ${q}`).join("\n")}`
+      ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\nEnvironment / Usage Context: ${storeState.manifestoData.environmentContext || "Not specified yet."}\nWhat ${storeState.manifestoData.targetUser} Need To Get Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i + 1}. ${getTraceableText(j)}`).join("\n")}\nHow Might We:\n${storeState.manifestoData.hmw.map((q, i) => `${i + 1}. ${q}`).join("\n")}`
       : "",
     personaContext: storeState.personaData
-      ? `## User Personas\n\n${storeState.personaData.map((p, i) => `### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${p.painPoints.map((pp) => `- ${pp}`).join("\n")}\nQuote: "${p.quote}"`).join("\n\n")}`
+      ? `## User Personas\n\n${storeState.personaData.map((p, i) => `### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${p.painPoints.map((pp) => `- ${pp.text}`).join("\n")}\nQuote: "${p.quote}"`).join("\n\n")}`
       : "",
     flowContext: storeState.flowData
       ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`
@@ -219,20 +220,20 @@ function buildExistingArtifactsContext(): string {
   // Manifesto
   if (s.manifestoData) {
     const m = s.manifestoData;
-    sections.push(`### EXISTING MANIFESTO\n\nTitle: ${m.title}\nProblem Statement: ${m.problemStatement}\nTarget User: ${m.targetUser}\nJTBDs:\n${m.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}\nHMW:\n${m.hmw.map((q, i) => `${i + 1}. ${q}`).join("\n")}`);
+    sections.push(`### EXISTING MANIFESTO\n\nTitle: ${m.title}\nProblem Statement: ${m.problemStatement}\nTarget User: ${m.targetUser}\nEnvironment / Usage Context: ${m.environmentContext || "Not specified yet."}\nJTBDs:\n${m.jtbd.map((j, i) => `${i + 1}. ${getTraceableText(j)}`).join("\n")}\nHMW:\n${m.hmw.map((q, i) => `${i + 1}. ${q}`).join("\n")}`);
   }
 
   // Personas
   if (s.personaData) {
     sections.push(`### EXISTING PERSONAS\n\n${s.personaData.map((p, i) =>
-      `#### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${p.painPoints.map((pp) => `- ${pp}`).join("\n")}\nQuote: "${p.quote}"`
+      `#### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${p.painPoints.map((pp) => `- ${pp.text}`).join("\n")}\nQuote: "${p.quote}"`
     ).join("\n\n")}`);
   }
 
   // Journey Maps (abbreviated — stage names only to save tokens)
   if (s.journeyMapData) {
     sections.push(`### EXISTING JOURNEY MAPS\n\n${s.journeyMapData.map((jm) =>
-      `#### ${jm.personaName}\nStages: ${jm.stages.map((st) => st.stage).join(" → ")}\nKey pain points: ${jm.stages.flatMap((st) => st.painPoints).slice(0, 5).join("; ")}`
+      `#### ${jm.personaName}\nStages: ${jm.stages.map((st) => st.stage).join(" → ")}\nKey pain points: ${jm.stages.flatMap((st) => getTraceableTexts(st.painPoints)).slice(0, 5).join("; ")}`
     ).join("\n\n")}`);
   }
 
@@ -705,8 +706,11 @@ function extractPartialOverview(text: string): Partial<import("@/hooks/useStrate
   const targetUser = extractJsonStringValue(content, 'targetUser');
   if (targetUser !== undefined) result.targetUser = targetUser;
 
+  const environmentContext = extractJsonStringValue(content, 'environmentContext');
+  if (environmentContext !== undefined) result.environmentContext = environmentContext;
+
   const jtbd = extractJsonArrayItems(content, 'jtbd');
-  if (jtbd !== undefined) result.jtbd = jtbd;
+  if (jtbd !== undefined) result.jtbd = jtbd as unknown as import("@/hooks/useStrategyStore").ManifestoData["jtbd"];
 
   const hmw = extractJsonArrayItems(content, 'hmw');
   if (hmw !== undefined) result.hmw = hmw;
@@ -772,7 +776,7 @@ function extractPartialPersonas(text: string): Partial<PersonaData>[] | null {
           const goals = extractJsonArrayItems(objStr, 'goals');
           if (goals !== undefined) partial.goals = goals;
           const painPoints = extractJsonArrayItems(objStr, 'painPoints');
-          if (painPoints !== undefined) partial.painPoints = painPoints;
+          if (painPoints !== undefined) partial.painPoints = painPoints as unknown as PersonaData["painPoints"];
           const quote = extractJsonStringValue(objStr, 'quote');
           if (quote !== undefined) partial.quote = quote;
           if (Object.keys(partial).length > 0) {
@@ -797,7 +801,7 @@ function extractPartialPersonas(text: string): Partial<PersonaData>[] | null {
     const goals = extractJsonArrayItems(partialStr, 'goals');
     if (goals !== undefined) partial.goals = goals;
     const painPoints = extractJsonArrayItems(partialStr, 'painPoints');
-    if (painPoints !== undefined) partial.painPoints = painPoints;
+    if (painPoints !== undefined) partial.painPoints = painPoints as unknown as PersonaData["painPoints"];
     const quote = extractJsonStringValue(partialStr, 'quote');
     if (quote !== undefined) partial.quote = quote;
     if (Object.keys(partial).length > 0) {
@@ -927,7 +931,7 @@ function extractCompleteStages(stagesStr: string): Partial<JourneyStage>[] {
     const emotion = extractJsonStringValue(partialStr, 'emotion');
     if (emotion !== undefined) stage.emotion = emotion;
     const painPoints = extractJsonArrayItems(partialStr, 'painPoints');
-    if (painPoints !== undefined) stage.painPoints = painPoints;
+    if (painPoints !== undefined) stage.painPoints = painPoints as unknown as JourneyStage["painPoints"];
     const opportunities = extractJsonArrayItems(partialStr, 'opportunities');
     if (opportunities !== undefined) stage.opportunities = opportunities;
     if (Object.keys(stage).length > 0) stages.push(stage);
@@ -1097,7 +1101,7 @@ function extractPartialKeyFeatures(text: string): Partial<KeyFeaturesData> | nul
   // Extract complete + currently-streaming feature objects from the "features" array
   const featuresIdx = content.indexOf('"features"');
   if (featuresIdx !== -1) {
-    const features: { name: string; description: string; priority: "high" | "medium" | "low" }[] = [];
+    const features: Array<Partial<KeyFeaturesData["features"][number]>> = [];
     let arrStart = content.indexOf('[', featuresIdx);
     if (arrStart !== -1) {
       arrStart++;
@@ -1141,14 +1145,24 @@ function extractPartialKeyFeatures(text: string): Partial<KeyFeaturesData> | nul
         const partialObj = content.slice(lastIncompleteStart);
         const name = extractJsonStringValue(partialObj, 'name');
         if (name) {
+          const id = extractJsonStringValue(partialObj, 'id');
           const description = extractJsonStringValue(partialObj, 'description') ?? '';
           const priorityRaw = extractJsonStringValue(partialObj, 'priority');
           const priority = (priorityRaw === 'high' || priorityRaw === 'medium' || priorityRaw === 'low') ? priorityRaw : undefined;
-          features.push({ name, description, priority: priority ?? 'medium' });
+          const jtbdIds = extractJsonArrayItems(partialObj, 'jtbdIds') ?? [];
+          const painPointIds = extractJsonArrayItems(partialObj, 'painPointIds') ?? [];
+          features.push({
+            id: id ?? "",
+            name,
+            description,
+            priority: priority ?? 'medium',
+            jtbdIds,
+            painPointIds,
+          });
         }
       }
     }
-    if (features.length > 0) result.features = features;
+    if (features.length > 0) result.features = features as KeyFeaturesData["features"];
   }
 
   return Object.keys(result).length > 0 ? result : null;
@@ -1814,6 +1828,7 @@ export function ChatTab({
             title: partial.title || "Untitled",
             problemStatement: partial.problemStatement || "",
             targetUser: partial.targetUser || "",
+            environmentContext: partial.environmentContext || "",
             jtbd: partial.jtbd || [],
             hmw: partial.hmw || [],
           });
@@ -3654,10 +3669,10 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 // Build shared context
                 const sharedContext = {
                   manifestoContext: storeState.manifestoData
-                    ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\n\nJobs to be Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i}. ${j}`).join("\n")}`
+                    ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\nEnvironment / Usage Context: ${storeState.manifestoData.environmentContext || "Not specified yet."}\n\nJobs to be Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i}. ${getTraceableText(j)}`).join("\n")}`
                     : "",
                   personaContext: storeState.personaData
-                    ? `## Personas\n\n${storeState.personaData.map((p) => `### ${p.name}\nRole: ${p.role}\nGoals: ${p.goals.join(", ")}\nPain Points: ${p.painPoints.join(", ")}`).join("\n\n")}`
+                    ? `## Personas\n\n${storeState.personaData.map((p) => `### ${p.name}\nRole: ${p.role}\nGoals: ${p.goals.join(", ")}\nPain Points: ${p.painPoints.map((painPoint) => painPoint.text).join(", ")}`).join("\n\n")}`
                     : "",
                   flowContext: storeState.flowData
                     ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`

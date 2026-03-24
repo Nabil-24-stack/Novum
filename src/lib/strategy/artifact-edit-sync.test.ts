@@ -23,6 +23,27 @@ import type {
   PersonaData,
   UserFlow,
 } from "../../hooks/useStrategyStore.ts";
+import type { InsightData } from "../../hooks/useDocumentStore.ts";
+
+const jtbd = (id: string, text: string) => ({ id, text });
+const painPoint = (id: string, text: string) => ({ id, text });
+const feature = (
+  overrides: Partial<KeyFeaturesData["features"][number]> = {}
+): KeyFeaturesData["features"][number] => ({
+  id: "feature-1",
+  name: "Delta export",
+  description: "Download changed sections.",
+  priority: "high",
+  jtbdIds: ["jtbd-1"],
+  painPointIds: [],
+  ...overrides,
+});
+const insight = (overrides: Partial<InsightData> = {}): InsightData => ({
+  id: "insight-1",
+  insight: "Need better collaboration",
+  source: "conversation",
+  ...overrides,
+});
 
 test("persona renames propagate to linked journey maps and user flows", () => {
   const personaData: PersonaData[] = [
@@ -31,7 +52,7 @@ test("persona renames propagate to linked journey maps and user flows", () => {
       role: "Founder",
       bio: "Leads product direction.",
       goals: ["Ship quickly"],
-      painPoints: ["Context gets lost"],
+      painPoints: [painPoint("persona-pain-1", "Context gets lost")],
       quote: "I need strategy to stay in sync.",
     },
   ];
@@ -78,7 +99,8 @@ test("manifesto edits reindex exact JTBD matches and prune removed flows", () =>
     title: "Novum",
     problemStatement: "Planning gets lost before build.",
     targetUser: "Product teams",
-    jtbd: ["Track strategy changes", "Ship aligned updates"],
+    environmentContext: "Inside product planning and handoff review sessions.",
+    jtbd: [jtbd("jtbd-1", "Track strategy changes"), jtbd("jtbd-2", "Ship aligned updates")],
     hmw: ["How might we keep plans current?"],
   };
   const userFlowsData: UserFlow[] = [
@@ -110,7 +132,7 @@ test("manifesto edits reindex exact JTBD matches and prune removed flows", () =>
     },
     {
       ...manifestoData,
-      jtbd: ["Ship aligned updates", "Keep the handoff current"],
+      jtbd: [jtbd("jtbd-2", "Ship aligned updates"), jtbd("jtbd-3", "Keep the handoff current")],
     }
   );
 
@@ -146,7 +168,7 @@ test("manifesto edits reindex exact JTBD matches and prune removed flows", () =>
     },
     {
       ...manifestoData,
-      jtbd: ["Track strategy changes"],
+      jtbd: [jtbd("jtbd-1", "Track strategy changes")],
     }
   );
 
@@ -160,7 +182,7 @@ test("selected idea title edits keep key-features title in sync when it matched"
   ];
   const keyFeaturesData: KeyFeaturesData = {
     ideaTitle: "Living handoff",
-    features: [{ name: "Delta export", description: "Download changed sections.", priority: "high" }],
+    features: [feature()],
   };
 
   const result = applyManualIdeaEdit(
@@ -189,7 +211,8 @@ test("resolveArtifactDraftChange treats cloned manifesto drafts as unchanged", (
     title: "Novum",
     problemStatement: "Planning gets lost before build.",
     targetUser: "Product teams",
-    jtbd: ["Keep plans current"],
+    environmentContext: "Inside product planning and handoff review sessions.",
+    jtbd: [jtbd("jtbd-1", "Keep plans current")],
     hmw: ["How might we reduce stale handoffs?"],
   };
 
@@ -208,22 +231,16 @@ test("resolveArtifactDraftChange ignores whitespace-only insight and persona edi
   const insightResult = resolveArtifactDraftChange({
     baseline: {
       documents: [],
-      insights: [
-        {
-          insight: "Need better collaboration",
-          source: "conversation",
-        },
-      ],
+      insights: [insight()],
     },
     nextValue: {
       documents: [],
       insights: [
-        {
+        insight({
           insight: "  Need better collaboration  ",
           quote: " ",
           sourceDocument: " ",
-          source: "conversation",
-        },
+        }),
       ],
     },
     normalize: normalizeInsightsData,
@@ -234,6 +251,7 @@ test("resolveArtifactDraftChange ignores whitespace-only insight and persona edi
     documents: [],
     insights: [
       {
+        id: "insight-1",
         insight: "Need better collaboration",
         quote: "",
         sourceDocument: "",
@@ -247,7 +265,7 @@ test("resolveArtifactDraftChange ignores whitespace-only insight and persona edi
     role: "Founder",
     bio: "Leads the team.",
     goals: ["Ship quickly"],
-    painPoints: ["Context drifts"],
+    painPoints: [painPoint("persona-pain-1", "Context drifts")],
     quote: "I need the plan to stay current.",
   };
 
@@ -321,27 +339,19 @@ test("resolveArtifactDraftChange detects real key-feature and user-flow edits", 
   const keyFeaturesResult = resolveArtifactDraftChange({
     baseline: {
       ideaTitle: "Living handoff",
-      features: [
-        {
-          name: "Delta export",
-          description: "Download changed sections.",
-          priority: "high" as const,
-        },
-      ],
+      features: [feature()],
     },
     nextValue: {
       ideaTitle: "Living handoff",
       features: [
-        {
-          name: "Delta export",
-          description: "Download changed sections.",
-          priority: "high" as const,
-        },
-        {
+        feature(),
+        feature({
+          id: "feature-2",
           name: "Freshness check",
           description: "Detect stale handoffs after strategy changes.",
           priority: "medium" as const,
-        },
+          jtbdIds: ["jtbd-2"],
+        }),
       ],
     },
     normalize: normalizeKeyFeaturesData,
@@ -376,14 +386,16 @@ test("normalizers trim text and remove empty list items", () => {
       title: "  Novum  ",
       problemStatement: "  Planning gets lost  ",
       targetUser: " Product teams ",
-      jtbd: [" Keep context ", " ", ""],
+      environmentContext: " During planning reviews ",
+      jtbd: [jtbd("jtbd-1", " Keep context "), jtbd("jtbd-2", " "), jtbd("jtbd-3", "")],
       hmw: [" How might we keep plans current? ", ""],
     }),
     {
       title: "Novum",
       problemStatement: "Planning gets lost",
       targetUser: "Product teams",
-      jtbd: ["Keep context"],
+      environmentContext: "During planning reviews",
+      jtbd: [jtbd("jtbd-1", "Keep context")],
       hmw: ["How might we keep plans current?"],
     }
   );
@@ -392,15 +404,13 @@ test("normalizers trim text and remove empty list items", () => {
     normalizeKeyFeaturesData({
       ideaTitle: "  Living handoff ",
       features: [
-        { name: " Delta export ", description: " Download changed sections. ", priority: "high" },
-        { name: " ", description: " ", priority: "low" },
+        feature({ name: " Delta export ", description: " Download changed sections. " }),
+        feature({ id: "feature-2", name: " ", description: " ", priority: "low", jtbdIds: [] }),
       ],
     }),
     {
       ideaTitle: "Living handoff",
-      features: [
-        { name: "Delta export", description: "Download changed sections.", priority: "high" },
-      ],
+      features: [feature()],
     }
   );
 });

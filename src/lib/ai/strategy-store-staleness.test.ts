@@ -32,7 +32,14 @@ test("setting key features after build marks strategy as updated", () => {
   const keyFeatures: KeyFeaturesData = {
     ideaTitle: "Guided workspace",
     features: [
-      { name: "Context handoff", description: "Carries strategy forward.", priority: "high" },
+      {
+        id: "feature-1",
+        name: "Context handoff",
+        description: "Carries strategy forward.",
+        priority: "high",
+        jtbdIds: ["jtbd-1"],
+        painPointIds: [],
+      },
     ],
   };
 

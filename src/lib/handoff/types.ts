@@ -33,7 +33,8 @@ export interface HandoffSnapshot {
 }
 
 export interface HandoffState {
-  fullMarkdown: string;
+  problemMarkdown: string;
+  solutionMarkdown: string;
   latestDeltaMarkdown: string | null;
   baselineSnapshot: HandoffSnapshot | null;
   baselineHash: string | null;
@@ -56,7 +57,8 @@ export const HANDOFF_SECTION_LABELS: Record<HandoffDirtySection, string> = {
 
 export function createEmptyHandoffState(): HandoffState {
   return {
-    fullMarkdown: "",
+    problemMarkdown: "",
+    solutionMarkdown: "",
     latestDeltaMarkdown: null,
     baselineSnapshot: null,
     baselineHash: null,
@@ -64,5 +66,37 @@ export function createEmptyHandoffState(): HandoffState {
     isOutdated: false,
     generatedAt: null,
     lastError: null,
+  };
+}
+
+export function normalizeHandoffState(
+  value: Partial<HandoffState> | { fullMarkdown?: string } | null | undefined
+): HandoffState {
+  const fallback = createEmptyHandoffState();
+  if (!value) return fallback;
+
+  const fullMarkdown = "fullMarkdown" in value && typeof value.fullMarkdown === "string"
+    ? value.fullMarkdown
+    : "";
+
+  return {
+    ...fallback,
+    ...value,
+    problemMarkdown:
+      "problemMarkdown" in value && typeof value.problemMarkdown === "string"
+        ? value.problemMarkdown
+        : "",
+    solutionMarkdown:
+      "solutionMarkdown" in value && typeof value.solutionMarkdown === "string"
+        ? value.solutionMarkdown
+        : "",
+    latestDeltaMarkdown:
+      "latestDeltaMarkdown" in value && typeof value.latestDeltaMarkdown === "string"
+        ? value.latestDeltaMarkdown
+        : null,
+    isOutdated:
+      ("problemMarkdown" in value || "solutionMarkdown" in value)
+        ? Boolean("isOutdated" in value ? value.isOutdated : fallback.isOutdated)
+        : Boolean(fullMarkdown) || fallback.isOutdated,
   };
 }

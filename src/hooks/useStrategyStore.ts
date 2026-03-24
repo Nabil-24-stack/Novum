@@ -3,7 +3,12 @@
 import { create } from "zustand";
 import type { CoverageDisplayState } from "../lib/product-brain/types.ts";
 import type { HandoffState, ProductMode } from "../lib/handoff/types.ts";
-import { createEmptyHandoffState } from "../lib/handoff/types.ts";
+import { createEmptyHandoffState, normalizeHandoffState } from "../lib/handoff/types.ts";
+import {
+  createDeterministicTraceableId,
+  normalizeTraceableTextList,
+  type TraceableTextItem,
+} from "../lib/strategy/traceable.ts";
 
 export type StrategyPhase =
   | "hero"
@@ -65,7 +70,7 @@ export interface PersonaData {
   role: string;        // e.g. "Marketing Manager at SaaS startup"
   bio: string;         // 1-2 sentence bio
   goals: string[];     // 2-3 goals
-  painPoints: string[];// 2-3 pain points
+  painPoints: TraceableTextItem[];// 2-3 pain points
   quote: string;       // First-person key quote
 }
 
@@ -74,7 +79,7 @@ export interface JourneyStage {
   actions: string[];     // What the user does
   thoughts: string[];    // What the user thinks
   emotion: string;       // Single emoji or short word (e.g. "frustrated", "hopeful")
-  painPoints: string[];  // Friction points
+  painPoints: TraceableTextItem[];  // Friction points
   opportunities: string[]; // Design opportunities
 }
 
@@ -90,9 +95,18 @@ export interface IdeaData {
   illustration: string; // single SVG string
 }
 
+export interface KeyFeatureData {
+  id: string;
+  name: string;
+  description: string;
+  priority: "high" | "medium" | "low";
+  jtbdIds: string[];
+  painPointIds: string[];
+}
+
 export interface KeyFeaturesData {
   ideaTitle: string;
-  features: { name: string; description: string; priority: "high" | "medium" | "low" }[];
+  features: KeyFeatureData[];
 }
 
 export interface UserFlowStep {
@@ -112,7 +126,8 @@ export interface ManifestoData {
   title: string;
   problemStatement: string;
   targetUser: string;
-  jtbd: string[];
+  environmentContext: string;
+  jtbd: TraceableTextItem[];
   hmw: string[];
 }
 
@@ -132,6 +147,162 @@ export interface StrategyConnection {
 export interface FlowData {
   nodes: StrategyNode[];
   connections: StrategyConnection[];
+}
+
+function trimText(value: string | null | undefined): string {
+  return value?.trim() ?? "";
+}
+
+function normalizeStringList(values: string[] | null | undefined): string[] {
+  return (values ?? []).map(trimText).filter(Boolean);
+}
+
+function normalizeIdList(values: string[] | null | undefined): string[] {
+  return normalizeStringList(values);
+}
+
+function normalizeManifestoState(
+  data: ManifestoData,
+  previous: ManifestoData | null | undefined
+): ManifestoData {
+  return {
+    title: trimText(data.title),
+    problemStatement: trimText(data.problemStatement),
+    targetUser: trimText(data.targetUser),
+    environmentContext: trimText(data.environmentContext),
+    jtbd: normalizeTraceableTextList({
+      values: data.jtbd,
+      prefix: "jtbd",
+      previous: previous?.jtbd,
+    }),
+    hmw: normalizeStringList(data.hmw),
+  };
+}
+
+function normalizePersonaState(
+  data: PersonaData,
+  previous: PersonaData | null | undefined
+): PersonaData {
+  return {
+    name: trimText(data.name),
+    role: trimText(data.role),
+    bio: trimText(data.bio),
+    goals: normalizeStringList(data.goals),
+    painPoints: normalizeTraceableTextList({
+      values: data.painPoints,
+      prefix: "persona-pain",
+      previous: previous?.painPoints,
+    }),
+    quote: trimText(data.quote),
+  };
+}
+
+function normalizeJourneyStageState(
+  data: JourneyStage,
+  previous: JourneyStage | null | undefined
+): JourneyStage | null {
+  const normalized: JourneyStage = {
+    stage: trimText(data.stage),
+    actions: normalizeStringList(data.actions),
+    thoughts: normalizeStringList(data.thoughts),
+    emotion: trimText(data.emotion),
+    painPoints: normalizeTraceableTextList({
+      values: data.painPoints,
+      prefix: "journey-pain",
+      previous: previous?.painPoints,
+    }),
+    opportunities: normalizeStringList(data.opportunities),
+  };
+
+  if (
+    !normalized.stage &&
+    normalized.actions.length === 0 &&
+    normalized.thoughts.length === 0 &&
+    !normalized.emotion &&
+    normalized.painPoints.length === 0 &&
+    normalized.opportunities.length === 0
+  ) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function normalizeJourneyMapState(
+  data: JourneyMapData,
+  previous: JourneyMapData | null | undefined
+): JourneyMapData {
+  return {
+    personaName: trimText(data.personaName),
+    stages: (data.stages ?? [])
+      .map((stage, index) => normalizeJourneyStageState(stage, previous?.stages?.[index] ?? null))
+      .filter((stage): stage is JourneyStage => Boolean(stage)),
+  };
+}
+
+function normalizeFeatureState(
+  feature: KeyFeatureData,
+  index: number,
+  previousFeatures: KeyFeatureData[]
+): KeyFeatureData {
+  const nextName = trimText(feature.name);
+  const nextDescription = trimText(feature.description);
+  const previousBySignature = previousFeatures.find(
+    (item) =>
+      item.name.trim().toLowerCase() === nextName.toLowerCase() &&
+      item.description.trim().toLowerCase() === nextDescription.toLowerCase()
+  );
+  const previousByName = previousFeatures.find(
+    (item) => item.name.trim().toLowerCase() === nextName.toLowerCase()
+  );
+  const sameIndex = previousFeatures[index];
+
+  return {
+    id:
+      trimText(feature.id) ||
+      sameIndex?.id ||
+      previousBySignature?.id ||
+      previousByName?.id ||
+      createDeterministicTraceableId("feature", `${index}:${nextName}:${nextDescription}`),
+    name: nextName,
+    description: nextDescription,
+    priority:
+      feature.priority === "high" || feature.priority === "medium" || feature.priority === "low"
+        ? feature.priority
+        : "medium",
+    jtbdIds: normalizeIdList(feature.jtbdIds),
+    painPointIds: normalizeIdList(feature.painPointIds),
+  };
+}
+
+function normalizeKeyFeaturesState(
+  data: KeyFeaturesData,
+  previous: KeyFeaturesData | null | undefined
+): KeyFeaturesData {
+  const previousFeatures = previous?.features ?? [];
+  return {
+    ideaTitle: trimText(data.ideaTitle),
+    features: (data.features ?? [])
+      .map((feature, index) => normalizeFeatureState(feature, index, previousFeatures))
+      .filter((feature) => feature.name || feature.description),
+  };
+}
+
+function normalizeUserFlowState(data: UserFlow): UserFlow {
+  return {
+    ...data,
+    id: trimText(data.id),
+    jtbdText: trimText(data.jtbdText),
+    personaNames: normalizeStringList(data.personaNames),
+    steps: (data.steps ?? [])
+      .map((step) => {
+        const nodeId = trimText(step.nodeId);
+        const action = trimText(step.action);
+        if (!nodeId && !action) return null;
+        return { nodeId, action };
+      })
+      .filter((step): step is UserFlowStep => Boolean(step)),
+  };
 }
 
 interface StrategyState {
@@ -273,14 +444,25 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
 
   setManifestoData: (data) => {
     const afterBuild = get().completedPages.length > 0;
-    set({ manifestoData: data, streamingOverview: null, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+    set({
+      manifestoData: normalizeManifestoState(data, get().manifestoData),
+      streamingOverview: null,
+      ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}),
+    });
   },
 
   setStreamingOverview: (data) => set({ streamingOverview: data }),
 
   setPersonaData: (data) => {
     const afterBuild = get().completedPages.length > 0;
-    set({ personaData: data, streamingPersonas: null, journeyMapContinueAttempts: 0, isJourneyMapContinuing: false, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+    const previous = get().personaData ?? [];
+    set({
+      personaData: data.map((persona, index) => normalizePersonaState(persona, previous[index] ?? null)),
+      streamingPersonas: null,
+      journeyMapContinueAttempts: 0,
+      isJourneyMapContinuing: false,
+      ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}),
+    });
   },
 
   setStreamingPersonas: (data) => set({ streamingPersonas: data }),
@@ -329,7 +511,12 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
 
   setJourneyMapData: (data) => {
     const afterBuild = get().completedPages.length > 0;
-    set({ journeyMapData: data, streamingJourneyMaps: null, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+    const previous = get().journeyMapData ?? [];
+    set({
+      journeyMapData: data.map((journeyMap, index) => normalizeJourneyMapState(journeyMap, previous[index] ?? null)),
+      streamingJourneyMaps: null,
+      ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}),
+    });
   },
 
   setStreamingJourneyMaps: (data) => set({ streamingJourneyMaps: data }),
@@ -372,14 +559,22 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
 
   setKeyFeaturesData: (data) => {
     const afterBuild = get().completedPages.length > 0;
-    set({ keyFeaturesData: data, streamingKeyFeatures: null, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+    set({
+      keyFeaturesData: normalizeKeyFeaturesState(data, get().keyFeaturesData),
+      streamingKeyFeatures: null,
+      ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}),
+    });
   },
 
   setStreamingKeyFeatures: (data) => set({ streamingKeyFeatures: data }),
 
   setUserFlowsData: (data) => {
     const afterBuild = get().completedPages.length > 0;
-    set({ userFlowsData: data, streamingUserFlows: null, ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}) });
+    set({
+      userFlowsData: data.map(normalizeUserFlowState),
+      streamingUserFlows: null,
+      ...(afterBuild ? { strategyUpdatedAfterBuild: true } : {}),
+    });
   },
 
   setStreamingUserFlows: (data) => set({ streamingUserFlows: data }),
@@ -399,10 +594,27 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
         : [...state.verifiedPages, pageId],
     })),
 
-  hydrate: (data: Partial<typeof initialState>) => set({
-    ...initialState,
-    ...data,
-  }),
+  hydrate: (data: Partial<typeof initialState>) =>
+    set({
+      ...initialState,
+      ...data,
+      manifestoData: data.manifestoData
+        ? normalizeManifestoState(data.manifestoData, null)
+        : initialState.manifestoData,
+      personaData: data.personaData
+        ? data.personaData.map((persona) => normalizePersonaState(persona, null))
+        : initialState.personaData,
+      journeyMapData: data.journeyMapData
+        ? data.journeyMapData.map((journeyMap) => normalizeJourneyMapState(journeyMap, null))
+        : initialState.journeyMapData,
+      keyFeaturesData: data.keyFeaturesData
+        ? normalizeKeyFeaturesState(data.keyFeaturesData, null)
+        : initialState.keyFeaturesData,
+      userFlowsData: data.userFlowsData
+        ? data.userFlowsData.map(normalizeUserFlowState)
+        : initialState.userFlowsData,
+      handoff: normalizeHandoffState(data.handoff),
+    }),
 
   reset: () => set(initialState),
 }));

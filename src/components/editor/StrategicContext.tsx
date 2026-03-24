@@ -5,6 +5,7 @@ import { BrainCircuit, ChevronRight, User, CheckSquare } from "lucide-react";
 import { useProductBrainStore } from "@/hooks/useProductBrainStore";
 import { useStrategyStore } from "@/hooks/useStrategyStore";
 import { findConnectionsByStrategyIds } from "@/lib/product-brain/lookup";
+import { getTraceableTexts } from "@/lib/strategy/traceable";
 
 const PERSONA_COLORS = [
   { bg: "bg-blue-50", text: "text-blue-700" },
@@ -37,7 +38,7 @@ export function StrategicContext({ strategyIds }: StrategicContextProps) {
   personaData?.forEach((p, i) => personaIndexMap.set(p.name, i));
 
   // Resolve JTBD indices to text
-  const jtbdTexts = manifestoData?.jtbd ?? [];
+  const jtbdTexts = getTraceableTexts(manifestoData?.jtbd);
 
   return (
     <div className="border-b border-neutral-200">

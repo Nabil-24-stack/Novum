@@ -5,6 +5,7 @@ import { Check, Footprints } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { JourneyMapData, JourneyStage } from "@/hooks/useStrategyStore";
+import type { TraceableTextItem } from "@/lib/strategy/traceable";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   ARTIFACT_IDLE_CARD_CLASSNAME,
@@ -98,7 +99,7 @@ function getCellContent(stage: Partial<JourneyStage>, rowKey: RowKey): ReactNode
       );
     case "painPoints":
       return stage.painPoints?.map((item, index) => (
-        <p key={index} className="text-[11px] leading-relaxed text-neutral-700">{item}</p>
+        <p key={item.id || index} className="text-[11px] leading-relaxed text-neutral-700">{item.text}</p>
       ));
     case "opportunities":
       return stage.opportunities?.map((item, index) => (
@@ -314,7 +315,7 @@ export function JourneyMapCard({
                     onCancel={cancelEditing}
                   />
 
-                  <EditableStageList
+                  <EditableTraceableStageList
                     label="Pain Points"
                     values={stage.painPoints}
                     addLabel="Add pain point"
@@ -452,6 +453,56 @@ function EditableStageList(props: {
                 })
               }
               className="min-h-[72px] text-sm"
+            />
+            <RemoveListItemButton
+              onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EditableTraceableStageList(props: {
+  label: string;
+  values: TraceableTextItem[];
+  addLabel: string;
+  onChange: (values: TraceableTextItem[]) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const { label, values, addLabel, onChange, onSave, onCancel } = props;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
+        <AddListItemButton
+          label={addLabel}
+          onClick={() => onChange([...values, { id: "", text: "" }])}
+        />
+      </div>
+      <div className="space-y-2">
+        {values.map((value, index) => (
+          <div key={value.id || index} className="flex items-start gap-2">
+            <Textarea
+              value={value.text}
+              placeholder={`${label} ${index + 1}`}
+              onChange={(event) =>
+                onChange(
+                  values.map((item, itemIndex) =>
+                    itemIndex === index ? { ...item, text: event.target.value } : item
+                  )
+                )
+              }
+              onKeyDown={(event) =>
+                handleEditorKeyDown(event, {
+                  onSave,
+                  onCancel,
+                })
+              }
+              className="min-h-[72px] flex-1 text-sm"
             />
             <RemoveListItemButton
               onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}

@@ -5,6 +5,7 @@ import { AlertTriangle, Quote, Target } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { PersonaData } from "@/hooks/useStrategyStore";
+import type { TraceableTextItem } from "@/lib/strategy/traceable";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   ARTIFACT_IDLE_CARD_CLASSNAME,
@@ -174,7 +175,7 @@ export function PersonaCard({
               onCancel={cancelEditing}
             />
 
-            <EditableStringList
+            <EditableTraceableList
               label="Pain Points"
               values={draft.painPoints}
               addLabel="Add pain point"
@@ -268,11 +269,11 @@ export function PersonaCard({
                 <ul className="space-y-1.5">
                   {draft.painPoints.map((painPoint, painPointIndex) => (
                     <li
-                      key={painPointIndex}
+                      key={painPoint.id || painPointIndex}
                       className="relative pl-5 text-sm leading-relaxed text-neutral-700"
                     >
                       <span className="absolute left-0 top-1.5 h-1.5 w-1.5 rounded-full bg-amber-400" />
-                      {painPoint}
+                      {painPoint.text}
                     </li>
                   ))}
                 </ul>
@@ -351,6 +352,56 @@ function EditableStringList(props: {
                 })
               }
               className="min-h-[72px] text-sm"
+            />
+            <RemoveListItemButton
+              onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EditableTraceableList(props: {
+  label: string;
+  values: TraceableTextItem[];
+  addLabel: string;
+  onChange: (values: TraceableTextItem[]) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const { label, values, addLabel, onChange, onSave, onCancel } = props;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
+        <AddListItemButton
+          label={addLabel}
+          onClick={() => onChange([...values, { id: "", text: "" }])}
+        />
+      </div>
+      <div className="space-y-2">
+        {values.map((value, index) => (
+          <div key={value.id || index} className="flex items-start gap-2">
+            <Textarea
+              value={value.text}
+              placeholder={`${label} ${index + 1}`}
+              onChange={(event) =>
+                onChange(
+                  values.map((item, itemIndex) =>
+                    itemIndex === index ? { ...item, text: event.target.value } : item
+                  )
+                )
+              }
+              onKeyDown={(event) =>
+                handleEditorKeyDown(event, {
+                  onSave,
+                  onCancel,
+                })
+              }
+              className="min-h-[72px] flex-1 text-sm"
             />
             <RemoveListItemButton
               onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}

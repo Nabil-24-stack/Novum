@@ -19,13 +19,16 @@ interface HandoffMarkdownCardProps {
   projectName: string;
   x: number;
   y: number;
-  fullMarkdown: string;
+  problemMarkdown: string;
+  solutionMarkdown: string;
   latestDeltaMarkdown: string | null;
   dirtySections: HandoffDirtySection[];
   isOutdated: boolean;
   generatedAt: string | null;
   lastError: string | null;
+  warningMessage?: string | null;
   isGenerating: boolean;
+  canGenerate: boolean;
   onMove?: (x: number, y: number) => void;
   onRegenerate: () => void;
 }
@@ -44,18 +47,22 @@ export function HandoffMarkdownCard({
   projectName,
   x,
   y,
-  fullMarkdown,
+  problemMarkdown,
+  solutionMarkdown,
   latestDeltaMarkdown,
   dirtySections,
   isOutdated,
   generatedAt,
   lastError,
+  warningMessage,
   isGenerating,
+  canGenerate,
   onMove,
   onRegenerate,
 }: HandoffMarkdownCardProps) {
   const canvasScale = useCanvasScale();
   const [isDragging, setIsDragging] = useState(false);
+  const [activePreview, setActivePreview] = useState<"problem" | "solution" | "delta">("problem");
 
   const handlePointerDown = useCallback((e: PointerEvent<HTMLDivElement>) => {
     if (!onMove) return;
@@ -81,11 +88,19 @@ export function HandoffMarkdownCard({
     return Number.isNaN(date.getTime()) ? "Generated recently" : date.toLocaleString();
   }, [generatedAt]);
 
-  const prdFilename = `${projectName || "project"}-prd.md`;
+  const problemFilename = `${projectName || "project"}-problem.md`;
+  const solutionFilename = `${projectName || "project"}-solution.md`;
   const deltaFilename = `${projectName || "project"}-delta.md`;
-  const canDownload = fullMarkdown.trim().length > 0 && !isOutdated;
+  const canDownloadProblem = problemMarkdown.trim().length > 0 && !isOutdated;
+  const canDownloadSolution = solutionMarkdown.trim().length > 0 && !isOutdated;
   const canDownloadDelta = Boolean(latestDeltaMarkdown?.trim()) && !isOutdated;
-  const showRegenerate = isOutdated || !canDownload || Boolean(lastError);
+  const canPreview = canDownloadProblem || canDownloadSolution;
+  const showRegenerate = isOutdated || !canPreview || Boolean(lastError);
+  const previewContent = activePreview === "problem"
+    ? problemMarkdown
+    : activePreview === "solution"
+      ? solutionMarkdown
+      : latestDeltaMarkdown ?? "";
 
   return (
     <div
@@ -121,14 +136,14 @@ export function HandoffMarkdownCard({
                     Outdated
                   </span>
                 )}
-                {!isGenerating && !isOutdated && canDownload && (
+                {!isGenerating && !isOutdated && canPreview && (
                   <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
                     Ready
                   </span>
                 )}
               </div>
               <p className="mt-1 text-sm text-neutral-500">
-                PRD-style markdown generated from your current strategy artifacts.
+                Structured markdown generated from your current strategy artifacts.
               </p>
               <p className="mt-2 text-xs text-neutral-400">Last generated: {generatedLabel}</p>
               {isOutdated && (
@@ -158,19 +173,38 @@ export function HandoffMarkdownCard({
             </div>
           )}
 
+          {warningMessage && (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {warningMessage}
+            </div>
+          )}
+
           <div className="mt-4 flex flex-wrap gap-2">
             <button
               type="button"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                triggerDownload(prdFilename, fullMarkdown);
+                triggerDownload(problemFilename, problemMarkdown);
               }}
-              disabled={!canDownload}
+              disabled={!canDownloadProblem}
               className="inline-flex items-center gap-2 rounded-lg border border-neutral-300 px-3 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Download className="w-4 h-4" />
-              Download .md
+              Download problem
+            </button>
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                triggerDownload(solutionFilename, solutionMarkdown);
+              }}
+              disabled={!canDownloadSolution}
+              className="inline-flex items-center gap-2 rounded-lg border border-neutral-300 px-3 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Download className="w-4 h-4" />
+              Download solution
             </button>
             <button
               type="button"
@@ -195,7 +229,7 @@ export function HandoffMarkdownCard({
                   e.stopPropagation();
                   onRegenerate();
                 }}
-                disabled={isGenerating}
+                disabled={isGenerating || !canGenerate}
                 className="inline-flex items-center gap-2 rounded-lg bg-neutral-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isGenerating ? (
@@ -203,7 +237,7 @@ export function HandoffMarkdownCard({
                 ) : (
                   <RefreshCw className="w-4 h-4" />
                 )}
-                {canDownload ? "Regenerate" : "Generate"}
+                {canPreview ? "Regenerate" : "Generate"}
               </button>
             )}
           </div>
@@ -213,20 +247,60 @@ export function HandoffMarkdownCard({
           className="bg-neutral-950 px-6 py-5"
           style={{ minHeight: HANDOFF_CARD_HEIGHT - 180 }}
         >
-          {canDownload ? (
-            <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-6 text-neutral-100">
-              {fullMarkdown}
-            </pre>
+          {canPreview ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { key: "problem", label: "problem.md" },
+                  { key: "solution", label: "solution.md" },
+                  { key: "delta", label: "delta.md" },
+                ].map((tab) => {
+                  const disabled =
+                    (tab.key === "problem" && !problemMarkdown.trim()) ||
+                    (tab.key === "solution" && !solutionMarkdown.trim()) ||
+                    (tab.key === "delta" && !latestDeltaMarkdown?.trim());
+                  const isActive = activePreview === tab.key;
+
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!disabled) {
+                          setActivePreview(tab.key as "problem" | "solution" | "delta");
+                        }
+                      }}
+                      disabled={disabled}
+                      className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                        isActive
+                          ? "bg-white text-neutral-900"
+                          : "bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
+                      } disabled:cursor-not-allowed disabled:opacity-40`}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-6 text-neutral-100">
+                {previewContent}
+              </pre>
+            </div>
           ) : (
             <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-dashed border-neutral-700 bg-neutral-900/70 px-6 py-12 text-center">
               <div className="max-w-md">
                 <p className="text-sm font-medium text-neutral-100">
                   {isGenerating
                     ? "Generating your markdown handoff..."
-                    : "Approve the solution design to generate your first markdown handoff."}
+                    : canGenerate
+                      ? "Approve the solution design to generate your first markdown handoff."
+                      : "Add more strategy context before generating the handoff."}
                 </p>
                 <p className="mt-2 text-sm text-neutral-400">
-                  Once generated, this card becomes the read-only source for downloading the latest PRD and delta updates.
+                  Once generated, this card becomes the read-only source for downloading `problem.md`, `solution.md`, and `delta.md`.
                 </p>
               </div>
             </div>

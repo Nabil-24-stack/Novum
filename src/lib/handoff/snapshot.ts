@@ -3,6 +3,7 @@ import type {
   FlowData,
   IdeaData,
   JourneyMapData,
+  KeyFeatureData,
   KeyFeaturesData,
   ManifestoData,
   PersonaData,
@@ -12,6 +13,35 @@ import type { HandoffDirtySection, HandoffSnapshot } from "./types.ts";
 
 function stableStringify(value: unknown): string {
   return JSON.stringify(value ?? null);
+}
+
+export function isExportableFeature(feature: KeyFeatureData): boolean {
+  return feature.jtbdIds.length > 0;
+}
+
+export function getExportableFeatures(
+  keyFeatures: KeyFeaturesData | null | undefined,
+): KeyFeatureData[] {
+  return (keyFeatures?.features ?? []).filter(isExportableFeature);
+}
+
+export function getParkedFeatures(
+  keyFeatures: KeyFeaturesData | null | undefined,
+): KeyFeatureData[] {
+  return (keyFeatures?.features ?? []).filter((feature) => !isExportableFeature(feature));
+}
+
+function serializeKeyFeaturesForExportComparison(
+  keyFeatures: KeyFeaturesData | null | undefined,
+): Array<Pick<KeyFeatureData, "id" | "name" | "description" | "priority" | "jtbdIds" | "painPointIds">> {
+  return getExportableFeatures(keyFeatures).map((feature) => ({
+    id: feature.id,
+    name: feature.name,
+    description: feature.description,
+    priority: feature.priority,
+    jtbdIds: feature.jtbdIds,
+    painPointIds: feature.painPointIds,
+  }));
 }
 
 export function buildHandoffSnapshot(data: {
@@ -49,7 +79,11 @@ export function getDirtyHandoffSections(
     ["personas", current.personas, baseline.personas],
     ["journey-highlights", current.journeyHighlights, baseline.journeyHighlights],
     ["selected-solution", current.selectedSolution, baseline.selectedSolution],
-    ["key-features", current.keyFeatures, baseline.keyFeatures],
+    [
+      "key-features",
+      serializeKeyFeaturesForExportComparison(current.keyFeatures),
+      serializeKeyFeaturesForExportComparison(baseline.keyFeatures),
+    ],
     [
       "information-architecture",
       current.informationArchitecture,
@@ -78,4 +112,21 @@ export function hasMeaningfulHandoffSnapshot(snapshot: HandoffSnapshot): boolean
       snapshot.informationArchitecture ||
       snapshot.userFlows?.length
   );
+}
+
+export function getParkedFeatureWarning(
+  keyFeatures: KeyFeaturesData | null | undefined,
+): string | null {
+  const parkedFeatures = getParkedFeatures(keyFeatures);
+
+  if (parkedFeatures.length === 0) {
+    return null;
+  }
+
+  const featureList = parkedFeatures
+    .map((feature) => feature.name || feature.id)
+    .filter(Boolean)
+    .join(", ");
+
+  return `${parkedFeatures.length} parked feature${parkedFeatures.length === 1 ? "" : "s"} will stay in Novum and be excluded from exported build files until linked to a JTBD${featureList ? `: ${featureList}.` : "."}`;
 }

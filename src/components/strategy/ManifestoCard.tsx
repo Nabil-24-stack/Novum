@@ -9,6 +9,7 @@ import type {
   CoverageSummary,
   JtbdCoverage,
 } from "@/lib/product-brain/types";
+import type { TraceableTextItem } from "@/lib/strategy/traceable";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   ARTIFACT_IDLE_CARD_CLASSNAME,
@@ -68,6 +69,7 @@ export function ManifestoCard({
       title: manifestoData.title ?? "",
       problemStatement: manifestoData.problemStatement ?? "",
       targetUser: manifestoData.targetUser ?? "",
+      environmentContext: manifestoData.environmentContext ?? "",
       jtbd: manifestoData.jtbd ?? [],
       hmw: manifestoData.hmw ?? [],
     }),
@@ -88,6 +90,7 @@ export function ManifestoCard({
   const hasTitle = Boolean(draft.title.trim());
   const hasProblem = Boolean(draft.problemStatement.trim());
   const hasUser = Boolean(draft.targetUser.trim());
+  const hasEnvironmentContext = Boolean(draft.environmentContext.trim());
   const hasJtbd = draft.jtbd.length > 0;
   const hasHmw = draft.hmw.length > 0;
 
@@ -162,7 +165,22 @@ export function ManifestoCard({
               className="min-h-[80px] text-sm"
             />
 
-            <EditableStringList
+            <Textarea
+              value={draft.environmentContext}
+              placeholder="Where and how the user encounters this problem"
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, environmentContext: event.target.value }))
+              }
+              onKeyDown={(event) =>
+                handleEditorKeyDown(event, {
+                  onSave: saveEditing,
+                  onCancel: cancelEditing,
+                })
+              }
+              className="min-h-[80px] text-sm"
+            />
+
+            <EditableTraceableList
               label="Jobs To Be Done"
               values={draft.jtbd}
               addLabel="Add JTBD"
@@ -206,7 +224,16 @@ export function ManifestoCard({
               </>
             )}
 
-            {hasUser && hasJtbd && <div className="mb-5 border-t border-neutral-200/60" />}
+            {(hasUser || hasEnvironmentContext) && hasJtbd && <div className="mb-5 border-t border-neutral-200/60" />}
+
+            {hasEnvironmentContext && (
+              <>
+                <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-neutral-500">
+                  Environment / Usage Context
+                </h3>
+                <p className="mb-6 text-base leading-relaxed text-neutral-700">{draft.environmentContext}</p>
+              </>
+            )}
 
             {hasJtbd && (
               <>
@@ -217,7 +244,7 @@ export function ManifestoCard({
                   {draft.jtbd.map((job, index) => {
                     const isAddressed = jtbdCoverage?.[index]?.addressed;
                     return (
-                      <li key={index} className="flex items-start gap-3">
+                      <li key={job.id} className="flex items-start gap-3">
                         {isAddressed ? (
                           <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 fill-emerald-500 text-emerald-500 transition-colors duration-500" />
                         ) : (
@@ -236,7 +263,7 @@ export function ManifestoCard({
                               : "text-neutral-700"
                           }`}
                         >
-                          {job}
+                          {job.text}
                         </span>
                       </li>
                     );
@@ -412,6 +439,56 @@ function EditableStringList(props: {
                 })
               }
               className="min-h-[72px] text-sm"
+            />
+            <RemoveListItemButton
+              onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EditableTraceableList(props: {
+  label: string;
+  values: TraceableTextItem[];
+  addLabel: string;
+  onChange: (values: TraceableTextItem[]) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const { label, values, addLabel, onChange, onSave, onCancel } = props;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
+        <AddListItemButton
+          label={addLabel}
+          onClick={() => onChange([...values, { id: "", text: "" }])}
+        />
+      </div>
+      <div className="space-y-2">
+        {values.map((value, index) => (
+          <div key={value.id || index} className="flex items-start gap-2">
+            <Textarea
+              value={value.text}
+              placeholder={`${label} ${index + 1}`}
+              onChange={(event) =>
+                onChange(
+                  values.map((item, itemIndex) =>
+                    itemIndex === index ? { ...item, text: event.target.value } : item
+                  )
+                )
+              }
+              onKeyDown={(event) =>
+                handleEditorKeyDown(event, {
+                  onSave,
+                  onCancel,
+                })
+              }
+              className="min-h-[72px] flex-1 text-sm"
             />
             <RemoveListItemButton
               onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}

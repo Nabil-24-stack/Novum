@@ -129,7 +129,7 @@ export function InsightsCard({
                     ...current,
                     insights: [
                       ...current.insights,
-                      { insight: "", quote: "", sourceDocument: "", source: "conversation" },
+                      { id: "", insight: "", quote: "", sourceDocument: "", source: "conversation" },
                     ],
                   }))
                 }

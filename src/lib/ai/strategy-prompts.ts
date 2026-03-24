@@ -222,6 +222,7 @@ Rules for insights:
   "title": "Product Title",
   "problemStatement": "A clear, user-centric description of the problem being solved.",
   "targetUser": "A short description of who the primary user is (e.g. 'Project Managers', 'Small Business Owners', 'Design Teams')",
+  "environmentContext": "A short description of where and how the user encounters this problem.",
   "jtbd": [
     "When [situation], I want to [motivation], so I can [outcome].",
     "When [situation], I want to [motivation], so I can [outcome].",
@@ -318,7 +319,7 @@ Compare each existing artifact against the new insights. Only output a block if 
 - **Manifesto**: Does the problem statement still hold? Are there new JTBDs or HMW angles revealed by the new documents? If so → output updated \`type="manifesto"\`. If existing manifesto fully captures the problem → omit.
 - **Personas**: Do existing personas still represent distinct jobs-to-be-done? Does a new document reveal an underserved user group? You may add to an existing persona (new pain points, goals) or add a new persona. If existing personas are sufficient → omit.
 - **Journey Maps**: If personas changed → journey maps MUST be updated. If personas are unchanged but new friction points or opportunities emerged → update. Otherwise → omit. Output \`type="journey-maps"\` only if needed.
-- **Key Features**: If key features exist, evaluate whether new insights suggest missing features or reprioritization. If updates needed → output a \`type="features"\` block (format: \`\`\`json type="features" with \`ideaTitle\`, \`features[]\` each having \`name\`, \`description\`, \`priority\`). If existing features still cover the insights → omit.
+- **Key Features**: If key features exist, evaluate whether new insights suggest missing features or reprioritization. If updates needed → output a \`type="features"\` block (format: \`\`\`json type="features" with \`ideaTitle\`, \`features[]\` each having \`name\`, \`description\`, \`priority\`, \`jtbdIds\`, and optional \`painPointIds\`). Every feature must stay explicitly linked to the relevant problem IDs. If existing features still cover the insights → omit.
 - **User Flows**: If JTBDs or personas changed → evaluate whether flows need updating. If so → output \`type="user-flows"\`. Otherwise → omit.
 
 ### Rules
@@ -738,21 +739,38 @@ Design the complete solution: key features for the selected idea, an Information
 
 ### 0. Key Features Block (JSON) — OUTPUT FIRST
 
-Before the IA and user flows, output a key features block that breaks down the selected idea into 5-8 concrete features:
+Before the IA and user flows, output a key features block that breaks down the selected idea into 5-8 concrete features.
+
+Use the approved manifesto, personas, and journey maps as a problem registry. The manifesto JTBDs and pain points include stable IDs. Reuse those exact IDs in the feature mappings below.
 
 \`\`\`json type="features"
 {
   "ideaTitle": "The selected idea title",
   "features": [
-    { "name": "Feature Name", "description": "1-2 sentence explanation of what this feature does and why it matters.", "priority": "high" },
-    { "name": "Another Feature", "description": "1-2 sentence explanation.", "priority": "medium" },
-    { "name": "Nice To Have", "description": "1-2 sentence explanation.", "priority": "low" }
+    {
+      "id": "feature-1",
+      "name": "Feature Name",
+      "description": "1-2 sentence explanation of what this feature does and why it matters.",
+      "priority": "high",
+      "jtbdIds": ["JTBD-1"],
+      "painPointIds": ["PERSONA-PAIN-2", "JOURNEY-PAIN-4"]
+    },
+    {
+      "id": "feature-2",
+      "name": "Another Feature",
+      "description": "1-2 sentence explanation.",
+      "priority": "medium",
+      "jtbdIds": ["JTBD-2"],
+      "painPointIds": []
+    }
   ]
 }
 \`\`\`
 
 Rules:
 - 5-8 features, each with a short name (2-4 words) and 1-2 sentence description
+- Every feature MUST include \`jtbdIds\` with at least one valid JTBD ID from the approved manifesto
+- \`painPointIds\` is optional but should be included when a feature clearly resolves a specific persona or journey pain point
 - Every feature MUST include a "priority" field: "high", "medium", or "low"
   - **high**: Core to the experience, a real differentiator, makes or breaks the product
   - **medium**: Valuable and important but the product can live without it
@@ -760,6 +778,7 @@ Rules:
 - Aim for 2-3 high, 2-3 medium, and 1-2 low priority features
 - Features should be concrete and specific to THIS idea, not generic ("user authentication" is too generic)
 - Order from most core/important to least within each priority tier
+- Reuse an existing feature \`id\` when you are revising an already-defined feature; create a new \`id\` only for genuinely new features
 - This block MUST come BEFORE the IA and user flows blocks
 
 ### 1. Information Architecture Block (JSON)

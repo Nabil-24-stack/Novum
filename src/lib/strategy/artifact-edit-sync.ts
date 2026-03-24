@@ -3,12 +3,17 @@ import type {
   IdeaData,
   JourneyMapData,
   JourneyStage,
+  KeyFeatureData,
   KeyFeaturesData,
   ManifestoData,
   PersonaData,
   UserFlow,
   UserFlowStep,
 } from "@/hooks/useStrategyStore";
+import {
+  createDeterministicTraceableId,
+  normalizeTraceableTextList,
+} from "./traceable.ts";
 
 export interface StrategyArtifactState {
   manifestoData: ManifestoData | null;
@@ -43,6 +48,10 @@ function normalizeFeaturePriority(
   return "medium";
 }
 
+function normalizeIdList(values: string[] | null | undefined): string[] {
+  return (values ?? []).map(trimText).filter(Boolean);
+}
+
 function normalizeUserFlowStep(step: UserFlowStep): UserFlowStep | null {
   const nodeId = trimText(step.nodeId);
   const action = trimText(step.action);
@@ -60,7 +69,11 @@ function normalizeJourneyStage(stage: JourneyStage): JourneyStage | null {
     actions: normalizeStringList(stage.actions ?? []),
     thoughts: normalizeStringList(stage.thoughts ?? []),
     emotion: trimText(stage.emotion),
-    painPoints: normalizeStringList(stage.painPoints ?? []),
+    painPoints: normalizeTraceableTextList({
+      values: stage.painPoints ?? [],
+      prefix: "journey-pain",
+      previous: stage.painPoints ?? [],
+    }),
     opportunities: normalizeStringList(stage.opportunities ?? []),
   };
 
@@ -87,6 +100,10 @@ export function normalizeInsightsData(data: InsightsCardData): InsightsCardData 
     documents: data.documents ?? [],
     insights: (data.insights ?? [])
       .map((item) => ({
+        id: trimText(item.id) || createDeterministicTraceableId(
+          "insight",
+          `${trimText(item.insight)}:${trimText(item.sourceDocument)}:${trimText(item.quote)}`
+        ),
         insight: trimText(item.insight),
         quote: trimText(item.quote),
         sourceDocument: trimText(item.sourceDocument),
@@ -101,7 +118,12 @@ export function normalizeManifestoData(data: ManifestoData): ManifestoData {
     title: trimText(data.title),
     problemStatement: trimText(data.problemStatement),
     targetUser: trimText(data.targetUser),
-    jtbd: normalizeStringList(data.jtbd),
+    environmentContext: trimText(data.environmentContext),
+    jtbd: normalizeTraceableTextList({
+      values: data.jtbd,
+      prefix: "jtbd",
+      previous: data.jtbd,
+    }),
     hmw: normalizeStringList(data.hmw),
   };
 }
@@ -112,7 +134,11 @@ export function normalizePersonaData(data: PersonaData): PersonaData {
     role: trimText(data.role),
     bio: trimText(data.bio),
     goals: normalizeStringList(data.goals),
-    painPoints: normalizeStringList(data.painPoints),
+    painPoints: normalizeTraceableTextList({
+      values: data.painPoints,
+      prefix: "persona-pain",
+      previous: data.painPoints,
+    }),
     quote: trimText(data.quote),
   };
 }
@@ -138,10 +164,18 @@ export function normalizeKeyFeaturesData(data: KeyFeaturesData): KeyFeaturesData
   return {
     ideaTitle: trimText(data.ideaTitle),
     features: (data.features ?? [])
-      .map((feature) => ({
+      .map((feature, index): KeyFeatureData => ({
+        id:
+          trimText(feature.id) ||
+          createDeterministicTraceableId(
+            "feature",
+            `${index}:${trimText(feature.name)}:${trimText(feature.description)}`
+          ),
         name: trimText(feature.name),
         description: trimText(feature.description),
         priority: normalizeFeaturePriority(feature.priority),
+        jtbdIds: normalizeIdList(feature.jtbdIds),
+        painPointIds: normalizeIdList(feature.painPointIds),
       }))
       .filter((feature) => feature.name || feature.description),
   };
@@ -179,23 +213,32 @@ export function resolveArtifactDraftChange<T>(params: {
   };
 }
 
-function buildJtbdIndexMap(previousJtbds: string[], nextJtbds: string[]): Map<number, number> {
+function buildJtbdIndexMap(previousJtbds: ManifestoData["jtbd"], nextJtbds: ManifestoData["jtbd"]): Map<number, number> {
   const indexMap = new Map<number, number>();
   const unmatchedOld: number[] = [];
   const unmatchedNew = new Set(nextJtbds.map((_, index) => index));
   const newIndexesByText = new Map<string, number[]>();
+  const newIndexesById = new Map<string, number>();
 
-  nextJtbds.forEach((text, index) => {
-    const queue = newIndexesByText.get(text);
+  nextJtbds.forEach((jtbd, index) => {
+    newIndexesById.set(jtbd.id, index);
+    const queue = newIndexesByText.get(jtbd.text);
     if (queue) {
       queue.push(index);
     } else {
-      newIndexesByText.set(text, [index]);
+      newIndexesByText.set(jtbd.text, [index]);
     }
   });
 
-  previousJtbds.forEach((text, oldIndex) => {
-    const queue = newIndexesByText.get(text);
+  previousJtbds.forEach((jtbd, oldIndex) => {
+    const exactIdIndex = newIndexesById.get(jtbd.id);
+    if (exactIdIndex !== undefined) {
+      unmatchedNew.delete(exactIdIndex);
+      indexMap.set(oldIndex, exactIdIndex);
+      return;
+    }
+
+    const queue = newIndexesByText.get(jtbd.text);
     const nextIndex = queue?.shift();
     if (nextIndex === undefined) {
       unmatchedOld.push(oldIndex);
@@ -231,12 +274,12 @@ export function applyManualManifestoEdit(
   const exactIndexMap = buildJtbdIndexMap(previousJtbds, nextJtbds);
   const userFlowsData = state.userFlowsData
     .map((flow) => {
-      const exactTextIndex = nextJtbds.findIndex((jtbd) => jtbd === flow.jtbdText);
+      const exactTextIndex = nextJtbds.findIndex((jtbd) => jtbd.text === flow.jtbdText);
       if (exactTextIndex >= 0) {
         return normalizeUserFlowData({
           ...flow,
           jtbdIndex: exactTextIndex,
-          jtbdText: nextJtbds[exactTextIndex],
+          jtbdText: nextJtbds[exactTextIndex].text,
         });
       }
 
@@ -248,7 +291,7 @@ export function applyManualManifestoEdit(
       return normalizeUserFlowData({
         ...flow,
         jtbdIndex: remappedIndex,
-        jtbdText: nextJtbds[remappedIndex],
+        jtbdText: nextJtbds[remappedIndex].text,
       });
     })
     .filter((flow): flow is UserFlow => Boolean(flow));

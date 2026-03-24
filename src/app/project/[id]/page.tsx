@@ -86,7 +86,13 @@ import type { PreviewMode } from "@/lib/tokens";
 import { serializeCanvasLayout, deserializeCanvasLayout } from "@/lib/canvas/canvas-layout-types";
 import type { RepairChatDraft } from "@/components/editor/ChatTab";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { buildHandoffSnapshot, getDirtyHandoffSections, hasMeaningfulHandoffSnapshot } from "@/lib/handoff/snapshot";
+import {
+  buildHandoffSnapshot,
+  getDirtyHandoffSections,
+  getParkedFeatureWarning,
+  hasMeaningfulHandoffSnapshot,
+} from "@/lib/handoff/snapshot";
+import { getTraceableText, getTraceableTexts } from "@/lib/strategy/traceable";
 
 type ViewMode = "app" | "design-system";
 
@@ -423,6 +429,27 @@ export default function ProjectEditor() {
     () => ideaData?.find((idea) => idea.id === selectedIdeaId) ?? null,
     [ideaData, selectedIdeaId]
   );
+  const availablePainPointOptions = useMemo(
+    () => [
+      ...(personaData ?? []).flatMap((persona) =>
+        persona.painPoints.map((painPoint) => ({
+          id: painPoint.id,
+          label: painPoint.text,
+          source: `Persona: ${persona.name}`,
+        }))
+      ),
+      ...(journeyMapData ?? []).flatMap((journeyMap) =>
+        journeyMap.stages.flatMap((stage) =>
+          stage.painPoints.map((painPoint) => ({
+            id: painPoint.id,
+            label: painPoint.text,
+            source: `Journey: ${journeyMap.personaName} / ${stage.stage}`,
+          }))
+        )
+      ),
+    ],
+    [journeyMapData, personaData]
+  );
   const handoffSnapshot = useMemo(
     () =>
       buildHandoffSnapshot({
@@ -449,6 +476,14 @@ export default function ProjectEditor() {
   const handoffDirtySections = useMemo(
     () => getDirtyHandoffSections(handoffSnapshot, handoffState.baselineSnapshot),
     [handoffSnapshot, handoffState.baselineSnapshot]
+  );
+  const handoffParkedFeatureWarning = useMemo(
+    () => getParkedFeatureWarning(handoffSnapshot.keyFeatures),
+    [handoffSnapshot.keyFeatures]
+  );
+  const canGenerateHandoff = useMemo(
+    () => hasMeaningfulHandoffSnapshot(handoffSnapshot),
+    [handoffSnapshot]
   );
 
   const markStrategyEditedAfterBuild = useCallback(() => {
@@ -1055,8 +1090,8 @@ export default function ProjectEditor() {
       });
     }
 
-    const mCtx = `Title: ${manifestoData.title}\nProblem: ${manifestoData.problemStatement}\nTarget User: ${manifestoData.targetUser}\nJTBDs:\n${manifestoData.jtbd.map((j, i) => `${i + 1}. ${j}`).join("\n")}`;
-    const pCtx = personaData.map((p, i) => `Persona ${i + 1}: ${p.name} — ${p.role}\nGoals: ${p.goals.join("; ")}\nPain Points: ${p.painPoints.join("; ")}`).join("\n\n");
+    const mCtx = `Title: ${manifestoData.title}\nProblem: ${manifestoData.problemStatement}\nTarget User: ${manifestoData.targetUser}\nEnvironment / Usage Context: ${manifestoData.environmentContext || "Not specified yet."}\nJTBDs:\n${manifestoData.jtbd.map((j, i) => `${i + 1}. ${getTraceableText(j)}`).join("\n")}`;
+    const pCtx = personaData.map((p, i) => `Persona ${i + 1}: ${p.name} — ${p.role}\nGoals: ${p.goals.join("; ")}\nPain Points: ${getTraceableTexts(p.painPoints).join("; ")}`).join("\n\n");
 
     const insData = useDocumentStore.getState().insightsData;
     const insCtx = insData
@@ -1366,7 +1401,8 @@ export default function ProjectEditor() {
         }
 
         useStrategyStore.getState().updateHandoffState({
-          fullMarkdown: data.fullMarkdown,
+          problemMarkdown: data.problemMarkdown,
+          solutionMarkdown: data.solutionMarkdown,
           latestDeltaMarkdown: data.deltaMarkdown ?? null,
           baselineSnapshot: handoffSnapshot,
           baselineHash: data.baselineHash,
@@ -1418,15 +1454,17 @@ export default function ProjectEditor() {
   useEffect(() => {
     if (!isHandoffProject || strategyPhase !== "handoff") return;
     if (handoffGenerationStatus === "generating") return;
-    if (handoffState.fullMarkdown || handoffState.lastError) return;
-    if (!hasMeaningfulHandoffSnapshot(handoffSnapshot)) return;
+    if ((handoffState.problemMarkdown && handoffState.solutionMarkdown) || handoffState.lastError) return;
+    if (!canGenerateHandoff) return;
 
     void generateHandoffMarkdown("initial");
   }, [
+    canGenerateHandoff,
     generateHandoffMarkdown,
     handoffGenerationStatus,
     handoffSnapshot,
-    handoffState.fullMarkdown,
+    handoffState.problemMarkdown,
+    handoffState.solutionMarkdown,
     handoffState.lastError,
     isHandoffProject,
     strategyPhase,
@@ -2867,6 +2905,8 @@ export default function ProjectEditor() {
               return (
                 <KeyFeaturesCard
                   data={activeKeyFeatures}
+                  jtbdOptions={manifestoData?.jtbd ?? []}
+                  painPointOptions={availablePainPointOptions}
                   x={keyFeaturesPosition?.x ?? g.x}
                   y={keyFeaturesPosition?.y ?? g.y}
                   onMove={(nx, ny) => setKeyFeaturesPosition({ x: nx, y: ny })}
@@ -2926,13 +2966,16 @@ export default function ProjectEditor() {
                   projectName={projectName}
                   x={g.x}
                   y={g.y}
-                  fullMarkdown={handoffState.fullMarkdown}
+                  problemMarkdown={handoffState.problemMarkdown}
+                  solutionMarkdown={handoffState.solutionMarkdown}
                   latestDeltaMarkdown={handoffState.latestDeltaMarkdown}
                   dirtySections={handoffState.dirtySections}
                   isOutdated={handoffState.isOutdated}
                   generatedAt={handoffState.generatedAt}
                   lastError={handoffState.lastError}
+                  warningMessage={handoffParkedFeatureWarning}
                   isGenerating={handoffGenerationStatus === "generating"}
+                  canGenerate={canGenerateHandoff}
                   onMove={(nx, ny) =>
                     setGroupPositions((prev) => new Map(prev).set("handoff", { x: nx, y: ny }))
                   }
@@ -3148,7 +3191,7 @@ export default function ProjectEditor() {
         <AnnotatedDeleteModal
           info={pendingAnnotatedDelete}
           onClose={() => setPendingAnnotatedDelete(null)}
-          manifestoJtbd={manifestoData?.jtbd}
+          manifestoJtbd={manifestoData?.jtbd.map((jtbd) => jtbd.text)}
         />
       )}
 
