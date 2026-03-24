@@ -2867,7 +2867,6 @@ export default function ProjectEditor() {
               const g = getGroupOrigin("ideas");
               if (!g) return null;
               const pos = ideaPositions[index];
-              const artifactId = `idea-${idea.id ?? index}`;
               return (
                 <IdeaCard
                   key={idea.id ?? index}
@@ -2875,13 +2874,10 @@ export default function ProjectEditor() {
                   x={pos?.x ?? g.x + (index % 4) * IDEA_CARD_COL_WIDTH}
                   y={pos?.y ?? getIdeaRowY(Math.floor(index / 4), g.y)}
                   index={index}
-                  isActive={activeArtifactId === artifactId}
-                  onSelectArtifact={() => selectArtifact(artifactId)}
-                  onSingleClickConfirmed={() => scopeArtifactToChat(artifactId)}
                   isSelectedIdea={idea.id === selectedIdeaId}
-                  onToggleSelectedIdea={() => {
+                  onSelectIdea={() => {
                     if (idea.id) {
-                      handleSelectedIdeaChange(idea.id === selectedIdeaId ? null : idea.id);
+                      handleSelectedIdeaChange(idea.id);
                     }
                   }}
                   onMove={(nx, ny) => {

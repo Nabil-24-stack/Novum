@@ -1,6 +1,5 @@
 import type { InsightsCardData } from "@/hooks/useDocumentStore";
 import type {
-  IdeaData,
   JourneyMapData,
   KeyFeaturesData,
   ManifestoData,
@@ -26,7 +25,6 @@ export interface ResolveSelectedStrategyArtifactContextInput {
   manifestoData: ManifestoData | null;
   personaData: PersonaData[] | null;
   journeyMapData: JourneyMapData[] | null;
-  ideaData: IdeaData[] | null;
   keyFeaturesData: KeyFeaturesData | null;
   userFlowsData: UserFlow[] | null;
 }
@@ -69,7 +67,6 @@ export function resolveSelectedStrategyArtifactContext(
     manifestoData,
     personaData,
     journeyMapData,
-    ideaData,
     keyFeaturesData,
     userFlowsData,
   } = input;
@@ -126,22 +123,6 @@ export function resolveSelectedStrategyArtifactContext(
       phaseHint: "problem-overview",
       data: { index, journeyMap },
     });
-  }
-
-  if (ideaData) {
-    const ideaIndex = ideaData.findIndex(
-      (idea, index) => `idea-${idea.id ?? index}` === selectedArtifactId,
-    );
-    if (ideaIndex >= 0) {
-      const idea = ideaData[ideaIndex];
-      return buildContext({
-        artifactId: selectedArtifactId,
-        family: "ideas",
-        label: idea.title ? `Idea: ${idea.title}` : `Idea ${ideaIndex + 1}`,
-        phaseHint: "solution-design",
-        data: { index: ideaIndex, idea },
-      });
-    }
   }
 
   if (selectedArtifactId === "key-features" && keyFeaturesData) {

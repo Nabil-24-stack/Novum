@@ -99,10 +99,6 @@ test("resolves indexed artifact cards to the right families", () => {
     ...baseInput,
     selectedArtifactId: "journey-0",
   });
-  const idea = resolveSelectedStrategyArtifactContext({
-    ...baseInput,
-    selectedArtifactId: "idea-idea-1",
-  });
   const userFlow = resolveSelectedStrategyArtifactContext({
     ...baseInput,
     selectedArtifactId: "user-flow-flow-1",
@@ -114,11 +110,17 @@ test("resolves indexed artifact cards to the right families", () => {
   assert.equal(journey?.family, "journey-maps");
   assert.match(journey?.label ?? "", /Nora/);
 
-  assert.equal(idea?.family, "ideas");
-  assert.match(idea?.promptContext ?? "", /Decision Timeline/);
-
   assert.equal(userFlow?.family, "user-flows");
   assert.match(userFlow?.promptContext ?? "", /Track decisions/);
+});
+
+test("does not resolve idea cards into chat-scoped context", () => {
+  const idea = resolveSelectedStrategyArtifactContext({
+    ...baseInput,
+    selectedArtifactId: "idea-idea-1",
+  });
+
+  assert.equal(idea, null);
 });
 
 test("resolves key features context and returns null for missing artifacts", () => {

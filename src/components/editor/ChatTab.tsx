@@ -1420,13 +1420,11 @@ export function ChatTab({
         manifestoData,
         personaData,
         journeyMapData,
-        ideaData,
         keyFeaturesData,
         userFlowsData,
       }),
     [
       chatScopedArtifactId,
-      ideaData,
       insightsData,
       journeyMapData,
       keyFeaturesData,
@@ -1438,6 +1436,7 @@ export function ChatTab({
 
   // Strategy alignment check state
   const [alignmentCheckPending, setAlignmentCheckPending] = useState(false);
+  const [manualIdeationStopped, setManualIdeationStopped] = useState(false);
   const alignmentCheckOriginalRequest = useRef<string | null>(null);
 
   // Parallel build orchestrator
@@ -1627,6 +1626,12 @@ export function ChatTab({
   // Is ideation currently streaming?
   const isIdeationStreaming = isLoading && strategyPhase === "ideation";
 
+  useEffect(() => {
+    if (strategyPhase !== "ideation" || status === "submitted") {
+      setManualIdeationStopped(false);
+    }
+  }, [status, strategyPhase]);
+
   // Computed confidence overall (average of dimension scores)
   const computedConfidenceOverall = useMemo(() => {
     if (!confidenceData) return 0;
@@ -1635,12 +1640,20 @@ export function ChatTab({
       ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
       : 0;
   }, [confidenceData]);
+  const selectedIdea = useMemo(
+    () => ideaData?.find((idea) => idea.id === selectedIdeaId) ?? null,
+    [ideaData, selectedIdeaId]
+  );
+  const canShowIdeationFooter = strategyPhase === "ideation" && ideaData && (!isLoading || manualIdeationStopped);
+  const canProceedWithSelectedIdea = Boolean(canShowIdeationFooter && selectedIdea);
 
   // Stop ideation and commit whatever partial ideas have been generated so far
   const handleStopIdeation = useCallback(() => {
+    setManualIdeationStopped(true);
     stop();
     const storeState = useStrategyStore.getState();
     const partialIdeas = storeState.streamingIdeas;
+    const currentSelectedIdeaId = storeState.selectedIdeaId;
     if (partialIdeas && partialIdeas.length > 0) {
       // Commit partial ideas as final — filter to ones that have at least a title
       const viable = partialIdeas.filter((idea): idea is IdeaData =>
@@ -1648,6 +1661,10 @@ export function ChatTab({
       );
       if (viable.length > 0) {
         storeState.setIdeaData(viable);
+      }
+      const nextIdeaData = viable.length > 0 ? viable : storeState.ideaData;
+      if (currentSelectedIdeaId && !nextIdeaData?.some((idea) => idea.id === currentSelectedIdeaId)) {
+        storeState.setSelectedIdeaId(null);
       }
       storeState.setStreamingIdeas(null);
     }
@@ -3597,7 +3614,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         )}
 
         {/* Ideation phase: stop generating ideas */}
-        {isIdeationStreaming && (
+        {isIdeationStreaming && !manualIdeationStopped && (
           <div className="flex justify-center pt-2">
             <button
               onClick={handleStopIdeation}
@@ -3610,13 +3627,14 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         )}
 
         {/* Ideation phase: approve selected idea */}
-        {strategyPhase === "ideation" && ideaData && selectedIdeaId && !isLoading && (
+        {canProceedWithSelectedIdea && (
           <div className="flex justify-center pt-2">
             <button
               onClick={() => {
+                if (isLoading) {
+                  stop();
+                }
                 onPhaseAction?.("approve-ideation");
-                const storeState = useStrategyStore.getState();
-                const selectedIdea = storeState.ideaData?.find((i) => i.id === storeState.selectedIdeaId);
                 const context = buildStrategyArtifactsContext({ sectionLabel: "Approved" });
                 const selectedIdeaContext = selectedIdea
                   ? `## Selected Idea: ${selectedIdea.title}\n\n${selectedIdea.description}`
@@ -3634,11 +3652,11 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           </div>
         )}
 
-        {strategyPhase === "ideation" && ideaData && !isLoading && (
+        {canShowIdeationFooter && (
           <p className="text-center text-xs text-neutral-400 pt-1">
-            {selectedIdeaId
-              ? "You can also describe changes to refine this idea, or suggest a new one."
-              : "Click an idea card to select it, or tell me how to refine one."}
+            {selectedIdea
+              ? "You can continue with this idea, describe changes to refine it, or suggest a new one."
+              : "Select an idea to continue, or tell me how to refine one."}
           </p>
         )}
 

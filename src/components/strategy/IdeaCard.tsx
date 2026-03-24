@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Check } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { IdeaData } from "@/hooks/useStrategyStore";
@@ -38,11 +37,8 @@ interface IdeaCardProps {
   onMove?: (x: number, y: number) => void;
   onHeightMeasured?: (height: number) => void;
   index: number;
-  isActive?: boolean;
-  onSelectArtifact?: () => void;
-  onSingleClickConfirmed?: () => void;
   isSelectedIdea?: boolean;
-  onToggleSelectedIdea?: () => void;
+  onSelectIdea?: () => void;
   onCommit?: (idea: IdeaData) => void;
 }
 
@@ -53,11 +49,8 @@ export function IdeaCard({
   onMove,
   onHeightMeasured,
   index,
-  isActive = false,
-  onSelectArtifact,
-  onSingleClickConfirmed,
   isSelectedIdea = false,
-  onToggleSelectedIdea,
+  onSelectIdea,
   onCommit,
 }: IdeaCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
@@ -87,8 +80,7 @@ export function IdeaCard({
     y,
     isEditing,
     onMove,
-    onSelect: onSelectArtifact,
-    onSingleClickConfirmed,
+    onSingleClickConfirmed: onSelectIdea,
     onEdit: startEditing,
   });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
@@ -129,7 +121,7 @@ export function IdeaCard({
         className={`overflow-hidden rounded-xl border shadow-md ${
           color.bg
         } ${color.border} ${ARTIFACT_IDLE_CARD_CLASSNAME} ${
-          isActive || isSelectedIdea ? ARTIFACT_SELECTED_CARD_CLASSNAME : "hover:shadow-lg"
+          isSelectedIdea ? ARTIFACT_SELECTED_CARD_CLASSNAME : "hover:shadow-lg"
         } ${!isEditing ? (isDragging ? "cursor-grabbing" : "cursor-grab") : ""}`}
         style={{ position: "relative" }}
       >
@@ -146,22 +138,30 @@ export function IdeaCard({
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-black/10 text-sm font-bold text-black/60">
                 {index + 1}
               </div>
-              {onToggleSelectedIdea && (
+              {onSelectIdea && (
                 <button
                   type="button"
+                  role="radio"
+                  aria-checked={isSelectedIdea}
+                  aria-label={isSelectedIdea ? `Idea ${index + 1} selected` : `Select idea ${index + 1}`}
+                  title={isSelectedIdea ? "Selected idea" : "Select idea"}
+                  data-artifact-no-drag="true"
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    onToggleSelectedIdea();
+                    onSelectIdea();
                   }}
-                  className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                  className={`flex h-6 w-6 items-center justify-center rounded-full border transition-colors ${
                     isSelectedIdea
-                      ? "bg-blue-500 text-white"
-                      : "bg-white/70 text-neutral-600 hover:bg-white"
+                      ? "border-blue-500 bg-blue-50 text-blue-600"
+                      : "border-neutral-300 bg-white/80 text-transparent hover:border-neutral-400 hover:bg-white"
                   }`}
                 >
-                  <Check className="h-3 w-3" />
-                  {isSelectedIdea ? "Selected" : "Set selected"}
+                  <span
+                    className={`h-2.5 w-2.5 rounded-full ${
+                      isSelectedIdea ? "bg-current" : "bg-transparent"
+                    }`}
+                  />
                 </button>
               )}
             </div>
