@@ -272,6 +272,46 @@ test("delta treats linked to parked features as removed from exported scope", ()
   assert.match(markdown, /Removed feature feature-1: Regenerate markdown/);
 });
 
+test("legacy baseline feature snapshots without link arrays do not crash dirty-section detection", () => {
+  const baseline = buildHandoffSnapshot({
+    productOverview: {
+      title: "Novum",
+      problemStatement: "Planning gets lost before build.",
+      targetUser: "Product teams",
+      environmentContext: "During product planning and implementation handoff.",
+      jtbd: [jtbd("jtbd-1", "Keep strategy synced with build context.")],
+      hmw: [],
+    },
+    insights: null,
+    personas: null,
+    journeyHighlights: null,
+    selectedSolution: null,
+    keyFeatures: {
+      ideaTitle: "Living handoff",
+      features: [
+        {
+          id: "feature-legacy",
+          name: "Legacy feature",
+          description: "Stored before traceability arrays existed.",
+          priority: "high",
+        } as unknown as NonNullable<ReturnType<typeof buildHandoffSnapshot>["keyFeatures"]>["features"][number],
+      ],
+    },
+    informationArchitecture: null,
+    userFlows: null,
+  });
+
+  const current = buildHandoffSnapshot({
+    ...baseline,
+    keyFeatures: {
+      ideaTitle: "Living handoff",
+      features: [feature({ id: "feature-legacy", name: "Legacy feature" })],
+    },
+  });
+
+  assert.deepEqual(getDirtyHandoffSections(current, baseline), ["key-features"]);
+});
+
 test("non-selected idea edits do not dirty the handoff snapshot", () => {
   const selectedIdeaId = "idea-1";
   const baselineIdeas = [

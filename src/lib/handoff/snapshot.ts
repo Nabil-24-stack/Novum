@@ -15,20 +15,49 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
-export function isExportableFeature(feature: KeyFeatureData): boolean {
-  return feature.jtbdIds.length > 0;
+function normalizeFeatureRefs(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function normalizeFeatureForExport(feature: unknown): KeyFeatureData | null {
+  if (!feature || typeof feature !== "object") return null;
+
+  const candidate = feature as Partial<KeyFeatureData>;
+  return {
+    id: typeof candidate.id === "string" ? candidate.id : "",
+    name: typeof candidate.name === "string" ? candidate.name : "",
+    description: typeof candidate.description === "string" ? candidate.description : "",
+    priority:
+      candidate.priority === "high" || candidate.priority === "medium" || candidate.priority === "low"
+        ? candidate.priority
+        : "medium",
+    jtbdIds: normalizeFeatureRefs(candidate.jtbdIds),
+    painPointIds: normalizeFeatureRefs(candidate.painPointIds),
+  };
+}
+
+function getNormalizedFeatures(keyFeatures: KeyFeaturesData | null | undefined): KeyFeatureData[] {
+  if (!Array.isArray(keyFeatures?.features)) return [];
+  return keyFeatures.features
+    .map((feature) => normalizeFeatureForExport(feature))
+    .filter((feature): feature is KeyFeatureData => Boolean(feature));
+}
+
+export function isExportableFeature(feature: KeyFeatureData | null | undefined): boolean {
+  return (feature?.jtbdIds ?? []).length > 0;
 }
 
 export function getExportableFeatures(
   keyFeatures: KeyFeaturesData | null | undefined,
 ): KeyFeatureData[] {
-  return (keyFeatures?.features ?? []).filter(isExportableFeature);
+  return getNormalizedFeatures(keyFeatures).filter(isExportableFeature);
 }
 
 export function getParkedFeatures(
   keyFeatures: KeyFeaturesData | null | undefined,
 ): KeyFeatureData[] {
-  return (keyFeatures?.features ?? []).filter((feature) => !isExportableFeature(feature));
+  return getNormalizedFeatures(keyFeatures).filter((feature) => !isExportableFeature(feature));
 }
 
 function serializeKeyFeaturesForExportComparison(

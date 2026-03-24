@@ -47,6 +47,16 @@ export function KeyFeaturesCard({
   onSelect,
   onSingleClickConfirmed,
 }: KeyFeaturesCardProps) {
+  const getFeatureJtbdIds = (feature: Partial<KeyFeaturesData["features"][number]> | null | undefined) =>
+    Array.isArray(feature?.jtbdIds)
+      ? feature.jtbdIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      : [];
+
+  const getFeaturePainPointIds = (feature: Partial<KeyFeaturesData["features"][number]> | null | undefined) =>
+    Array.isArray(feature?.painPointIds)
+      ? feature.painPointIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      : [];
+
   const {
     canEdit,
     isEditing,
@@ -81,7 +91,7 @@ export function KeyFeaturesCard({
       low: draft.features.filter((feature) => feature.priority === "low"),
     };
   }, [draft.features]);
-  const unmappedFeatureCount = draft.features.filter((feature) => feature.jtbdIds.length === 0).length;
+  const unmappedFeatureCount = draft.features.filter((feature) => getFeatureJtbdIds(feature).length === 0).length;
 
   return (
     <div
@@ -122,7 +132,11 @@ export function KeyFeaturesCard({
               Features without a JTBD link stay parked in Novum and are excluded from exported build files until linked.
             </div>
 
-            {draft.features.map((feature, index) => (
+            {draft.features.map((feature, index) => {
+              const featureJtbdIds = getFeatureJtbdIds(feature);
+              const featurePainPointIds = getFeaturePainPointIds(feature);
+
+              return (
               <div key={feature.id || index} className="space-y-2 rounded-xl border border-neutral-200/80 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
@@ -216,7 +230,7 @@ export function KeyFeaturesCard({
                     label: jtbd.text,
                     meta: jtbd.id.toUpperCase(),
                   }))}
-                  selectedIds={feature.jtbdIds}
+                  selectedIds={featureJtbdIds}
                   onChange={(nextIds) =>
                     setDraft((current) => ({
                       ...current,
@@ -235,7 +249,7 @@ export function KeyFeaturesCard({
                     label: painPoint.label,
                     meta: painPoint.source,
                   }))}
-                  selectedIds={feature.painPointIds}
+                  selectedIds={featurePainPointIds}
                   onChange={(nextIds) =>
                     setDraft((current) => ({
                       ...current,
@@ -246,13 +260,14 @@ export function KeyFeaturesCard({
                   }
                 />
 
-                {feature.jtbdIds.length === 0 && (
+                {featureJtbdIds.length === 0 && (
                   <p className="text-xs font-medium text-red-600">
                     This feature is parked until you link it to at least one JTBD.
                   </p>
                 )}
               </div>
-            ))}
+              );
+            })}
 
             <AddListItemButton
               label="Add feature"
@@ -312,7 +327,10 @@ export function KeyFeaturesCard({
                       </span>
                     </div>
                     <div className="ml-4 space-y-2">
-                      {group.map((feature, index) => (
+                      {group.map((feature, index) => {
+                        const featureJtbdIds = getFeatureJtbdIds(feature);
+
+                        return (
                         <div key={`${priority}-${index}`} className="min-w-0">
                           <p className="text-sm font-semibold leading-tight text-neutral-900">
                             {feature.name}
@@ -323,8 +341,8 @@ export function KeyFeaturesCard({
                             </p>
                           )}
                           <div className="mt-1.5 flex flex-wrap gap-1.5">
-                            {feature.jtbdIds.length > 0 ? (
-                              feature.jtbdIds.map((jtbdId) => {
+                            {featureJtbdIds.length > 0 ? (
+                              featureJtbdIds.map((jtbdId) => {
                                 const jtbd = jtbdOptions.find((item) => item.id === jtbdId);
                                 if (!jtbd) return null;
                                 return (
@@ -343,7 +361,8 @@ export function KeyFeaturesCard({
                             )}
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 );
