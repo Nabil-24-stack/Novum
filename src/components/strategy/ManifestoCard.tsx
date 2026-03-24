@@ -56,6 +56,7 @@ export function ManifestoCard({
   onSelect,
   onSingleClickConfirmed,
 }: ManifestoCardProps) {
+  const showStrategyCoverage = false;
   const {
     canEdit,
     isEditing,
@@ -294,7 +295,7 @@ export function ManifestoCard({
               </>
             )}
 
-            {hasTitle && hasProblem && hasUser && hasJtbd && hasHmw && (
+            {showStrategyCoverage && hasTitle && hasProblem && hasUser && hasJtbd && hasHmw && (
               <>
                 <div className="mb-5 mt-6 border-t border-neutral-200/60" />
 

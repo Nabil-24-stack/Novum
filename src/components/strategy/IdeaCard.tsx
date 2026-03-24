@@ -132,43 +132,17 @@ export function IdeaCard({
           />
         )}
 
-        <div className="p-5">
-          <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="flex min-h-[300px] flex-col p-5">
+          <div className="mb-3 flex items-start gap-3">
             <div className="flex items-center gap-2">
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-black/10 text-sm font-bold text-black/60">
                 {index + 1}
               </div>
-              {onSelectIdea && (
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={isSelectedIdea}
-                  aria-label={isSelectedIdea ? `Idea ${index + 1} selected` : `Select idea ${index + 1}`}
-                  title={isSelectedIdea ? "Selected idea" : "Select idea"}
-                  data-artifact-no-drag="true"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onSelectIdea();
-                  }}
-                  className={`flex h-6 w-6 items-center justify-center rounded-full border transition-colors ${
-                    isSelectedIdea
-                      ? "border-blue-500 bg-blue-50 text-blue-600"
-                      : "border-neutral-300 bg-white/80 text-transparent hover:border-neutral-400 hover:bg-white"
-                  }`}
-                >
-                  <span
-                    className={`h-2.5 w-2.5 rounded-full ${
-                      isSelectedIdea ? "bg-current" : "bg-transparent"
-                    }`}
-                  />
-                </button>
-              )}
             </div>
           </div>
 
           {isEditing ? (
-            <div className={`space-y-3 ${ARTIFACT_EDITOR_FIELDS_CLASSNAME}`}>
+            <div className={`flex-1 space-y-3 ${ARTIFACT_EDITOR_FIELDS_CLASSNAME}`}>
               <Input
                 ref={firstInputRef}
                 value={draft.title}
@@ -209,7 +183,7 @@ export function IdeaCard({
               <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
             </div>
           ) : (
-            <div>
+            <div className="flex-1">
               {draft.title && (
                 <h3 className="pr-6 text-base font-bold leading-tight text-neutral-900">
                   {draft.title}
@@ -223,6 +197,35 @@ export function IdeaCard({
               )}
 
               {canEdit && <ReadOnlyEditHint />}
+            </div>
+          )}
+
+          {onSelectIdea && (
+            <div className="mt-6 flex justify-center pt-1">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={isSelectedIdea}
+                aria-label={isSelectedIdea ? `Idea ${index + 1} selected` : `Select idea ${index + 1}`}
+                title={isSelectedIdea ? "Selected idea" : "Select idea"}
+                data-artifact-no-drag="true"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelectIdea();
+                }}
+                className={`flex h-10 w-10 items-center justify-center rounded-full border-2 transition-colors ${
+                  isSelectedIdea
+                    ? "border-neutral-700 bg-white/95 text-neutral-800"
+                    : "border-neutral-400 bg-white/85 text-transparent hover:border-neutral-500 hover:bg-white"
+                }`}
+              >
+                <span
+                  className={`h-5 w-5 rounded-full ${
+                    isSelectedIdea ? "bg-current" : "bg-transparent"
+                  }`}
+                />
+              </button>
             </div>
           )}
         </div>
