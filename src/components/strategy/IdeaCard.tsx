@@ -214,14 +214,14 @@ export function IdeaCard({
                   event.stopPropagation();
                   onSelectIdea();
                 }}
-                className={`flex h-10 w-10 items-center justify-center rounded-full border-2 transition-colors ${
+                className={`flex h-7 w-7 items-center justify-center rounded-full border-2 transition-colors ${
                   isSelectedIdea
                     ? "border-neutral-700 bg-white/95 text-neutral-800"
                     : "border-neutral-400 bg-white/85 text-transparent hover:border-neutral-500 hover:bg-white"
                 }`}
               >
                 <span
-                  className={`h-5 w-5 rounded-full ${
+                  className={`h-3.5 w-3.5 rounded-full ${
                     isSelectedIdea ? "bg-current" : "bg-transparent"
                   }`}
                 />
