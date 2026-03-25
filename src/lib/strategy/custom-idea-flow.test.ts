@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  appendOrReplaceIdea,
   applyUserIdeaBlockToFlow,
   createIdleCustomIdeaFlow,
   getNextIdeaId,
@@ -22,6 +23,7 @@ test("normalizeUserIdeaBlockData accepts clarifying and ready blocks", () => {
       ideaId: null,
       confirmationSummary: "Smart intake for shift swaps.",
       clarificationQuestions: ["Which teams need it first?"],
+      idea: null,
     }
   );
 
@@ -31,12 +33,24 @@ test("normalizeUserIdeaBlockData accepts clarifying and ready blocks", () => {
       ideaId: " idea-9 ",
       confirmationSummary: "Polished idea",
       clarificationQuestions: [],
+      idea: {
+        id: " idea-9 ",
+        title: " Shift exchange concierge ",
+        description: " Makes coverage swaps easy. ",
+        illustration: " <svg /> ",
+      },
     }),
     {
       status: "ready",
       ideaId: "idea-9",
       confirmationSummary: "Polished idea",
       clarificationQuestions: [],
+      idea: {
+        id: "idea-9",
+        title: "Shift exchange concierge",
+        description: "Makes coverage swaps easy.",
+        illustration: "<svg />",
+      },
     }
   );
 });
@@ -55,6 +69,7 @@ test("applyUserIdeaBlockToFlow moves custom idea flow into clarifying or ready s
       ideaId: null,
       confirmationSummary: "A ritual-based planning workspace.",
       clarificationQuestions: ["Should it support teams or just individuals?"],
+      idea: null,
     }),
     {
       ...base,
@@ -73,11 +88,48 @@ test("applyUserIdeaBlockToFlow moves custom idea flow into clarifying or ready s
       ideaId: "idea-9",
       confirmationSummary: "A ritual-based planning workspace.",
       clarificationQuestions: [],
+      idea: {
+        id: "idea-9",
+        title: "Ritual planning workspace",
+        description: "Create a weekly plan from recurring rituals.",
+        illustration: "<svg />",
+      },
     }),
     {
       ...createIdleCustomIdeaFlow(),
       readyIdeaId: "idea-9",
     }
+  );
+});
+
+test("appendOrReplaceIdea appends new ideas and replaces matching ids only", () => {
+  assert.deepEqual(
+    appendOrReplaceIdea(
+      [
+        { id: "idea-1", title: "Daily pulse", description: "", illustration: "" },
+        { id: "idea-2", title: "Coach mode", description: "", illustration: "" },
+      ],
+      { id: "idea-3", title: "Field notebook", description: "Offline capture", illustration: "<svg />" }
+    ),
+    [
+      { id: "idea-1", title: "Daily pulse", description: "", illustration: "" },
+      { id: "idea-2", title: "Coach mode", description: "", illustration: "" },
+      { id: "idea-3", title: "Field notebook", description: "Offline capture", illustration: "<svg />" },
+    ]
+  );
+
+  assert.deepEqual(
+    appendOrReplaceIdea(
+      [
+        { id: "idea-1", title: "Daily pulse", description: "", illustration: "" },
+        { id: "idea-2", title: "Coach mode", description: "", illustration: "" },
+      ],
+      { id: "idea-2", title: "Coach mode", description: "Guided planning", illustration: "<svg />" }
+    ),
+    [
+      { id: "idea-1", title: "Daily pulse", description: "", illustration: "" },
+      { id: "idea-2", title: "Coach mode", description: "Guided planning", illustration: "<svg />" },
+    ]
   );
 });
 

@@ -543,7 +543,8 @@ When responding inside this mode, you MUST include a structured block before any
   "confirmationSummary": "A concise restatement of the user's idea in your own words.",
   "clarificationQuestions": [
     "Only include questions that are still necessary."
-  ]
+  ],
+  "idea": null
 }
 \`\`\`
 
@@ -554,21 +555,27 @@ Rules:
 - If you still need clarification:
   - Output ONLY the \`type="user-idea"\` block with \`status: "clarifying"\`.
   - Do NOT output a \`type="ideas"\` block yet.
-  - After the block, ask the concise clarification question(s) in plain text.
+  - After the \`type="user-idea"\` block, output 1-3 \`type="options"\` blocks for the remaining clarification questions so the UI can show them in tabs.
+  - Each \`type="options"\` block must contain exactly one question and 2-4 concise answer options.
+  - The user can also write their own answer, so your options should cover the most likely answers without trying to be exhaustive.
+  - Do NOT repeat the same clarification question in plain text after the options blocks.
 - If the idea is fully understood:
-  - Output a \`type="user-idea"\` block with \`status: "ready"\`, \`ideaId: "${nextIdeaId}"\`, and an empty \`clarificationQuestions\` array.
-  - Then output the complete \`type="ideas"\` array, appending the new user-authored idea as the final idea using EXACTLY the id \`${nextIdeaId}\`.
-  - Preserve the existing ideas unless the user explicitly asked to change them.
-  - Synthesize a polished title and description that preserve the user's intent.
-  - Include an SVG illustration for the appended idea using the same illustration rules as every other idea.
-  - After the blocks, briefly confirm that their idea is ready to approve or refine further.`
+  - Output a \`type="user-idea"\` block with \`status: "ready"\`, \`ideaId: "${nextIdeaId}"\`, an empty \`clarificationQuestions\` array, and a fully-populated \`idea\` object.
+  - The \`idea\` object MUST contain:
+    - \`id: "${nextIdeaId}"\`
+    - a polished title
+    - a polished description that preserves the user's intent
+    - an SVG illustration following the same rules as every other idea
+  - Do NOT output a \`type="ideas"\` block when completing a custom idea.
+  - After the block, briefly confirm that their idea is ready to approve or refine further.`
     : `## USER-AUTHORED IDEA MODE
 
 If the UI activates a user-authored idea flow, you must switch behavior:
 - Use a \`type="user-idea"\` block to restate and track the custom idea.
 - Ask only material clarification questions.
+- Use \`type="options"\` blocks for those clarification questions so the UI can render tabbed multiple-choice answers.
 - Do not output a \`type="ideas"\` block until the custom idea is fully understood.
-- When ready, append the custom idea to the full ideas array using the exact id provided by the hidden context.`;
+- When ready, return the finalized custom idea inside the \`type="user-idea"\` block using the exact id provided by the hidden context instead of regenerating all ideas.`;
 
   return `You are a Creative Product Strategist running a "Crazy 8's" ideation session. The user has approved a product overview, personas, and journey maps. Now you need to generate 8 distinct solution ideas for the problem.
 

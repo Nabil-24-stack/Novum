@@ -45,6 +45,7 @@ import { parseStreamingContent } from "@/lib/streaming-parser";
 import { runVerificationLoop } from "@/lib/verification/verify-loop";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  appendOrReplaceIdea,
   applyUserIdeaBlockToFlow,
   createIdleCustomIdeaFlow,
   getNextIdeaId,
@@ -1884,8 +1885,10 @@ export function ChatTab({
     return extractOptionBlocks(text);
   }, [messages, isLoading]);
 
-  // Show question tabs before manifesto is generated OR during deep-dive re-questioning
-  const hasActiveQuestions = currentOptionBlocks.length > 0 && (!manifestoData || isDeepDive);
+  // Show question tabs during early discovery OR while clarifying a user-authored idea.
+  const hasActiveQuestions =
+    currentOptionBlocks.length > 0 &&
+    ((!manifestoData || isDeepDive) || (strategyPhase === "ideation" && customIdeaFlowActive));
 
   // Reset question state when a new set of options arrives
   const lastAssistantId = useMemo(() => {
@@ -2458,8 +2461,22 @@ export function ChatTab({
       }
       if (!textContent) return;
 
-      // Extract insights blocks
       let match;
+      let messageContainsReadyUserIdea = false;
+      while ((match = USER_IDEA_REGEX.exec(textContent)) !== null) {
+        try {
+          const parsed = normalizeUserIdeaBlockData(JSON.parse(match[1]));
+          if (parsed?.status === "ready") {
+            messageContainsReadyUserIdea = true;
+            break;
+          }
+        } catch {
+          // Ignore incomplete or invalid blocks during pre-scan.
+        }
+      }
+      USER_IDEA_REGEX.lastIndex = 0;
+
+      // Extract insights blocks
       while ((match = INSIGHTS_REGEX.exec(textContent)) !== null) {
         const blockKey = `insights-${message.id}-${match.index}`;
         if (!processedStrategyBlocksSet.has(blockKey)) {
@@ -2545,7 +2562,23 @@ export function ChatTab({
             const parsed = normalizeUserIdeaBlockData(JSON.parse(match[1]));
             if (parsed) {
               const store = useStrategyStore.getState();
-              store.setCustomIdeaFlow(applyUserIdeaBlockToFlow(store.customIdeaFlow, parsed));
+              if (parsed.status === "ready" && parsed.idea) {
+                const viableStreamingIdeas = (store.streamingIdeas ?? [])
+                  .filter((idea): idea is IdeaData => Boolean(idea.id && idea.title))
+                  .map((idea) => ({
+                    id: idea.id,
+                    title: idea.title,
+                    description: idea.description ?? "",
+                    illustration: idea.illustration ?? "",
+                  }));
+                const baseIdeas = store.ideaData ?? viableStreamingIdeas;
+
+                store.setIdeaData(appendOrReplaceIdea(baseIdeas, parsed.idea));
+                store.setSelectedIdeaId(parsed.idea.id);
+                store.resetCustomIdeaFlow();
+              } else {
+                store.setCustomIdeaFlow(applyUserIdeaBlockToFlow(store.customIdeaFlow, parsed));
+              }
             }
           } catch (e) {
             console.warn("[Strategy] Failed to parse user-idea JSON:", e);
@@ -2559,6 +2592,9 @@ export function ChatTab({
         const blockKey = `ideas-${message.id}-${match.index}`;
         if (!processedStrategyBlocksSet.has(blockKey)) {
           processedStrategyBlocksSet.add(blockKey);
+          if (messageContainsReadyUserIdea) {
+            continue;
+          }
           try {
             const parsed = JSON.parse(match[1]);
             if (Array.isArray(parsed) && parsed.length > 0 && (parsed[0].id || parsed[0].title)) {
@@ -3075,10 +3111,31 @@ export function ChatTab({
     (text: string) => {
       if (isLoading) return;
       const vfsContext = buildStrategyArtifactsContext();
+      const store = useStrategyStore.getState();
+      const isSubmittingCustomIdea =
+        strategyPhase === "ideation"
+        && isCustomIdeaFlowActive(store.customIdeaFlow);
 
       sendMessage(
         { text },
-        { body: { vfsContext, strategyPhase, isDeepDive: useStrategyStore.getState().isDeepDive } }
+        {
+          body: {
+            vfsContext,
+            strategyPhase,
+            isDeepDive: store.isDeepDive,
+            customIdeaFlow: isSubmittingCustomIdea
+              ? {
+                  mode: store.customIdeaFlow.mode,
+                  awaiting: "assistant",
+                  confirmationSummary: store.customIdeaFlow.confirmationSummary,
+                  clarificationQuestions: store.customIdeaFlow.clarificationQuestions,
+                }
+              : undefined,
+            nextIdeaId: isSubmittingCustomIdea
+              ? getNextIdeaId(store.ideaData ?? store.streamingIdeas)
+              : undefined,
+          },
+        }
       );
     },
     [isLoading, sendMessage, strategyPhase]
@@ -4138,7 +4195,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                   ? "Answer the clarifying questions about your idea..."
                   : "Describe your idea in detail..."
               }
-              className="min-h-[120px] flex-1 resize-y border-neutral-200 text-base focus-visible:ring-neutral-900"
+              className="min-h-[120px] flex-1 resize-y border-neutral-200 bg-white text-base text-neutral-900 placeholder:text-neutral-400 caret-neutral-900 focus-visible:ring-neutral-900 disabled:bg-neutral-50 disabled:text-neutral-400"
               disabled={isLoading || isAiEditing || (hasActiveQuestions && questionWriteOwn === null)}
             />
           ) : (

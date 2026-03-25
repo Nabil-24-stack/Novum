@@ -9,6 +9,7 @@ export interface UserIdeaBlockData {
   ideaId: string | null;
   confirmationSummary: string;
   clarificationQuestions: string[];
+  idea: IdeaData | null;
 }
 
 function trimText(value: string | null | undefined): string {
@@ -39,6 +40,18 @@ export function normalizeUserIdeaBlockData(
     ideaId: trimText(value.ideaId) || null,
     confirmationSummary: trimText(value.confirmationSummary),
     clarificationQuestions: (value.clarificationQuestions ?? []).map(trimText).filter(Boolean),
+    idea:
+      value.idea &&
+      typeof value.idea === "object" &&
+      trimText((value.idea as Partial<IdeaData>).id) &&
+      trimText((value.idea as Partial<IdeaData>).title)
+        ? {
+            id: trimText((value.idea as Partial<IdeaData>).id),
+            title: trimText((value.idea as Partial<IdeaData>).title),
+            description: trimText((value.idea as Partial<IdeaData>).description),
+            illustration: trimText((value.idea as Partial<IdeaData>).illustration),
+          }
+        : null,
   };
 }
 
@@ -49,7 +62,7 @@ export function applyUserIdeaBlockToFlow(
   if (block.status === "ready") {
     return {
       ...createIdleCustomIdeaFlow(),
-      readyIdeaId: block.ideaId,
+      readyIdeaId: block.idea?.id ?? block.ideaId,
     };
   }
 
@@ -85,4 +98,20 @@ export function getNextIdeaId(
 
 export function isCustomIdeaFlowActive(flow: CustomIdeaFlowState): boolean {
   return flow.mode === "collecting" || flow.mode === "clarifying";
+}
+
+export function appendOrReplaceIdea(
+  existingIdeas: IdeaData[] | null | undefined,
+  nextIdea: IdeaData
+): IdeaData[] {
+  const ideas = existingIdeas ?? [];
+  const existingIndex = ideas.findIndex((idea) => idea.id === nextIdea.id);
+
+  if (existingIndex === -1) {
+    return [...ideas, nextIdea];
+  }
+
+  const updated = [...ideas];
+  updated[existingIndex] = nextIdea;
+  return updated;
 }

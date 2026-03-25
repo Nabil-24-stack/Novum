@@ -74,10 +74,15 @@ test("ideation prompt encodes active user-authored idea mode contract", () => {
 
   assert.match(prompt, /USER-AUTHORED IDEA MODE \(ACTIVE\)/);
   assert.match(prompt, /type="user-idea"/);
+  assert.match(prompt, /type="options"/);
   assert.match(prompt, /Allowed `status` values in this mode are only `"clarifying"` or `"ready"`/);
   assert.match(prompt, /Do NOT output a `type="ideas"` block yet/);
+  assert.match(prompt, /output 1-3 `type="options"` blocks/);
+  assert.match(prompt, /2-4 concise answer options/);
   assert.match(prompt, /ideaId: "idea-9"/);
-  assert.match(prompt, /appending the new user-authored idea as the final idea using EXACTLY the id `idea-9`/);
+  assert.match(prompt, /fully-populated `idea` object/);
+  assert.match(prompt, /Do NOT output a `type="ideas"` block when completing a custom idea/);
+  assert.match(prompt, /"idea": null/);
 });
 
 test("ideation prompt documents dormant user-authored idea mode when inactive", () => {
