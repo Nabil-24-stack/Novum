@@ -43,6 +43,15 @@ import { checkRouteConsistency } from "@/lib/ai/route-consistency";
 import type { AutoAnnotationRequest } from "@/lib/ai/annotation-targets";
 import { parseStreamingContent } from "@/lib/streaming-parser";
 import { runVerificationLoop } from "@/lib/verification/verify-loop";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  applyUserIdeaBlockToFlow,
+  createIdleCustomIdeaFlow,
+  getNextIdeaId,
+  isCustomIdeaFlowActive,
+  normalizeUserIdeaBlockData,
+  resolveResumedCustomIdeaMode,
+} from "@/lib/strategy/custom-idea-flow";
 import { getTraceableText, getTraceableTexts } from "@/lib/strategy/traceable";
 import type { FileUIPart } from "ai";
 
@@ -54,9 +63,9 @@ function hasFileCodeBlocks(content: string): boolean {
 /** Strip strategy JSON blocks from text (manifesto, flow, options, page-built, confidence, personas, etc.) */
 function stripStrategyBlocks(text: string): string {
   // Strip closed strategy blocks
-  let cleaned = text.replace(/```json\s+type="(?:options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-flows|features|decision-connections|insights|alignment-check)"[\s\S]*?```/g, "");
+  let cleaned = text.replace(/```json\s+type="(?:options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-idea|user-flows|features|decision-connections|insights|alignment-check)"[\s\S]*?```/g, "");
   // Strip open (still-streaming) strategy blocks
-  cleaned = cleaned.replace(/```json\s+type="(?:options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-flows|features|decision-connections|insights|alignment-check)"[\s\S]*$/, "");
+  cleaned = cleaned.replace(/```json\s+type="(?:options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-idea|user-flows|features|decision-connections|insights|alignment-check)"[\s\S]*$/, "");
   return cleaned.trim();
 }
 
@@ -114,6 +123,7 @@ const PAGE_BUILT_REGEX = /```json\s+type="page-built"\n([\s\S]*?)```/g;
 const CONFIDENCE_REGEX = /```json\s+type="confidence"\n([\s\S]*?)```/g;
 const JOURNEY_MAPS_REGEX = /```json\s+type="journey-maps"\n([\s\S]*?)```/g;
 const IDEAS_REGEX = /```json\s+type="ideas"\n([\s\S]*?)```/g;
+const USER_IDEA_REGEX = /```json\s+type="user-idea"\n([\s\S]*?)```/g;
 const DECISION_CONNECTIONS_REGEX = /```json\s+type="decision-connections"\n([\s\S]*?)```/g;
 const USER_FLOWS_REGEX = /```json\s+type="user-flows"\n([\s\S]*?)```/g;
 const FEATURES_REGEX = /```json\s+type="features"\n([\s\S]*?)```/g;
@@ -1382,8 +1392,10 @@ export function ChatTab({
   const personaData = useStrategyStore((s) => s.personaData);
   const journeyMapData = useStrategyStore((s) => s.journeyMapData);
   const ideaData = useStrategyStore((s) => s.ideaData);
+  const streamingIdeas = useStrategyStore((s) => s.streamingIdeas);
   const keyFeaturesData = useStrategyStore((s) => s.keyFeaturesData);
   const selectedIdeaId = useStrategyStore((s) => s.selectedIdeaId);
+  const customIdeaFlow = useStrategyStore((s) => s.customIdeaFlow);
   const flowData = useStrategyStore((s) => s.flowData);
   const confidenceData = useStrategyStore((s) => s.confidenceData);
   const isDeepDive = useStrategyStore((s) => s.isDeepDive);
@@ -1538,6 +1550,7 @@ export function ChatTab({
         [PERSONA_REGEX, "personas"],
         [JOURNEY_MAPS_REGEX, "journey-maps"],
         [IDEAS_REGEX, "ideas"],
+        [USER_IDEA_REGEX, "user-idea"],
         [FLOW_REGEX, "flow"],
         [FEATURES_REGEX, "features"],
         [USER_FLOWS_REGEX, "user-flows"],
@@ -1605,8 +1618,8 @@ export function ChatTab({
       `I hit a preview error on ${pendingRepairDraft.pageName} (${pendingRepairDraft.route}). I'm attaching a screenshot of the error. Please fix the code causing it.`
     );
 
-    setTimeout(() => inputRef.current?.focus(), 50);
-  }, [pendingRepairDraft]);
+    setTimeout(() => focusComposer(), 50);
+  }, [focusComposer, pendingRepairDraft]);
 
   // Clear alignment check state when a new message is being sent
   useEffect(() => {
@@ -1644,8 +1657,15 @@ export function ChatTab({
     () => ideaData?.find((idea) => idea.id === selectedIdeaId) ?? null,
     [ideaData, selectedIdeaId]
   );
+  const customIdeaFlowActive = useMemo(() => isCustomIdeaFlowActive(customIdeaFlow), [customIdeaFlow]);
+  const customIdeaFlowPaused = customIdeaFlow.mode === "paused";
+  const showCustomIdeaComposer = strategyPhase === "ideation" && customIdeaFlowActive;
+  const nextCustomIdeaId = useMemo(
+    () => getNextIdeaId(ideaData ?? streamingIdeas),
+    [ideaData, streamingIdeas]
+  );
   const canShowIdeationFooter = strategyPhase === "ideation" && ideaData && (!isLoading || manualIdeationStopped);
-  const canProceedWithSelectedIdea = Boolean(canShowIdeationFooter && selectedIdea);
+  const canProceedWithSelectedIdea = Boolean(canShowIdeationFooter && selectedIdea && !customIdeaFlowActive);
 
   // Stop ideation and commit whatever partial ideas have been generated so far
   const handleStopIdeation = useCallback(() => {
@@ -1669,6 +1689,46 @@ export function ChatTab({
       storeState.setStreamingIdeas(null);
     }
   }, [stop]);
+
+  useEffect(() => {
+    if (strategyPhase !== "ideation") return;
+    if ((customIdeaFlow.mode === "collecting" || customIdeaFlow.mode === "clarifying") && !input) {
+      setInput(customIdeaFlow.draftText);
+    }
+  }, [customIdeaFlow.draftText, customIdeaFlow.mode, input, strategyPhase]);
+
+  useEffect(() => {
+    if (strategyPhase === "ideation" && customIdeaFlow.mode === "paused") {
+      setInput("");
+    }
+  }, [customIdeaFlow.mode, strategyPhase]);
+
+  const handleStartOrResumeCustomIdea = useCallback(() => {
+    const store = useStrategyStore.getState();
+    const currentFlow = store.customIdeaFlow;
+
+    if (currentFlow.mode === "paused") {
+      store.setCustomIdeaFlow({
+        mode: resolveResumedCustomIdeaMode(currentFlow),
+      });
+      setInput(currentFlow.draftText);
+    } else {
+      store.setCustomIdeaFlow({
+        ...createIdleCustomIdeaFlow(),
+        mode: "collecting",
+      });
+      setInput("");
+    }
+
+    setTimeout(() => focusComposer(), 50);
+  }, [focusComposer]);
+
+  const handleComposerChange = useCallback((nextValue: string) => {
+    setInput(nextValue);
+    if (strategyPhase === "ideation" && customIdeaFlowActive) {
+      useStrategyStore.getState().setCustomIdeaFlow({ draftText: nextValue });
+    }
+  }, [customIdeaFlowActive, strategyPhase]);
 
   // --- Document Upload Handler ---
   const handleDocumentUpload = useCallback(async (fileList: FileList | null) => {
@@ -1801,7 +1861,12 @@ export function ChatTab({
   const [questionActiveTab, setQuestionActiveTab] = useState(0);
   const [questionWriteOwn, setQuestionWriteOwn] = useState<number | null>(null);
   const lastOptionsMsgId = useRef<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
+  const textareaInputRef = useRef<HTMLTextAreaElement>(null);
+  const focusComposer = useCallback(() => {
+    textareaInputRef.current?.focus();
+    textInputRef.current?.focus();
+  }, []);
 
   // Compute current option blocks from last assistant message
   const currentOptionBlocks = useMemo(() => {
@@ -2471,6 +2536,24 @@ export function ChatTab({
       }
       JOURNEY_MAPS_REGEX.lastIndex = 0;
 
+      // Extract user-idea blocks
+      while ((match = USER_IDEA_REGEX.exec(textContent)) !== null) {
+        const blockKey = `user-idea-${message.id}-${match.index}`;
+        if (!processedStrategyBlocksSet.has(blockKey)) {
+          processedStrategyBlocksSet.add(blockKey);
+          try {
+            const parsed = normalizeUserIdeaBlockData(JSON.parse(match[1]));
+            if (parsed) {
+              const store = useStrategyStore.getState();
+              store.setCustomIdeaFlow(applyUserIdeaBlockToFlow(store.customIdeaFlow, parsed));
+            }
+          } catch (e) {
+            console.warn("[Strategy] Failed to parse user-idea JSON:", e);
+          }
+        }
+      }
+      USER_IDEA_REGEX.lastIndex = 0;
+
       // Extract ideas blocks
       while ((match = IDEAS_REGEX.exec(textContent)) !== null) {
         const blockKey = `ideas-${message.id}-${match.index}`;
@@ -2479,7 +2562,12 @@ export function ChatTab({
           try {
             const parsed = JSON.parse(match[1]);
             if (Array.isArray(parsed) && parsed.length > 0 && (parsed[0].id || parsed[0].title)) {
-              useStrategyStore.getState().setIdeaData(parsed);
+              const store = useStrategyStore.getState();
+              store.setIdeaData(parsed);
+              if (store.customIdeaFlow.readyIdeaId && parsed.some((idea: IdeaData) => idea.id === store.customIdeaFlow.readyIdeaId)) {
+                store.setSelectedIdeaId(store.customIdeaFlow.readyIdeaId);
+                store.resetCustomIdeaFlow();
+              }
             }
           } catch (e) {
             console.warn("[Strategy] Failed to parse ideas JSON:", e);
@@ -3107,8 +3195,8 @@ export function ChatTab({
     setQuestionWriteOwn(questionIdx);
     setQuestionActiveTab(questionIdx);
     // Focus the main input after a tick
-    setTimeout(() => inputRef.current?.focus(), 50);
-  }, []);
+    setTimeout(() => focusComposer(), 50);
+  }, [focusComposer]);
 
   const handleSubmitAllAnswers = useCallback(() => {
     const parts = currentOptionBlocks.map((block, idx) => {
@@ -3135,8 +3223,9 @@ export function ChatTab({
     const effectiveInput = overrideText ?? input;
     const hasText = effectiveInput.trim().length > 0;
     const hasImages = stagedImages.length > 0;
+    const isSubmittingCustomIdea = strategyPhase === "ideation" && customIdeaFlowActive;
     const preflightArtifactFamilies: StrategyRefreshArtifactFamily[] =
-      strategyPhase === "hero" || activeRepairContext
+      strategyPhase === "hero" || activeRepairContext || isSubmittingCustomIdea
         ? []
         : dedupeArtifactFamilies([
             ...(selectedStrategyArtifactContext ? [selectedStrategyArtifactContext.family] : []),
@@ -3176,8 +3265,15 @@ export function ChatTab({
     setInput("");
     setStagedImages([]);
 
+    if (isSubmittingCustomIdea) {
+      useStrategyStore.getState().setCustomIdeaFlow({
+        draftText: "",
+        awaiting: "assistant",
+      });
+    }
+
     const explicitArtifactFamilies: StrategyRefreshArtifactFamily[] =
-      strategyPhase === "hero" || activeRepairContext
+      strategyPhase === "hero" || activeRepairContext || isSubmittingCustomIdea
         ? []
         : preflightArtifactFamilies;
     const shouldUseArtifactRefresh = explicitArtifactFamilies.length > 0;
@@ -3360,6 +3456,15 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           editContext,
           artifactRefreshMode: shouldUseArtifactRefresh,
           artifactRefreshMeta,
+          customIdeaFlow: isSubmittingCustomIdea
+            ? {
+                mode: customIdeaFlow.mode,
+                awaiting: "assistant",
+                confirmationSummary: customIdeaFlow.confirmationSummary,
+                clarificationQuestions: customIdeaFlow.clarificationQuestions,
+              }
+            : undefined,
+          nextIdeaId: isSubmittingCustomIdea ? nextCustomIdeaId : undefined,
         },
       }
     );
@@ -3634,6 +3739,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 if (isLoading) {
                   stop();
                 }
+                useStrategyStore.getState().resetCustomIdeaFlow();
                 onPhaseAction?.("approve-ideation");
                 const context = buildStrategyArtifactsContext({ sectionLabel: "Approved" });
                 const selectedIdeaContext = selectedIdea
@@ -3652,9 +3758,27 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           </div>
         )}
 
+        {canShowIdeationFooter && !customIdeaFlowActive && (
+          <div className="flex justify-center pt-2">
+            <button
+              type="button"
+              onClick={handleStartOrResumeCustomIdea}
+              className="inline-flex items-center gap-2 rounded-lg border border-neutral-200 px-4 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-100"
+            >
+              {customIdeaFlowPaused ? "Resume your idea" : "Write your own idea"}
+            </button>
+          </div>
+        )}
+
         {canShowIdeationFooter && (
           <p className="text-center text-xs text-neutral-400 pt-1">
-            {selectedIdea
+            {customIdeaFlowActive
+              ? customIdeaFlow.awaiting === "assistant"
+                ? "I’m reviewing your idea and will only ask clarifying questions if something important is still unclear."
+                : customIdeaFlow.clarificationQuestions.length > 0
+                ? "Answer the clarifying questions in chat, or pick any AI-generated idea at any time."
+                : "Describe your idea in your own words. I’ll confirm it back before you approve it."
+              : selectedIdea
               ? "You can continue with this idea, describe changes to refine it, or suggest a new one."
               : "Select an idea to continue, or tell me how to refine one."}
           </p>
@@ -3938,6 +4062,30 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
         </div>
       )}
 
+      {showCustomIdeaComposer && (
+        <div className="border-t border-neutral-200 px-4 pt-3 pb-1">
+          <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2">
+            <p className="text-sm font-medium text-neutral-900">
+              {customIdeaFlowPaused ? "Your custom idea is paused" : "Writing your own idea"}
+            </p>
+            <p className="mt-1 text-xs text-neutral-500">
+              {customIdeaFlowPaused
+                ? "Resume whenever you want. Your draft and clarification context are saved."
+                : customIdeaFlow.awaiting === "assistant"
+                ? "I’m reviewing what you sent and will confirm it back before you can approve it."
+                : customIdeaFlow.clarificationQuestions.length > 0
+                ? "Reply in chat to resolve the remaining clarifications, or switch to any AI-generated idea at any time."
+                : "Describe the idea in your own words. I’ll restate it, ask only the necessary follow-up questions, and then let you approve it."}
+            </p>
+            {customIdeaFlow.confirmationSummary && !customIdeaFlowPaused && (
+              <p className="mt-2 text-xs text-neutral-600">
+                Current understanding: {customIdeaFlow.confirmationSummary}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Input */}
       {billingLimitReached ? (
         <div className="p-4 border-t border-neutral-200">
@@ -3977,36 +4125,56 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           >
             <ImagePlus className="w-5 h-5" />
           </button>
-          <input
-            ref={inputRef}
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onPaste={handlePaste}
-            placeholder={
-              hasActiveQuestions && questionWriteOwn !== null
-                ? "Type your answer..."
-                : hasImages
-                ? "Add a message or send images..."
-                : strategyPhase === "hero"
-                ? "e.g. My team wastes hours coordinating who's working on what..."
-                : strategyPhase === "problem-overview"
-                ? "Refine the overview, personas, or journey maps..."
-                : strategyPhase === "ideation"
-                ? "Discuss or refine the selected idea..."
-                : strategyPhase === "solution-design"
-                ? "Adjust the IA or user flows..."
-                : strategyPhase === "handoff"
-                ? "Update the artifacts or refine the handoff..."
-                : "Ask me to modify your UI..."
-            }
-            className="flex-1 px-3 py-2 text-base border border-neutral-200 rounded-md focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:border-transparent disabled:bg-neutral-50 disabled:text-neutral-400"
-            disabled={isLoading || isAiEditing || (hasActiveQuestions && questionWriteOwn === null)}
-          />
+          {showCustomIdeaComposer ? (
+            <Textarea
+              ref={textareaInputRef}
+              value={input}
+              onChange={(e) => handleComposerChange(e.target.value)}
+              onPaste={handlePaste}
+              placeholder={
+                customIdeaFlow.awaiting === "assistant"
+                  ? "Waiting for the AI to review your idea..."
+                  : customIdeaFlow.clarificationQuestions.length > 0
+                  ? "Answer the clarifying questions about your idea..."
+                  : "Describe your idea in detail..."
+              }
+              className="min-h-[120px] flex-1 resize-y border-neutral-200 text-base focus-visible:ring-neutral-900"
+              disabled={isLoading || isAiEditing || (hasActiveQuestions && questionWriteOwn === null)}
+            />
+          ) : (
+            <input
+              ref={textInputRef}
+              type="text"
+              value={input}
+              onChange={(e) => handleComposerChange(e.target.value)}
+              onPaste={handlePaste}
+              placeholder={
+                hasActiveQuestions && questionWriteOwn !== null
+                  ? "Type your answer..."
+                  : hasImages
+                  ? "Add a message or send images..."
+                  : strategyPhase === "hero"
+                  ? "e.g. My team wastes hours coordinating who's working on what..."
+                  : strategyPhase === "problem-overview"
+                  ? "Refine the overview, personas, or journey maps..."
+                  : strategyPhase === "ideation"
+                  ? "Discuss or refine the selected idea..."
+                  : strategyPhase === "solution-design"
+                  ? "Adjust the IA or user flows..."
+                  : strategyPhase === "handoff"
+                  ? "Update the artifacts or refine the handoff..."
+                  : "Ask me to modify your UI..."
+              }
+              className="flex-1 rounded-md border border-neutral-200 px-3 py-2 text-base focus:border-transparent focus:outline-none focus:ring-2 focus:ring-neutral-900 disabled:bg-neutral-50 disabled:text-neutral-400"
+              disabled={isLoading || isAiEditing || (hasActiveQuestions && questionWriteOwn === null)}
+            />
+          )}
           <button
             type="submit"
             disabled={isLoading || isAiEditing || (!input.trim() && !hasImages)}
-            className="px-3 py-2 bg-neutral-900 text-white rounded-md hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className={`bg-neutral-900 text-white rounded-md hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
+              showCustomIdeaComposer ? "self-end px-3 py-2" : "px-3 py-2"
+            }`}
           >
             <Send className="w-4 h-4" />
           </button>
@@ -4275,7 +4443,7 @@ function MessageContent({ content }: { content: string }) {
 
 // Detect which strategy block type is currently streaming (open, not yet closed)
 function getStreamingBlockType(text: string): string | null {
-  const blockPattern = /```json\s+type="(options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-flows|features|insights|decision-connections|alignment-check)"/g;
+  const blockPattern = /```json\s+type="(options|manifesto|personas|flow|ia|page-built|confidence|journey-maps|ideas|user-idea|user-flows|features|insights|decision-connections|alignment-check)"/g;
   let lastMatch: RegExpExecArray | null = null;
   let match: RegExpExecArray | null;
   while ((match = blockPattern.exec(text)) !== null) {
@@ -4320,6 +4488,8 @@ function getStreamingBlockLabel(
         : "Generating journey maps...";
     case "ideas":
       return "Generating ideas...";
+    case "user-idea":
+      return "Reviewing your idea...";
     case "features":
       return "Generating key features...";
     case "flow":
@@ -4347,6 +4517,7 @@ function StreamingMessageContent({ content }: { content: string }) {
   const currentFile = useStreamingStore((s) => s.currentFile);
   const completedFilePaths = useStreamingStore((s) => s.completedFilePaths);
   const phase = useStrategyStore((s) => s.phase);
+  const customIdeaFlow = useStrategyStore((s) => s.customIdeaFlow);
   const confidenceData = useStrategyStore((s) => s.confidenceData);
   const manifestoData = useStrategyStore((s) => s.manifestoData);
   const isDeepDive = useStrategyStore((s) => s.isDeepDive);
@@ -4387,7 +4558,10 @@ function StreamingMessageContent({ content }: { content: string }) {
         : manifestoData ? "Refining product overview..."
         : confidenceData && confidenceData.overall >= 80 ? "Generating product overview..."
         : "Thinking about what to ask you..."
-      : phase === "ideation" ? "Generating creative ideas..."
+      : phase === "ideation"
+        ? customIdeaFlow.awaiting === "assistant" && isCustomIdeaFlowActive(customIdeaFlow)
+          ? "Reviewing your idea..."
+          : "Generating creative ideas..."
       : phase === "solution-design"
         ? userFlowsData ? "Refining solution design..."
         : "Designing solution..."
@@ -4510,6 +4684,7 @@ function CollapsedMessageContent({ content }: { content: string }) {
 // Phase-aware spinner shown before the first assistant token arrives
 function StreamingStatus() {
   const phase = useStrategyStore((s) => s.phase);
+  const customIdeaFlow = useStrategyStore((s) => s.customIdeaFlow);
   const isDeepDive = useStrategyStore((s) => s.isDeepDive);
   const currentBuildingPage = useStrategyStore((s) => s.currentBuildingPage);
   const hasDocuments = useDocumentStore((s) => s.documents.length > 0);
@@ -4521,7 +4696,10 @@ function StreamingStatus() {
       : pendingReanalysis ? "Re-analyzing all documents..."
       : hasDocuments ? "Analyzing your problem and documents..."
       : "Analyzing your problem..."
-    : phase === "ideation" ? "Generating ideas..."
+    : phase === "ideation"
+      ? customIdeaFlow.awaiting === "assistant" && isCustomIdeaFlowActive(customIdeaFlow)
+        ? "Reviewing your idea..."
+        : "Generating ideas..."
     : phase === "solution-design" ? "Designing solution..."
     : phase === "handoff" ? "Updating handoff artifacts..."
     : phase === "editing" ? "Preparing a targeted edit..."

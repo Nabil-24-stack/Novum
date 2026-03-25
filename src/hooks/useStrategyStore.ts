@@ -95,6 +95,18 @@ export interface IdeaData {
   illustration: string; // single SVG string
 }
 
+export type CustomIdeaFlowMode = "idle" | "collecting" | "clarifying" | "paused";
+export type CustomIdeaFlowAwaiting = "none" | "user" | "assistant";
+
+export interface CustomIdeaFlowState {
+  mode: CustomIdeaFlowMode;
+  draftText: string;
+  awaiting: CustomIdeaFlowAwaiting;
+  confirmationSummary: string;
+  clarificationQuestions: string[];
+  readyIdeaId: string | null;
+}
+
 export interface KeyFeatureData {
   id: string;
   name: string;
@@ -242,6 +254,27 @@ function normalizeJourneyMapState(
   };
 }
 
+function normalizeCustomIdeaFlowState(
+  data: CustomIdeaFlowState | null | undefined
+): CustomIdeaFlowState {
+  return {
+    mode:
+      data?.mode === "collecting" ||
+      data?.mode === "clarifying" ||
+      data?.mode === "paused"
+        ? data.mode
+        : "idle",
+    draftText: trimText(data?.draftText),
+    awaiting:
+      data?.awaiting === "user" || data?.awaiting === "assistant"
+        ? data.awaiting
+        : "none",
+    confirmationSummary: trimText(data?.confirmationSummary),
+    clarificationQuestions: normalizeStringList(data?.clarificationQuestions),
+    readyIdeaId: trimText(data?.readyIdeaId) || null,
+  };
+}
+
 function normalizeFeatureState(
   feature: KeyFeatureData,
   index: number,
@@ -368,6 +401,7 @@ interface StrategyState {
   ideaData: IdeaData[] | null;
   streamingIdeas: Partial<IdeaData>[] | null;
   selectedIdeaId: string | null;
+  customIdeaFlow: CustomIdeaFlowState;
   completedPages: string[];
   currentBuildingPage: string | null;
   currentBuildingPages: string[];
@@ -417,6 +451,8 @@ interface StrategyState {
   setIdeaData: (data: IdeaData[]) => void;
   setStreamingIdeas: (data: Partial<IdeaData>[] | null) => void;
   setSelectedIdeaId: (id: string | null) => void;
+  setCustomIdeaFlow: (data: Partial<CustomIdeaFlowState>) => void;
+  resetCustomIdeaFlow: () => void;
   addCompletedPage: (pageId: string) => void;
   setBuildingPage: (pageId: string | null) => void;
   setBuildingPages: (pageIds: string[]) => void;
@@ -452,6 +488,14 @@ const initialState = {
   ideaData: null as IdeaData[] | null,
   streamingIdeas: null as Partial<IdeaData>[] | null,
   selectedIdeaId: null as string | null,
+  customIdeaFlow: {
+    mode: "idle",
+    draftText: "",
+    awaiting: "none",
+    confirmationSummary: "",
+    clarificationQuestions: [],
+    readyIdeaId: null,
+  } as CustomIdeaFlowState,
   completedPages: [] as string[],
   currentBuildingPage: null as string | null,
   currentBuildingPages: [] as string[],
@@ -579,6 +623,16 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
 
   setSelectedIdeaId: (id) => set({ selectedIdeaId: id }),
 
+  setCustomIdeaFlow: (data) =>
+    set((state) => ({
+      customIdeaFlow: normalizeCustomIdeaFlowState({
+        ...state.customIdeaFlow,
+        ...data,
+      }),
+    })),
+
+  resetCustomIdeaFlow: () => set({ customIdeaFlow: initialState.customIdeaFlow }),
+
   addCompletedPage: (pageId) =>
     set((state) => ({
       completedPages: state.completedPages.includes(pageId)
@@ -659,6 +713,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
       journeyMapData: data.journeyMapData
         ? data.journeyMapData.map((journeyMap) => normalizeJourneyMapState(journeyMap, null))
         : initialState.journeyMapData,
+      customIdeaFlow: normalizeCustomIdeaFlowState(data.customIdeaFlow),
       flowData: data.flowData
         ? normalizeFlowState(data.flowData)
         : initialState.flowData,

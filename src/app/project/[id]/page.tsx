@@ -619,8 +619,26 @@ export default function ProjectEditor() {
   ]);
 
   const handleSelectedIdeaChange = useCallback((nextSelectedIdeaId: string | null) => {
-    if (selectedIdeaId === nextSelectedIdeaId) return;
-    useStrategyStore.getState().setSelectedIdeaId(nextSelectedIdeaId);
+    const store = useStrategyStore.getState();
+    const shouldPauseCustomIdeaFlow =
+      nextSelectedIdeaId &&
+      store.customIdeaFlow.mode !== "idle" &&
+      store.customIdeaFlow.mode !== "paused";
+
+    if (shouldPauseCustomIdeaFlow) {
+      store.setCustomIdeaFlow({
+        mode: "paused",
+      });
+    }
+
+    if (selectedIdeaId === nextSelectedIdeaId) {
+      if (shouldPauseCustomIdeaFlow) {
+        markStrategyEditedAfterBuild();
+      }
+      return;
+    }
+
+    store.setSelectedIdeaId(nextSelectedIdeaId);
     markStrategyEditedAfterBuild();
   }, [markStrategyEditedAfterBuild, selectedIdeaId]);
 

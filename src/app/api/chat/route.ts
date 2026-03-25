@@ -519,6 +519,8 @@ export async function POST(req: Request) {
     editContext,
     artifactRefreshMode,
     artifactRefreshMeta,
+    customIdeaFlow,
+    nextIdeaId,
     operationId,
     projectId,
   } = await req.json();
@@ -563,7 +565,15 @@ export async function POST(req: Request) {
         break;
       }
       case "ideation":
-        basePrompt = buildIdeationSystemPrompt();
+        basePrompt = buildIdeationSystemPrompt({
+          customIdeaFlow: customIdeaFlow
+            ? {
+                mode: customIdeaFlow.mode,
+                awaiting: customIdeaFlow.awaiting,
+                nextIdeaId,
+              }
+            : undefined,
+        });
         break;
       case "solution-design":
         basePrompt = buildSolutionDesignSystemPrompt(vfsContext?.selectedIdeaContext);

@@ -29,6 +29,7 @@ function getStrategySnapshot() {
     journeyMapData: s.journeyMapData,
     ideaData: s.ideaData,
     selectedIdeaId: s.selectedIdeaId,
+    customIdeaFlow: s.customIdeaFlow,
     completedPages: s.completedPages,
     keyFeaturesData: s.keyFeaturesData,
     userFlowsData: s.userFlowsData,

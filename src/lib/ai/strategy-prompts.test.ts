@@ -6,6 +6,7 @@ import {
   SOLUTION_DESIGN_SYSTEM_PROMPT,
   buildArtifactRefreshSystemPrompt,
   buildFoundationPrompt,
+  buildIdeationSystemPrompt,
 } from "./strategy-prompts.ts";
 
 test("design system prompt forbids using Button for logos and wordmarks", () => {
@@ -60,4 +61,29 @@ test("solution design prompt requires page-level IA traceability fields", () => 
   assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /"featureIds": \["feature-1", "feature-2"\]/);
   assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /Every `page` node MUST include `jtbdIds`/);
   assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /Non-page nodes MUST omit `jtbdIds` and `featureIds`/);
+});
+
+test("ideation prompt encodes active user-authored idea mode contract", () => {
+  const prompt = buildIdeationSystemPrompt({
+    customIdeaFlow: {
+      mode: "clarifying",
+      awaiting: "user",
+      nextIdeaId: "idea-9",
+    },
+  });
+
+  assert.match(prompt, /USER-AUTHORED IDEA MODE \(ACTIVE\)/);
+  assert.match(prompt, /type="user-idea"/);
+  assert.match(prompt, /Allowed `status` values in this mode are only `"clarifying"` or `"ready"`/);
+  assert.match(prompt, /Do NOT output a `type="ideas"` block yet/);
+  assert.match(prompt, /ideaId: "idea-9"/);
+  assert.match(prompt, /appending the new user-authored idea as the final idea using EXACTLY the id `idea-9`/);
+});
+
+test("ideation prompt documents dormant user-authored idea mode when inactive", () => {
+  const prompt = buildIdeationSystemPrompt();
+
+  assert.match(prompt, /## USER-AUTHORED IDEA MODE/);
+  assert.match(prompt, /If the UI activates a user-authored idea flow/);
+  assert.doesNotMatch(prompt, /USER-AUTHORED IDEA MODE \(ACTIVE\)/);
 });
