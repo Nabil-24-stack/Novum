@@ -1580,6 +1580,12 @@ export function ChatTab({
   const didAutoSubmitRef = useRef(false);
   const lastRepairDraftNonceRef = useRef<number | null>(null);
   const requestPhaseRef = useRef<StrategyPhase | null>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
+  const textareaInputRef = useRef<HTMLTextAreaElement>(null);
+  const focusComposer = useCallback(() => {
+    textareaInputRef.current?.focus();
+    textInputRef.current?.focus();
+  }, []);
 
   const isLoading = status === "submitted" || status === "streaming";
 
@@ -1861,12 +1867,6 @@ export function ChatTab({
   const [questionActiveTab, setQuestionActiveTab] = useState(0);
   const [questionWriteOwn, setQuestionWriteOwn] = useState<number | null>(null);
   const lastOptionsMsgId = useRef<string | null>(null);
-  const textInputRef = useRef<HTMLInputElement>(null);
-  const textareaInputRef = useRef<HTMLTextAreaElement>(null);
-  const focusComposer = useCallback(() => {
-    textareaInputRef.current?.focus();
-    textInputRef.current?.focus();
-  }, []);
 
   // Compute current option blocks from last assistant message
   const currentOptionBlocks = useMemo(() => {
@@ -3006,7 +3006,7 @@ export function ChatTab({
     });
   }, []);
 
-  const handlePaste = useCallback((e: ClipboardEvent<HTMLInputElement>) => {
+  const handlePaste = useCallback((e: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
     if (!items) return;
 
