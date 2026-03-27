@@ -12,6 +12,7 @@ import {
 } from "react";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { useCanvasScale } from "@/components/canvas/InfiniteCanvas";
+import { Textarea } from "@/components/ui/textarea";
 import { resolveArtifactDraftChange } from "@/lib/strategy/artifact-edit-sync";
 
 export const ARTIFACT_EDITOR_FIELDS_CLASSNAME =
@@ -346,5 +347,130 @@ export function ReadOnlyEditHint() {
     <p className="mt-4 text-[11px] text-neutral-400">
       Single-click to select, drag to move, or double-click to edit.
     </p>
+  );
+}
+
+export function EditableStringList(props: {
+  label: string;
+  values: string[];
+  addLabel: string;
+  onChange: (values: string[]) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  placeholder?: string;
+}) {
+  const {
+    label,
+    values,
+    addLabel,
+    onChange,
+    onSave,
+    onCancel,
+    placeholder,
+  } = props;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
+        <AddListItemButton
+          label={addLabel}
+          onClick={() => onChange([...values, ""])}
+        />
+      </div>
+      <div className="space-y-2">
+        {values.map((value, index) => (
+          <div key={index} className="flex items-start gap-2">
+            <Textarea
+              value={value}
+              placeholder={placeholder ?? label}
+              onChange={(event) =>
+                onChange(values.map((item, itemIndex) => (itemIndex === index ? event.target.value : item)))
+              }
+              onKeyDown={(event) =>
+                handleEditorKeyDown(event, {
+                  onSave,
+                  onCancel,
+                })
+              }
+              className="min-h-[72px] text-sm"
+            />
+            <RemoveListItemButton
+              onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function CheckboxSelector(props: {
+  label: string;
+  description: string;
+  options: Array<{
+    id: string;
+    label: string;
+    meta?: string;
+  }>;
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+  emptyMessage?: string;
+  containerClassName?: string;
+}) {
+  const {
+    label,
+    description,
+    options,
+    selectedIds,
+    onChange,
+    emptyMessage = "No options available yet.",
+    containerClassName = "rounded-lg border border-neutral-200 bg-neutral-50/70 p-3",
+  } = props;
+
+  return (
+    <div className={`space-y-2 ${containerClassName}`}>
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
+        <p className="mt-1 text-xs text-neutral-500">{description}</p>
+      </div>
+
+      {options.length > 0 ? (
+        <div className="space-y-2">
+          {options.map((option) => {
+            const checked = selectedIds.includes(option.id);
+            return (
+              <label
+                key={option.id}
+                className="flex cursor-pointer items-start gap-2 rounded-lg border border-transparent bg-white px-2 py-2 text-sm hover:border-neutral-200"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) =>
+                    onChange(
+                      event.target.checked
+                        ? [...selectedIds, option.id]
+                        : selectedIds.filter((id) => id !== option.id)
+                    )
+                  }
+                  className="mt-0.5 h-4 w-4 rounded border-neutral-300"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm text-neutral-800">{option.label}</span>
+                  {option.meta && (
+                    <span className="block text-[11px] uppercase tracking-wider text-neutral-400">
+                      {option.meta}
+                    </span>
+                  )}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-xs text-neutral-500">{emptyMessage}</p>
+      )}
+    </div>
   );
 }

@@ -11,10 +11,10 @@ import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   ARTIFACT_IDLE_CARD_CLASSNAME,
   ARTIFACT_SELECTED_CARD_CLASSNAME,
-  AddListItemButton,
+  CheckboxSelector,
+  EditableStringList,
   EditModeActions,
   ReadOnlyEditHint,
-  RemoveListItemButton,
   handleEditorKeyDown,
   useArtifactCardInteraction,
   useEditableCard,
@@ -186,7 +186,7 @@ export function PersonaCard({
               onCancel={cancelEditing}
             />
 
-            <IdSelector
+            <CheckboxSelector
               label="Pain Points"
               description="Select canonical pain points from the overview registry."
               options={painPointRegistry.map((painPoint) => ({
@@ -197,6 +197,7 @@ export function PersonaCard({
               onChange={(painPointIds) =>
                 setDraft((current) => ({ ...current, painPointIds }))
               }
+              emptyMessage="No canonical pain points available yet."
             />
 
             <div className="space-y-1">
@@ -326,101 +327,6 @@ export function PersonaCard({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function EditableStringList(props: {
-  label: string;
-  values: string[];
-  addLabel: string;
-  onChange: (values: string[]) => void;
-  onSave: () => void;
-  onCancel: () => void;
-}) {
-  const { label, values, addLabel, onChange, onSave, onCancel } = props;
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
-        <AddListItemButton
-          label={addLabel}
-          onClick={() => onChange([...values, ""])}
-        />
-      </div>
-      <div className="space-y-2">
-        {values.map((value, index) => (
-          <div key={index} className="flex items-start gap-2">
-            <Textarea
-              value={value}
-              placeholder={label}
-              onChange={(event) =>
-                onChange(values.map((item, itemIndex) => (itemIndex === index ? event.target.value : item)))
-              }
-              onKeyDown={(event) =>
-                handleEditorKeyDown(event, {
-                  onSave,
-                  onCancel,
-                })
-              }
-              className="min-h-[72px] text-sm"
-            />
-            <RemoveListItemButton
-              onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}
-            />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function IdSelector(props: {
-  label: string;
-  description: string;
-  options: { id: string; label: string }[];
-  selectedIds: string[];
-  onChange: (ids: string[]) => void;
-}) {
-  const { label, description, options, selectedIds, onChange } = props;
-
-  return (
-    <div className="space-y-2 rounded-lg border border-neutral-200 bg-neutral-50/70 p-3">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
-        <p className="mt-1 text-xs text-neutral-500">{description}</p>
-      </div>
-
-      {options.length > 0 ? (
-        <div className="space-y-2">
-          {options.map((option) => {
-            const checked = selectedIds.includes(option.id);
-            return (
-              <label
-                key={option.id}
-                className="flex cursor-pointer items-start gap-2 rounded-lg border border-transparent bg-white px-2 py-2 text-sm hover:border-neutral-200"
-              >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={(event) =>
-                    onChange(
-                      event.target.checked
-                        ? [...selectedIds, option.id]
-                        : selectedIds.filter((id) => id !== option.id)
-                    )
-                  }
-                  className="mt-0.5 h-4 w-4 rounded border-neutral-300"
-                />
-                <span className="block text-sm text-neutral-800">{option.label}</span>
-              </label>
-            );
-          })}
-        </div>
-      ) : (
-        <p className="text-xs text-neutral-500">No canonical pain points available yet.</p>
-      )}
     </div>
   );
 }

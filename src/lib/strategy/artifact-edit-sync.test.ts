@@ -5,6 +5,7 @@ import {
   applyManualIdeaEdit,
   applyManualManifestoEdit,
   applyManualPersonaEdit,
+  applyManualPersonasEdit,
   normalizeIdeaData,
   normalizeInsightsData,
   normalizeJourneyMapData,
@@ -69,6 +70,19 @@ const insight = (overrides: Partial<InsightData> = {}): InsightData => ({
 });
 
 test("persona renames propagate to linked journey maps and user flows", () => {
+  const manifestoData: ManifestoData = {
+    title: "Novum",
+    problemStatement: "Planning gets lost before build.",
+    targetUser: "Product teams",
+    environmentContext: "Inside product planning and handoff review sessions.",
+    painPoints: [painPoint("pain-point-1", "Plans drift after kickoff")],
+    jtbd: [
+      jtbd("jtbd-1", "Keep strategy synced with build context.", {
+        personaNames: ["Avery"],
+      }),
+    ],
+    hmw: [],
+  };
   const personaData: PersonaData[] = [
     {
       name: "Avery",
@@ -97,7 +111,7 @@ test("persona renames propagate to linked journey maps and user flows", () => {
 
   const result = applyManualPersonaEdit(
     {
-      manifestoData: null,
+      manifestoData,
       personaData,
       journeyMapData,
       ideaData: null,
@@ -113,8 +127,165 @@ test("persona renames propagate to linked journey maps and user flows", () => {
   );
 
   assert.equal(result.personaData[0].name, "Morgan");
+  assert.deepEqual(result.manifestoData?.jtbd[0]?.personaNames, ["Morgan"]);
   assert.equal(result.journeyMapData?.[0].personaName, "Morgan");
   assert.deepEqual(result.userFlowsData?.[0].personaNames, ["Morgan"]);
+});
+
+test("whole-board persona edits rename and prune downstream references", () => {
+  const manifestoData: ManifestoData = {
+    title: "Novum",
+    problemStatement: "Planning gets lost before build.",
+    targetUser: "Product teams",
+    environmentContext: "Inside product planning and handoff review sessions.",
+    painPoints: [painPoint("pain-point-1", "Plans drift after kickoff")],
+    jtbd: [
+      jtbd("jtbd-1", "Keep plans current", { personaNames: ["Avery", "Jordan"] }),
+      jtbd("jtbd-2", "Ship aligned updates", { personaNames: ["Jordan"] }),
+    ],
+    hmw: [hmw("hmw-1", "How might we keep plans current?", { jtbdIds: ["jtbd-1"] })],
+  };
+  const personaData: PersonaData[] = [
+    {
+      name: "Avery",
+      role: "Founder",
+      bio: "Leads product direction.",
+      goals: ["Ship quickly"],
+      painPointIds: ["pain-point-1"],
+      quote: "I need strategy to stay in sync.",
+    },
+    {
+      name: "Jordan",
+      role: "PM",
+      bio: "Keeps execution moving.",
+      goals: ["Reduce thrash"],
+      painPointIds: ["pain-point-1"],
+      quote: "I need one source of truth.",
+    },
+  ];
+  const journeyMapData: JourneyMapData[] = [
+    { personaName: "Avery", stages: [] },
+    { personaName: "Jordan", stages: [] },
+  ];
+  const userFlowsData: UserFlow[] = [
+    {
+      id: "flow-1",
+      jtbdIndex: 0,
+      jtbdText: "Keep plans current",
+      personaNames: ["Avery", "Jordan"],
+      steps: [{ nodeId: "home", action: "Reviews strategy changes" }],
+    },
+  ];
+  const keyFeaturesData: KeyFeaturesData = {
+    ideaTitle: "Living handoff",
+    features: [
+      feature({
+        personaNames: ["Avery", "Jordan"],
+      }),
+    ],
+  };
+
+  const result = applyManualPersonasEdit(
+    {
+      manifestoData,
+      personaData,
+      journeyMapData,
+      ideaData: null,
+      selectedIdeaId: null,
+      keyFeaturesData,
+      userFlowsData,
+    },
+    [
+      {
+        ...personaData[0],
+        name: "Morgan",
+        __draftId: "existing-0",
+      } as PersonaData,
+      {
+        name: "Taylor",
+        role: "Design lead",
+        bio: "Represents the new stakeholder.",
+        goals: ["Keep strategy aligned"],
+        painPointIds: ["pain-point-1"],
+        quote: "I need clearer decision context.",
+        __draftId: "new-1",
+      } as PersonaData,
+    ],
+  );
+
+  assert.deepEqual(result.personaData.map((persona) => persona.name), ["Morgan", "Taylor"]);
+  assert.deepEqual(
+    result.manifestoData?.jtbd.map((item) => ({
+      id: item.id,
+      personaNames: item.personaNames,
+    })),
+    [
+      { id: "jtbd-1", personaNames: ["Morgan"] },
+      { id: "jtbd-2", personaNames: [] },
+    ],
+  );
+  assert.deepEqual(result.journeyMapData?.map((journeyMap) => journeyMap.personaName), ["Morgan"]);
+  assert.deepEqual(result.userFlowsData?.[0].personaNames, ["Morgan"]);
+  assert.deepEqual(result.keyFeaturesData?.features[0]?.personaNames, ["Morgan"]);
+});
+
+test("whole-board persona removals prune invalid references", () => {
+  const manifestoData: ManifestoData = {
+    title: "Novum",
+    problemStatement: "Planning gets lost before build.",
+    targetUser: "Product teams",
+    environmentContext: "Inside product planning and handoff review sessions.",
+    painPoints: [painPoint("pain-point-1", "Plans drift after kickoff")],
+    jtbd: [jtbd("jtbd-1", "Keep plans current", { personaNames: ["Avery"] })],
+    hmw: [],
+  };
+  const personaData: PersonaData[] = [
+    {
+      name: "Avery",
+      role: "Founder",
+      bio: "Leads product direction.",
+      goals: ["Ship quickly"],
+      painPointIds: ["pain-point-1"],
+      quote: "I need strategy to stay in sync.",
+    },
+  ];
+  const journeyMapData: JourneyMapData[] = [{ personaName: "Avery", stages: [] }];
+  const userFlowsData: UserFlow[] = [
+    {
+      id: "flow-1",
+      jtbdIndex: 0,
+      jtbdText: "Keep plans current",
+      personaNames: ["Avery"],
+      steps: [{ nodeId: "home", action: "Reviews strategy changes" }],
+    },
+  ];
+  const keyFeaturesData: KeyFeaturesData = {
+    ideaTitle: "Living handoff",
+    features: [
+      feature({
+        personaNames: ["Avery"],
+      }),
+    ],
+  };
+
+  const result = applyManualPersonasEdit(
+    {
+      manifestoData,
+      personaData,
+      journeyMapData,
+      ideaData: null,
+      selectedIdeaId: null,
+      keyFeaturesData,
+      userFlowsData,
+    },
+    [],
+  );
+
+  assert.deepEqual(result.personaData, []);
+  assert.deepEqual(result.manifestoData?.jtbd[0]?.personaNames, []);
+  assert.deepEqual(result.journeyMapData, []);
+  assert.deepEqual(result.userFlowsData?.[0]?.personaNames, []);
+  assert.deepEqual(result.keyFeaturesData?.features[0]?.personaNames, []);
 });
 
 test("manifesto edits reindex exact JTBD matches and prune removed flows", () => {
@@ -197,6 +368,68 @@ test("manifesto edits reindex exact JTBD matches and prune removed flows", () =>
   );
 
   assert.deepEqual(pruned.userFlowsData?.map((flow) => flow.id), ["flow-1"]);
+});
+
+test("manifesto edits prune invalid HMW JTBD links while reindexing flows", () => {
+  const manifestoData: ManifestoData = {
+    title: "Novum",
+    problemStatement: "Planning gets lost before build.",
+    targetUser: "Product teams",
+    environmentContext: "Inside product planning and handoff review sessions.",
+    painPoints: [painPoint("pain-point-1", "Plans drift after kickoff")],
+    jtbd: [jtbd("jtbd-1", "Track strategy changes"), jtbd("jtbd-2", "Ship aligned updates")],
+    hmw: [
+      hmw("hmw-1", "How might we keep plans current?", {
+        jtbdIds: ["jtbd-1", "jtbd-2"],
+      }),
+    ],
+  };
+  const userFlowsData: UserFlow[] = [
+    {
+      id: "flow-1",
+      jtbdIndex: 1,
+      jtbdText: "Ship aligned updates",
+      personaNames: ["Avery"],
+      steps: [{ nodeId: "editor", action: "Publishes the update" }],
+    },
+  ];
+
+  const result = applyManualManifestoEdit(
+    {
+      manifestoData,
+      personaData: null,
+      journeyMapData: null,
+      ideaData: null,
+      selectedIdeaId: null,
+      keyFeaturesData: null,
+      userFlowsData,
+    },
+    {
+      ...manifestoData,
+      jtbd: [jtbd("jtbd-2", "Ship aligned updates")],
+      hmw: [
+        hmw("hmw-1", "How might we keep plans current?", {
+          jtbdIds: ["jtbd-1", "jtbd-2"],
+        }),
+      ],
+    },
+  );
+
+  assert.deepEqual(result.manifestoData.hmw[0]?.jtbdIds, ["jtbd-2"]);
+  assert.deepEqual(
+    result.userFlowsData?.map((flow) => ({
+      id: flow.id,
+      jtbdIndex: flow.jtbdIndex,
+      jtbdText: flow.jtbdText,
+    })),
+    [
+      {
+        id: "flow-1",
+        jtbdIndex: 0,
+        jtbdText: "Ship aligned updates",
+      },
+    ],
+  );
 });
 
 test("normalizeManifestoData preserves JTBD pain-point ids when canonical pain points have explicit ids", () => {

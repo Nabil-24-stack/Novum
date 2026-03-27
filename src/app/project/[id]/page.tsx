@@ -58,7 +58,7 @@ import {
   applyManualJourneyMapEdit,
   applyManualKeyFeaturesEdit,
   applyManualManifestoEdit,
-  applyManualPersonaEdit,
+  applyManualPersonasEdit,
   applyManualUserFlowEdit,
 } from "@/lib/strategy/artifact-edit-sync";
 import { buildPainPointOptions, resolvePainPointsByIds } from "@/lib/strategy/pain-points";
@@ -542,8 +542,8 @@ export default function ProjectEditor() {
     userFlowsData,
   ]);
 
-  const handlePersonaCommit = useCallback((personaIndex: number, nextPersona: NonNullable<typeof personaData>[number]) => {
-    const result = applyManualPersonaEdit(
+  const handlePersonasBoardCommit = useCallback((nextPersonas: NonNullable<typeof personaData>) => {
+    const result = applyManualPersonasEdit(
       {
         manifestoData,
         personaData,
@@ -553,10 +553,12 @@ export default function ProjectEditor() {
         keyFeaturesData,
         userFlowsData,
       },
-      personaIndex,
-      nextPersona
+      nextPersonas
     );
 
+    if (result.manifestoData !== null) {
+      useStrategyStore.getState().setManifestoData(result.manifestoData);
+    }
     useStrategyStore.getState().setPersonaData(result.personaData);
     if (result.journeyMapData !== null) {
       useStrategyStore.getState().setJourneyMapData(result.journeyMapData);
@@ -3105,6 +3107,7 @@ export default function ProjectEditor() {
                   x={g.x}
                   y={g.y}
                   onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("jtbd-clusters", { x: nx, y: ny }))}
+                  onCommit={manifestoData ? handleManifestoCommit : undefined}
                   isSelected={activeArtifactId === "jtbd-clusters"}
                   onSelect={() => selectArtifact("jtbd-clusters")}
                   onSingleClickConfirmed={() => scopeArtifactToChat("jtbd-clusters")}
@@ -3128,6 +3131,7 @@ export default function ProjectEditor() {
                   x={g.x}
                   y={g.y}
                   onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("personas", { x: nx, y: ny }))}
+                  onCommit={personaData ? handlePersonasBoardCommit : undefined}
                   isSelected={activeArtifactId === "personas"}
                   onSelect={() => selectArtifact("personas")}
                   onSingleClickConfirmed={() => scopeArtifactToChat("personas")}
@@ -3151,6 +3155,7 @@ export default function ProjectEditor() {
                   x={g.x}
                   y={g.y}
                   onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("opportunity-map", { x: nx, y: ny }))}
+                  onCommit={manifestoData ? handleManifestoCommit : undefined}
                   isSelected={activeArtifactId === "opportunity-map"}
                   onSelect={() => selectArtifact("opportunity-map")}
                   onSingleClickConfirmed={() => scopeArtifactToChat("opportunity-map")}

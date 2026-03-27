@@ -20,6 +20,7 @@ import {
   ARTIFACT_IDLE_CARD_CLASSNAME,
   ARTIFACT_SELECTED_CARD_CLASSNAME,
   AddListItemButton,
+  CheckboxSelector,
   EditModeActions,
   ReadOnlyEditHint,
   RemoveListItemButton,
@@ -579,7 +580,7 @@ function EditableJtbdList(props: {
                 onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}
               />
             </div>
-            <IdSelector
+            <CheckboxSelector
               label="Source pain points"
               description="Link this JTBD to the canonical pain points it synthesizes."
               options={painPointOptions.map((painPoint) => ({
@@ -594,6 +595,7 @@ function EditableJtbdList(props: {
                   )
                 )
               }
+              containerClassName="rounded-lg border border-neutral-200 bg-white p-3"
             />
           </div>
         ))}
@@ -647,7 +649,7 @@ function EditableHmwList(props: {
                 onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}
               />
             </div>
-            <IdSelector
+            <CheckboxSelector
               label="Linked JTBDs"
               description="Connect this HMW to the JTBDs it reframes."
               options={jtbdOptions.map((jtbd) => ({
@@ -662,8 +664,9 @@ function EditableHmwList(props: {
                   )
                 )
               }
+              containerClassName="rounded-lg border border-neutral-200 bg-white p-3"
             />
-            <IdSelector
+            <CheckboxSelector
               label="Linked pain points"
               description="Connect this HMW to the canonical pain points it opens up."
               options={painPointOptions.map((painPoint) => ({
@@ -678,59 +681,11 @@ function EditableHmwList(props: {
                   )
                 )
               }
+              containerClassName="rounded-lg border border-neutral-200 bg-white p-3"
             />
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-function IdSelector(props: {
-  label: string;
-  description: string;
-  options: { id: string; label: string }[];
-  selectedIds: string[];
-  onChange: (ids: string[]) => void;
-}) {
-  const { label, description, options, selectedIds, onChange } = props;
-
-  return (
-    <div className="space-y-2 rounded-lg border border-neutral-200 bg-white p-3">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
-        <p className="mt-1 text-xs text-neutral-500">{description}</p>
-      </div>
-
-      {options.length > 0 ? (
-        <div className="space-y-2">
-          {options.map((option) => {
-            const checked = selectedIds.includes(option.id);
-            return (
-              <label
-                key={option.id}
-                className="flex cursor-pointer items-start gap-2 rounded-lg border border-transparent px-2 py-2 text-sm hover:border-neutral-200"
-              >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={(event) =>
-                    onChange(
-                      event.target.checked
-                        ? [...selectedIds, option.id]
-                        : selectedIds.filter((id) => id !== option.id)
-                    )
-                  }
-                  className="mt-0.5 h-4 w-4 rounded border-neutral-300"
-                />
-                <span className="block text-sm text-neutral-800">{option.label}</span>
-              </label>
-            );
-          })}
-        </div>
-      ) : (
-        <p className="text-xs text-neutral-500">No options available yet.</p>
-      )}
     </div>
   );
 }

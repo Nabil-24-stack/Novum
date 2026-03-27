@@ -456,6 +456,82 @@ function buildJtbdIndexMap(previousJtbds: ManifestoData["jtbd"], nextJtbds: Mani
   return indexMap;
 }
 
+function isMeaningfulPersona(persona: PersonaData): boolean {
+  return Boolean(
+    trimText(persona.name) ||
+    trimText(persona.role) ||
+    trimText(persona.bio) ||
+    trimText(persona.quote) ||
+    persona.goals.length > 0 ||
+    persona.painPointIds.length > 0
+  );
+}
+
+function normalizePersonaDraftEntries(
+  personas: PersonaData[],
+  painPointRegistry: TraceableTextItem[]
+): Array<{
+  persona: PersonaData;
+  draftId: string | null;
+}> {
+  return personas
+    .map((persona) => {
+      const draftId = typeof (persona as { __draftId?: unknown }).__draftId === "string"
+        ? (persona as { __draftId?: string }).__draftId ?? null
+        : null;
+
+      return {
+        persona: normalizePersonaData(persona, painPointRegistry),
+        draftId,
+      };
+    })
+    .filter((entry) => isMeaningfulPersona(entry.persona));
+}
+
+function getMappedPreviousPersonaIndex(
+  draftId: string | null,
+  fallbackIndex: number,
+  previousCount: number,
+  usedPreviousIndexes: Set<number>
+): number | null {
+  if (draftId !== null) {
+    const draftIdMatch = draftId.match(/^existing-(\d+)$/);
+    if (!draftIdMatch) {
+      return null;
+    }
+
+    const parsedIndex = Number.parseInt(draftIdMatch[1] ?? "", 10);
+    if (
+      Number.isInteger(parsedIndex) &&
+      parsedIndex >= 0 &&
+      parsedIndex < previousCount &&
+        !usedPreviousIndexes.has(parsedIndex)
+    ) {
+      return parsedIndex;
+    }
+
+    return null;
+  }
+
+  if (fallbackIndex >= 0 && fallbackIndex < previousCount && !usedPreviousIndexes.has(fallbackIndex)) {
+    return fallbackIndex;
+  }
+
+  return null;
+}
+
+function remapPersonaNameList(
+  names: string[] | null | undefined,
+  renameMap: Map<string, string>,
+  validPersonaNames: Set<string>
+): string[] {
+  return [...new Set(
+    normalizeStringList(names)
+      .map((name) => renameMap.get(name) ?? name)
+      .filter((name) => validPersonaNames.has(name))
+  )];
+}
+
 export function applyManualManifestoEdit(
   state: StrategyArtifactState,
   nextManifesto: ManifestoData
@@ -564,31 +640,90 @@ export function applyManualPersonaEdit(
   personaIndex: number,
   nextPersona: PersonaData
 ): {
+  manifestoData: ManifestoData | null;
   personaData: PersonaData[];
   journeyMapData: JourneyMapData[] | null;
   keyFeaturesData: KeyFeaturesData | null;
   userFlowsData: UserFlow[] | null;
 } {
-  const normalizedPersona = normalizePersonaData(nextPersona, state.manifestoData?.painPoints ?? []);
-  const previousName = state.personaData?.[personaIndex]?.name ?? "";
-  const nextName = normalizedPersona.name;
-  const personaData = replaceAtIndex(state.personaData, personaIndex, normalizedPersona);
+  return applyManualPersonasEdit(
+    state,
+    replaceAtIndex(state.personaData, personaIndex, nextPersona)
+  );
+}
+
+export function applyManualPersonasEdit(
+  state: StrategyArtifactState,
+  nextPersonas: PersonaData[]
+): {
+  manifestoData: ManifestoData | null;
+  personaData: PersonaData[];
+  journeyMapData: JourneyMapData[] | null;
+  keyFeaturesData: KeyFeaturesData | null;
+  userFlowsData: UserFlow[] | null;
+} {
+  const previousPersonas = state.personaData ?? [];
+  const normalizedEntries = normalizePersonaDraftEntries(
+    nextPersonas,
+    state.manifestoData?.painPoints ?? []
+  );
+  const personaData = normalizedEntries.map((entry) => entry.persona);
+  const validPersonaNames = new Set(
+    personaData.map((persona) => trimText(persona.name)).filter(Boolean)
+  );
+  const usedPreviousIndexes = new Set<number>();
+  const renameMap = new Map<string, string>();
+
+  normalizedEntries.forEach((entry, nextIndex) => {
+    const previousIndex = getMappedPreviousPersonaIndex(
+      entry.draftId,
+      nextIndex,
+      previousPersonas.length,
+      usedPreviousIndexes
+    );
+    if (previousIndex === null) return;
+
+    usedPreviousIndexes.add(previousIndex);
+    const previousName = trimText(previousPersonas[previousIndex]?.name);
+    const nextName = trimText(entry.persona.name);
+    if (!previousName || !nextName) return;
+    renameMap.set(previousName, nextName);
+  });
+
+  const manifestoData = state.manifestoData
+    ? normalizeManifestoData(
+        {
+          ...state.manifestoData,
+          jtbd: state.manifestoData.jtbd.map((jtbd) => ({
+            ...jtbd,
+            personaNames: remapPersonaNameList(jtbd.personaNames, renameMap, validPersonaNames),
+          })),
+        },
+        {
+          fallbackPainPoints: buildFallbackPainPointsFromLegacyPersonas(personaData as unknown[]),
+          validPersonaNames: [...validPersonaNames],
+        }
+      )
+    : null;
 
   const journeyMapData = state.journeyMapData
-    ? state.journeyMapData.map((journeyMap) =>
-        journeyMap.personaName === previousName
-          ? normalizeJourneyMapData({ ...journeyMap, personaName: nextName }, state.manifestoData?.painPoints ?? [])
-          : journeyMap
-      )
+    ? state.journeyMapData
+        .map((journeyMap) => {
+          const nextName = renameMap.get(journeyMap.personaName) ?? journeyMap.personaName;
+          if (!validPersonaNames.has(nextName)) return null;
+          return normalizeJourneyMapData(
+            { ...journeyMap, personaName: nextName },
+            manifestoData?.painPoints ?? state.manifestoData?.painPoints ?? []
+          );
+        })
+        .filter((journeyMap): journeyMap is JourneyMapData => Boolean(journeyMap))
     : null;
 
   const userFlowsData = state.userFlowsData
     ? state.userFlowsData.map((flow) =>
         normalizeUserFlowData({
           ...flow,
-          personaNames: flow.personaNames.map((personaName) =>
-            personaName === previousName ? nextName : personaName
-          ),
+          personaNames: remapPersonaNameList(flow.personaNames, renameMap, validPersonaNames),
         })
       )
     : null;
@@ -599,17 +734,16 @@ export function applyManualPersonaEdit(
           ...state.keyFeaturesData,
           features: state.keyFeaturesData.features.map((feature) => ({
             ...feature,
-            personaNames: (feature.personaNames ?? []).map((personaName) =>
-              personaName === previousName ? nextName : personaName
-            ),
+            personaNames: remapPersonaNameList(feature.personaNames, renameMap, validPersonaNames),
           })),
         },
-        state.manifestoData,
+        manifestoData ?? state.manifestoData,
         personaData
       )
     : null;
 
   return {
+    manifestoData,
     personaData,
     journeyMapData,
     keyFeaturesData,
