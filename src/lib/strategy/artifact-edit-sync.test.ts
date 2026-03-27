@@ -25,7 +25,28 @@ import type {
 } from "../../hooks/useStrategyStore.ts";
 import type { InsightData } from "../../hooks/useDocumentStore.ts";
 
-const jtbd = (id: string, text: string) => ({ id, text });
+const jtbd = (
+  id: string,
+  text: string,
+  overrides: { painPointIds?: string[]; personaNames?: string[] } = {}
+) => ({
+  id,
+  text,
+  painPointIds: [],
+  personaNames: [],
+  ...overrides,
+});
+const hmw = (
+  id: string,
+  text: string,
+  overrides: { jtbdIds?: string[]; painPointIds?: string[] } = {}
+) => ({
+  id,
+  text,
+  jtbdIds: [],
+  painPointIds: [],
+  ...overrides,
+});
 const painPoint = (id: string, text: string) => ({ id, text });
 const feature = (
   overrides: Partial<KeyFeaturesData["features"][number]> = {}
@@ -34,8 +55,10 @@ const feature = (
   name: "Delta export",
   description: "Download changed sections.",
   priority: "high",
+  kind: "core",
+  supportingJustification: "",
   jtbdIds: ["jtbd-1"],
-  painPointIds: [],
+  painPointIds: ["pain-point-1"],
   ...overrides,
 });
 const insight = (overrides: Partial<InsightData> = {}): InsightData => ({
@@ -52,7 +75,7 @@ test("persona renames propagate to linked journey maps and user flows", () => {
       role: "Founder",
       bio: "Leads product direction.",
       goals: ["Ship quickly"],
-      painPoints: [painPoint("persona-pain-1", "Context gets lost")],
+      painPointIds: ["pain-point-1"],
       quote: "I need strategy to stay in sync.",
     },
   ];
@@ -100,8 +123,9 @@ test("manifesto edits reindex exact JTBD matches and prune removed flows", () =>
     problemStatement: "Planning gets lost before build.",
     targetUser: "Product teams",
     environmentContext: "Inside product planning and handoff review sessions.",
+    painPoints: [painPoint("pain-point-1", "Plans drift after kickoff")],
     jtbd: [jtbd("jtbd-1", "Track strategy changes"), jtbd("jtbd-2", "Ship aligned updates")],
-    hmw: ["How might we keep plans current?"],
+    hmw: [hmw("hmw-1", "How might we keep plans current?", { jtbdIds: ["jtbd-1"] })],
   };
   const userFlowsData: UserFlow[] = [
     {
@@ -175,6 +199,31 @@ test("manifesto edits reindex exact JTBD matches and prune removed flows", () =>
   assert.deepEqual(pruned.userFlowsData?.map((flow) => flow.id), ["flow-1"]);
 });
 
+test("normalizeManifestoData preserves JTBD pain-point ids when canonical pain points have explicit ids", () => {
+  const result = normalizeManifestoData({
+    title: "Novum",
+    problemStatement: "Planning gets lost before build.",
+    targetUser: "Product teams",
+    environmentContext: "Inside product planning and handoff review sessions.",
+    painPoints: [
+      painPoint("pain-point-1", "Plans drift after kickoff"),
+      painPoint("pain-point-2", "Handoffs go stale before implementation"),
+    ],
+    jtbd: [
+      jtbd("jtbd-1", "Track strategy changes", {
+        painPointIds: ["pain-point-1", "pain-point-2"],
+      }),
+    ],
+    hmw: [],
+  });
+
+  assert.deepEqual(
+    result.painPoints?.map((item) => item.id),
+    ["pain-point-1", "pain-point-2"],
+  );
+  assert.deepEqual(result.jtbd[0].painPointIds, ["pain-point-1", "pain-point-2"]);
+});
+
 test("selected idea title edits keep key-features title in sync when it matched", () => {
   const ideaData: IdeaData[] = [
     { id: "idea-1", title: "Living handoff", description: "A canvas-native PRD.", illustration: "" },
@@ -212,8 +261,9 @@ test("resolveArtifactDraftChange treats cloned manifesto drafts as unchanged", (
     problemStatement: "Planning gets lost before build.",
     targetUser: "Product teams",
     environmentContext: "Inside product planning and handoff review sessions.",
+    painPoints: [painPoint("pain-point-1", "Plans drift after kickoff")],
     jtbd: [jtbd("jtbd-1", "Keep plans current")],
-    hmw: ["How might we reduce stale handoffs?"],
+    hmw: [hmw("hmw-1", "How might we reduce stale handoffs?", { jtbdIds: ["jtbd-1"] })],
   };
 
   const result = resolveArtifactDraftChange({
@@ -265,7 +315,7 @@ test("resolveArtifactDraftChange ignores whitespace-only insight and persona edi
     role: "Founder",
     bio: "Leads the team.",
     goals: ["Ship quickly"],
-    painPoints: [painPoint("persona-pain-1", "Context drifts")],
+    painPointIds: ["pain-point-1"],
     quote: "I need the plan to stay current.",
   };
 
@@ -314,7 +364,8 @@ test("resolveArtifactDraftChange ignores canonicalized empty journey stages", ()
     actions: [" "],
     thoughts: [],
     emotion: " ",
-    painPoints: [],
+    painPointIds: [],
+    frictionNotes: [],
     opportunities: [],
   };
 
@@ -407,16 +458,18 @@ test("normalizers trim text and remove empty list items", () => {
       problemStatement: "  Planning gets lost  ",
       targetUser: " Product teams ",
       environmentContext: " During planning reviews ",
+      painPoints: [painPoint("pain-point-1", " Context drifts "), painPoint("pain-point-2", " ")],
       jtbd: [jtbd("jtbd-1", " Keep context "), jtbd("jtbd-2", " "), jtbd("jtbd-3", "")],
-      hmw: [" How might we keep plans current? ", ""],
+      hmw: [hmw("hmw-1", " How might we keep plans current? "), hmw("hmw-2", " ")],
     }),
     {
       title: "Novum",
       problemStatement: "Planning gets lost",
       targetUser: "Product teams",
       environmentContext: "During planning reviews",
+      painPoints: [painPoint("pain-point-1", "Context drifts")],
       jtbd: [jtbd("jtbd-1", "Keep context")],
-      hmw: ["How might we keep plans current?"],
+      hmw: [hmw("hmw-1", "How might we keep plans current?")],
     }
   );
 
@@ -430,7 +483,20 @@ test("normalizers trim text and remove empty list items", () => {
     }),
     {
       ideaTitle: "Living handoff",
-      features: [feature()],
+      features: [
+        {
+          id: "feature-1",
+          name: "Delta export",
+          description: "Download changed sections.",
+          priority: "high",
+          kind: "core",
+          supportingJustification: "",
+          hmwIds: [],
+          jtbdIds: ["jtbd-1"],
+          personaNames: [],
+          painPointIds: [],
+        },
+      ],
     }
   );
 });

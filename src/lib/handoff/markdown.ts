@@ -29,42 +29,130 @@ function stableStringify(value: unknown): string {
 }
 
 function getJtbdRegistry(snapshot: HandoffSnapshot) {
-  return new Map((snapshot.productOverview?.jtbd ?? []).map((jtbd) => [jtbd.id, jtbd.text]));
+  return new Map((snapshot.productOverview?.jtbd ?? []).map((jtbd) => [jtbd.id, jtbd]));
+}
+
+function getHmwRegistry(snapshot: HandoffSnapshot) {
+  return new Map((snapshot.productOverview?.hmw ?? []).map((hmw) => [hmw.id, hmw]));
 }
 
 function getPainPointRegistry(snapshot: HandoffSnapshot) {
-  const registry = new Map<string, string>();
-
-  for (const persona of snapshot.personas ?? []) {
-    for (const painPoint of persona.painPoints) {
-      registry.set(painPoint.id, painPoint.text);
-    }
-  }
-
-  for (const journeyMap of snapshot.journeyHighlights ?? []) {
-    for (const stage of journeyMap.stages) {
-      for (const painPoint of stage.painPoints) {
-        registry.set(painPoint.id, painPoint.text);
-      }
-    }
-  }
-
-  return registry;
+  return new Map((snapshot.productOverview?.painPoints ?? []).map((painPoint) => [painPoint.id, painPoint.text]));
 }
 
-function buildPainPointShortLabel(text: string): string {
-  const firstClause =
-    text
-      .split(/\s(?:-|--|---)\s|\s[–—]\s|[;|]/)
-      .map((part) => part.trim())
-      .find(Boolean) ?? text.trim();
-  const normalized = firstClause.replace(/["']/g, "").replace(/\s+/g, " ").trim().toLowerCase();
-  if (!normalized) return "unknown pain point";
-  if (normalized.length <= 48) return normalized;
+function formatPainPointRefs(painPointIds: string[], snapshot: HandoffSnapshot): string {
+  const registry = getPainPointRegistry(snapshot);
+  if (painPointIds.length === 0) return "Not linked yet.";
+  return painPointIds
+    .map((painPointId) => `${painPointId}: ${registry.get(painPointId) ?? "Unknown pain point"}`)
+    .join("; ");
+}
 
-  const truncated = normalized.slice(0, 48);
-  const lastSpace = truncated.lastIndexOf(" ");
-  return `${(lastSpace > 24 ? truncated.slice(0, lastSpace) : truncated).trim()}...`;
+function formatJtbdRefs(jtbdIds: string[], snapshot: HandoffSnapshot): string {
+  const registry = getJtbdRegistry(snapshot);
+  if (jtbdIds.length === 0) return "Not linked yet.";
+  return jtbdIds
+    .map((jtbdId) => `${jtbdId}: ${registry.get(jtbdId)?.text ?? "Unknown JTBD"}`)
+    .join("; ");
+}
+
+function formatHmwRefs(hmwIds: string[], snapshot: HandoffSnapshot): string {
+  const registry = getHmwRegistry(snapshot);
+  if (hmwIds.length === 0) return "Not linked yet.";
+  return hmwIds
+    .map((hmwId) => `${hmwId}: ${registry.get(hmwId)?.text ?? "Unknown HMW"}`)
+    .join("; ");
+}
+
+function getPersonaNamesForHmw(hmwId: string, snapshot: HandoffSnapshot): string[] {
+  const hmw = getHmwRegistry(snapshot).get(hmwId);
+  if (!hmw) return [];
+  const jtbdRegistry = getJtbdRegistry(snapshot);
+  const personaNames = new Set<string>();
+
+  for (const jtbdId of hmw.jtbdIds ?? []) {
+    for (const personaName of jtbdRegistry.get(jtbdId)?.personaNames ?? []) {
+      personaNames.add(personaName);
+    }
+  }
+
+  return [...personaNames];
+}
+
+function buildProblemStatement(snapshot: HandoffSnapshot): string {
+  return [
+    `- Core Problem: ${formatText(snapshot.productOverview?.problemStatement)}`,
+    `- Target Users: ${formatText(snapshot.productOverview?.targetUser)}`,
+  ].join("\n");
+}
+
+function buildPainPoints(snapshot: HandoffSnapshot): string {
+  const painPoints = snapshot.productOverview?.painPoints ?? [];
+  if (painPoints.length === 0) {
+    return "- Pain points have not been captured yet.";
+  }
+
+  return bulletList(painPoints.map((painPoint) => `${painPoint.id}: ${painPoint.text}`));
+}
+
+function buildJtbdClusters(snapshot: HandoffSnapshot): string {
+  const jtbds = snapshot.productOverview?.jtbd ?? [];
+  if (jtbds.length === 0) {
+    return "- JTBD clusters have not been captured yet.";
+  }
+
+  return jtbds
+    .map((jtbd) =>
+      [
+        `### ${jtbd.id}`,
+        `- Job: ${jtbd.text}`,
+        `- Personas: ${(jtbd.personaNames ?? []).join(", ") || "Not linked yet."}`,
+        `- Pain Points: ${formatPainPointRefs(jtbd.painPointIds ?? [], snapshot)}`,
+      ].join("\n")
+    )
+    .join("\n\n");
+}
+
+function buildPersonaCoverage(snapshot: HandoffSnapshot): string {
+  const personas = snapshot.personas ?? [];
+  const jtbds = snapshot.productOverview?.jtbd ?? [];
+  if (personas.length === 0) {
+    return "- Persona coverage has not been finalized yet.";
+  }
+
+  return personas
+    .map((persona) => {
+      const supportedJtbds = jtbds.filter((jtbd) => (jtbd.personaNames ?? []).includes(persona.name));
+      return [
+        `### ${persona.name}`,
+        `- Role: ${formatText(persona.role)}`,
+        `- Bio: ${formatText(persona.bio)}`,
+        `- Goals: ${persona.goals.length > 0 ? persona.goals.join("; ") : "Not specified yet."}`,
+        `- Supports JTBDs: ${supportedJtbds.length > 0 ? supportedJtbds.map((jtbd) => `${jtbd.id}: ${jtbd.text}`).join("; ") : "Not linked yet."}`,
+        `- Pain Points: ${formatPainPointRefs(persona.painPointIds, snapshot)}`,
+        `- Quote: ${formatText(persona.quote)}`,
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+function buildHowMightWeOpportunities(snapshot: HandoffSnapshot): string {
+  const hmw = snapshot.productOverview?.hmw ?? [];
+  if (hmw.length === 0) {
+    return "- How Might We opportunities have not been captured yet.";
+  }
+
+  return hmw
+    .map((item) =>
+      [
+        `### ${item.id}`,
+        `- Opportunity: ${item.text}`,
+        `- JTBDs: ${formatJtbdRefs(item.jtbdIds ?? [], snapshot)}`,
+        `- Personas: ${getPersonaNamesForHmw(item.id, snapshot).join(", ") || "Not linked yet."}`,
+        `- Pain Points: ${formatPainPointRefs(item.painPointIds ?? [], snapshot)}`,
+      ].join("\n")
+    )
+    .join("\n\n");
 }
 
 function formatInsightLine(insight: NonNullable<HandoffSnapshot["insights"]>["insights"][number]): string {
@@ -72,67 +160,6 @@ function formatInsightLine(insight: NonNullable<HandoffSnapshot["insights"]>["in
   if (insight.sourceDocument) parts.push(`Source: ${insight.sourceDocument}`);
   if (insight.quote) parts.push(`Quote: "${insight.quote}"`);
   return parts.join(" | ");
-}
-
-function buildProblemStatement(snapshot: HandoffSnapshot): string {
-  return [
-    `- Title: ${formatText(snapshot.productOverview?.title)}`,
-    `- Core Problem: ${formatText(snapshot.productOverview?.problemStatement)}`,
-    `- Target User: ${formatText(snapshot.productOverview?.targetUser)}`,
-    `- Environment / Usage Context: ${formatText(snapshot.productOverview?.environmentContext)}`,
-  ].join("\n");
-}
-
-function buildJobsToBeDone(snapshot: HandoffSnapshot): string {
-  return bulletList(
-    (snapshot.productOverview?.jtbd ?? []).map((jtbd) => `${jtbd.id}: ${jtbd.text}`)
-  );
-}
-
-function buildPersonas(snapshot: HandoffSnapshot): string {
-  const personas = snapshot.personas ?? [];
-  if (personas.length === 0) {
-    return "- Personas have not been finalized yet.";
-  }
-
-  return personas
-    .map((persona) =>
-      [
-        `### ${persona.name}`,
-        `- Role: ${formatText(persona.role)}`,
-        `- Bio: ${formatText(persona.bio)}`,
-        `- Goals: ${persona.goals.length > 0 ? persona.goals.join("; ") : "Not specified yet."}`,
-        `- Pain Points: ${
-          persona.painPoints.length > 0
-            ? persona.painPoints.map((painPoint) => `${painPoint.id}: ${painPoint.text}`).join("; ")
-            : "Not specified yet."
-        }`,
-        `- Quote: ${formatText(persona.quote)}`,
-      ].join("\n")
-    )
-    .join("\n\n");
-}
-
-function buildJourneyBreakpoints(snapshot: HandoffSnapshot): string {
-  const journeyMaps = snapshot.journeyHighlights ?? [];
-  if (journeyMaps.length === 0) {
-    return "- Journey breakpoints have not been captured yet.";
-  }
-
-  return journeyMaps
-    .map((journeyMap) => {
-      const lines = journeyMap.stages.map((stage) => {
-        const painPoints =
-          stage.painPoints.length > 0
-            ? stage.painPoints.map((painPoint) => `${painPoint.id}: ${painPoint.text}`).join("; ")
-            : "No pain points captured.";
-        const opportunities =
-          stage.opportunities.length > 0 ? stage.opportunities.join("; ") : "No opportunities captured.";
-        return `- ${stage.stage}: Pain Points: ${painPoints} | Opportunities: ${opportunities}`;
-      });
-      return [`### ${journeyMap.personaName}`, ...lines].join("\n");
-    })
-    .join("\n\n");
 }
 
 function buildResearchInsights(snapshot: HandoffSnapshot): string {
@@ -168,67 +195,28 @@ function buildSelectedSolution(snapshot: HandoffSnapshot): string {
   ].join("\n");
 }
 
-function getJtbdPersonaRegistry(snapshot: HandoffSnapshot) {
-  const jtbdItems = snapshot.productOverview?.jtbd ?? [];
-  const registry = new Map<string, string[]>();
-
-  for (const flow of snapshot.userFlows ?? []) {
-    const jtbdId = jtbdItems[flow.jtbdIndex]?.id;
-    if (!jtbdId) continue;
-
-    const existing = registry.get(jtbdId) ?? [];
-    for (const personaName of flow.personaNames) {
-      if (!existing.includes(personaName)) {
-        existing.push(personaName);
-      }
-    }
-    registry.set(jtbdId, existing);
-  }
-
-  return registry;
-}
-
 function buildFeatures(snapshot: HandoffSnapshot): string {
-  const features = getExportableFeatures(snapshot.keyFeatures);
+  const features = getExportableFeatures(snapshot.keyFeatures, snapshot.productOverview);
   if (features.length === 0) {
     return "- No linked features are ready for build yet.";
   }
 
-  const jtbdRegistry = getJtbdRegistry(snapshot);
-  const painPointRegistry = getPainPointRegistry(snapshot);
-  const jtbdPersonaRegistry = getJtbdPersonaRegistry(snapshot);
-
   return features
-    .map((feature) => {
-      const jtbdRefs =
-        feature.jtbdIds
-          .map((jtbdId) => {
-            const personaNames = jtbdPersonaRegistry.get(jtbdId) ?? [];
-            const personaSuffix =
-              personaNames.length > 0 ? ` (Personas: ${personaNames.join(", ")})` : "";
-            return `${jtbdId}: ${jtbdRegistry.get(jtbdId) ?? "Unknown JTBD"}${personaSuffix}`;
-          })
-          .join("; ");
-      const painPointRefs =
-        feature.painPointIds.length > 0
-          ? feature.painPointIds
-              .map((painPointId) => {
-                const painPointText = painPointRegistry.get(painPointId);
-                return painPointText
-                  ? `${painPointId} (${buildPainPointShortLabel(painPointText)})`
-                  : `${painPointId} (unknown pain point)`;
-              })
-              .join("; ")
-          : "None linked.";
-
-      return [
+    .map((feature) =>
+      [
         `### ${feature.id}: ${feature.name}`,
+        `- Type: ${feature.kind === "supporting" ? "Supporting" : "Core"}`,
         `- Priority: ${feature.priority}`,
         `- Why It Exists: ${formatText(feature.description)}`,
-        `- Solves For: ${jtbdRefs}`,
-        `- Resolves Pain Points: ${painPointRefs}`,
-      ].join("\n");
-    })
+        ...(feature.kind === "supporting" && feature.supportingJustification
+          ? [`- Supporting Justification: ${formatText(feature.supportingJustification)}`]
+          : []),
+        `- HMWs: ${formatHmwRefs(feature.hmwIds ?? [], snapshot)}`,
+        `- JTBDs: ${formatJtbdRefs(feature.jtbdIds, snapshot)}`,
+        `- Personas: ${(feature.personaNames ?? []).join(", ") || "Not linked yet."}`,
+        `- Pain Points: ${formatPainPointRefs(feature.painPointIds, snapshot)}`,
+      ].join("\n")
+    )
     .join("\n\n");
 }
 
@@ -299,19 +287,19 @@ function buildScreenDescriptions(snapshot: HandoffSnapshot): string {
 
   const jtbdRegistry = getJtbdRegistry(snapshot);
   const featureRegistry = new Map(
-    getExportableFeatures(snapshot.keyFeatures).map((feature) => [feature.id, feature])
+    getExportableFeatures(snapshot.keyFeatures, snapshot.productOverview).map((feature) => [feature.id, feature])
   );
   const pageTraceability = resolvePageTraceability(snapshot);
 
   return pageTraceability
-    .map((page) => {
-      return [
+    .map((page) =>
+      [
         `### ${page.pageId}: ${page.pageLabel}`,
         `- Purpose: ${formatText(page.pageDescription)}`,
         `- Supports JTBDs: ${
           page.jtbdIds.length > 0
             ? page.jtbdIds
-                .map((jtbdId) => `${jtbdId}: ${jtbdRegistry.get(jtbdId) ?? "Unknown JTBD"}`)
+                .map((jtbdId) => `${jtbdId}: ${jtbdRegistry.get(jtbdId)?.text ?? "Unknown JTBD"}`)
                 .join("; ")
             : UNRESOLVED_JTBD_LINKAGE_TEXT
         }`,
@@ -325,8 +313,8 @@ function buildScreenDescriptions(snapshot: HandoffSnapshot): string {
                 .join("; ")
             : UNRESOLVED_FEATURE_LINKAGE_TEXT
         }`,
-      ].join("\n");
-    })
+      ].join("\n")
+    )
     .join("\n\n");
 }
 
@@ -390,6 +378,171 @@ function getChangedPageIds(snapshot: HandoffSnapshot, previousSnapshot: HandoffS
   return [...changedPageIds];
 }
 
+function buildDiscoveryChanges(
+  currentSnapshot: HandoffSnapshot,
+  previousSnapshot: HandoffSnapshot,
+  dirtySections: HandoffDirtySection[],
+): string {
+  const lines: string[] = [];
+
+  if (dirtySections.includes("product-overview")) {
+    const painPointDiff = diffById(
+      currentSnapshot.productOverview?.painPoints ?? [],
+      previousSnapshot.productOverview?.painPoints ?? [],
+      (current, previous) => current.text === previous.text
+    );
+    const jtbdDiff = diffById(
+      currentSnapshot.productOverview?.jtbd ?? [],
+      previousSnapshot.productOverview?.jtbd ?? [],
+      (current, previous) =>
+        current.text === previous.text &&
+        stableStringify(current.painPointIds ?? []) === stableStringify(previous.painPointIds ?? []) &&
+        stableStringify(current.personaNames ?? []) === stableStringify(previous.personaNames ?? [])
+    );
+    const hmwDiff = diffById(
+      currentSnapshot.productOverview?.hmw ?? [],
+      previousSnapshot.productOverview?.hmw ?? [],
+      (current, previous) =>
+        current.text === previous.text &&
+        stableStringify(current.jtbdIds ?? []) === stableStringify(previous.jtbdIds ?? []) &&
+        stableStringify(current.painPointIds ?? []) === stableStringify(previous.painPointIds ?? [])
+    );
+
+    lines.push(
+      ...painPointDiff.added.map((item) => `- Added pain point ${item.id}: ${item.text}`),
+      ...painPointDiff.updated.map((item) => `- Updated pain point ${item.id}: ${item.text}`),
+      ...painPointDiff.removed.map((item) => `- Removed pain point ${item.id}: ${item.text}`),
+      ...jtbdDiff.added.map((item) => `- Added JTBD ${item.id}: ${item.text}`),
+      ...jtbdDiff.updated.map((item) => `- Updated JTBD ${item.id}: ${item.text}`),
+      ...jtbdDiff.removed.map((item) => `- Removed JTBD ${item.id}: ${item.text}`),
+      ...hmwDiff.added.map((item) => `- Added HMW ${item.id}: ${item.text}`),
+      ...hmwDiff.updated.map((item) => `- Updated HMW ${item.id}: ${item.text}`),
+      ...hmwDiff.removed.map((item) => `- Removed HMW ${item.id}: ${item.text}`),
+      `- Problem statement: ${formatText(currentSnapshot.productOverview?.problemStatement)}`,
+      `- Target users: ${formatText(currentSnapshot.productOverview?.targetUser)}`,
+    );
+  }
+
+  if (dirtySections.includes("personas")) {
+    const currentPersonas = (currentSnapshot.personas ?? []).map((persona) => ({ id: persona.name, ...persona }));
+    const previousPersonas = (previousSnapshot.personas ?? []).map((persona) => ({ id: persona.name, ...persona }));
+    const personaDiff = diffById(
+      currentPersonas,
+      previousPersonas,
+      (current, previous) =>
+        current.name === previous.name &&
+        current.role === previous.role &&
+        current.bio === previous.bio &&
+        stableStringify(current.goals) === stableStringify(previous.goals) &&
+        stableStringify(current.painPointIds) === stableStringify(previous.painPointIds) &&
+        current.quote === previous.quote
+    );
+
+    lines.push(
+      ...personaDiff.added.map((item) => `- Added persona ${item.name}`),
+      ...personaDiff.updated.map((item) => `- Updated persona ${item.name}`),
+      ...personaDiff.removed.map((item) => `- Removed persona ${item.name}`),
+    );
+  }
+
+  if (dirtySections.includes("insights")) {
+    const insightDiff = diffById(
+      currentSnapshot.insights?.insights ?? [],
+      previousSnapshot.insights?.insights ?? [],
+      (current, previous) =>
+        current.insight === previous.insight &&
+        current.quote === previous.quote &&
+        current.sourceDocument === previous.sourceDocument
+    );
+
+    lines.push(
+      ...insightDiff.added.map((item) => `- Added research insight ${item.id}: ${item.insight}`),
+      ...insightDiff.updated.map((item) => `- Updated research insight ${item.id}: ${item.insight}`),
+      ...insightDiff.removed.map((item) => `- Removed research insight ${item.id}: ${item.insight}`),
+    );
+  }
+
+  return lines.length > 0 ? lines.join("\n") : "- No discovery-chain changes were detected.";
+}
+
+function buildFeatureTraceabilityChanges(
+  currentSnapshot: HandoffSnapshot,
+  previousSnapshot: HandoffSnapshot,
+  dirtySections: HandoffDirtySection[],
+): string {
+  const lines: string[] = [];
+
+  if (dirtySections.includes("selected-solution") && currentSnapshot.selectedSolution) {
+    lines.push(
+      `- Selected idea: ${currentSnapshot.selectedSolution.id}: ${currentSnapshot.selectedSolution.title}`,
+      `- Why this direction changed: ${formatText(currentSnapshot.selectedSolution.description)}`,
+    );
+  }
+
+  if (dirtySections.includes("key-features")) {
+    const diff = diffById(
+      getExportableFeatures(currentSnapshot.keyFeatures, currentSnapshot.productOverview),
+      getExportableFeatures(previousSnapshot.keyFeatures, previousSnapshot.productOverview),
+      (current, previous) =>
+        current.name === previous.name &&
+        current.description === previous.description &&
+        current.priority === previous.priority &&
+        current.kind === previous.kind &&
+        current.supportingJustification === previous.supportingJustification &&
+        stableStringify(current.hmwIds ?? []) === stableStringify(previous.hmwIds ?? []) &&
+        stableStringify(current.jtbdIds) === stableStringify(previous.jtbdIds) &&
+        stableStringify(current.personaNames ?? []) === stableStringify(previous.personaNames ?? []) &&
+        stableStringify(current.painPointIds) === stableStringify(previous.painPointIds)
+    );
+
+    lines.push(
+      ...diff.added.map((item) => `- Added feature ${item.id}: ${item.name} | HMWs: ${(item.hmwIds ?? []).join(", ") || "none"} | JTBDs: ${item.jtbdIds.join(", ") || "none"} | Personas: ${(item.personaNames ?? []).join(", ") || "none"}`),
+      ...diff.updated.map((item) => `- Updated feature ${item.id}: ${item.name} | HMWs: ${(item.hmwIds ?? []).join(", ") || "none"} | JTBDs: ${item.jtbdIds.join(", ") || "none"} | Personas: ${(item.personaNames ?? []).join(", ") || "none"}`),
+      ...diff.removed.map((item) => `- Removed feature ${item.id}: ${item.name}`),
+    );
+  }
+
+  return lines.length > 0 ? lines.join("\n") : "- No feature-traceability changes were detected.";
+}
+
+function buildBuildImpact(
+  currentSnapshot: HandoffSnapshot,
+  previousSnapshot: HandoffSnapshot,
+  dirtySections: HandoffDirtySection[],
+): string {
+  const changedPageIds = getChangedPageIds(currentSnapshot, previousSnapshot);
+  const affectedJtbdIds = new Set<string>();
+  const affectedPersonaNames = new Set<string>();
+  const currentJtbds = currentSnapshot.productOverview?.jtbd ?? [];
+
+  for (const feature of getExportableFeatures(currentSnapshot.keyFeatures, currentSnapshot.productOverview)) {
+    for (const jtbdId of feature.jtbdIds) affectedJtbdIds.add(jtbdId);
+    for (const personaName of feature.personaNames ?? []) affectedPersonaNames.add(personaName);
+  }
+
+  for (const flow of currentSnapshot.userFlows ?? []) {
+    const jtbdId = currentJtbds[flow.jtbdIndex]?.id;
+    if (jtbdId) affectedJtbdIds.add(jtbdId);
+    for (const personaName of flow.personaNames) affectedPersonaNames.add(personaName);
+  }
+
+  const architectureChanged = dirtySections.includes("information-architecture");
+  const flowsChanged = dirtySections.includes("user-flows");
+
+  return [
+    `- Changed sections: ${dirtySections.map((section) => HANDOFF_SECTION_LABELS[section]).join(", ") || "None"}.`,
+    `- Revisit JTBD coverage for: ${affectedJtbdIds.size > 0 ? [...affectedJtbdIds].join(", ") : "No JTBD refs available."}`,
+    `- Revisit persona coverage for: ${affectedPersonaNames.size > 0 ? [...affectedPersonaNames].join(", ") : "No persona refs available."}`,
+    `- Update implementation for pages: ${changedPageIds.length > 0 ? changedPageIds.join(", ") : "No page-specific impact derived."}`,
+    architectureChanged
+      ? "- Information architecture changed: refresh the page inventory, routes, and screen-level traceability."
+      : "- Information architecture is stable from the previous export.",
+    flowsChanged
+      ? "- User flows changed: re-check end-to-end paths and screen sequencing before building."
+      : "- User-flow sequencing is stable from the previous export.",
+  ].join("\n");
+}
+
 export function buildProblemMarkdown(params: { snapshot: HandoffSnapshot }): string {
   const { snapshot } = params;
 
@@ -399,14 +552,17 @@ export function buildProblemMarkdown(params: { snapshot: HandoffSnapshot }): str
     "## Problem Statement",
     buildProblemStatement(snapshot),
     "",
-    "## Jobs To Be Done",
-    buildJobsToBeDone(snapshot),
+    "## Pain Points",
+    buildPainPoints(snapshot),
     "",
-    "## Target Users",
-    buildPersonas(snapshot),
+    "## JTBD Clusters",
+    buildJtbdClusters(snapshot),
     "",
-    "## Journey Breakpoints",
-    buildJourneyBreakpoints(snapshot),
+    "## Persona Coverage",
+    buildPersonaCoverage(snapshot),
+    "",
+    "## How Might We Opportunities",
+    buildHowMightWeOpportunities(snapshot),
     "",
     "## Research Insights",
     buildResearchInsights(snapshot),
@@ -445,7 +601,6 @@ export function buildDeltaMarkdown(params: {
   dirtySections: HandoffDirtySection[];
 }): string {
   const { currentSnapshot, previousSnapshot, dirtySections } = params;
-  const sections: string[] = [];
 
   if (!previousSnapshot) {
     return [
@@ -456,210 +611,19 @@ export function buildDeltaMarkdown(params: {
     ].join("\n");
   }
 
-  if (dirtySections.includes("product-overview")) {
-    const diff = diffById(
-      currentSnapshot.productOverview?.jtbd ?? [],
-      previousSnapshot.productOverview?.jtbd ?? [],
-      (current, previous) => current.text === previous.text
-    );
-    sections.push(
-      [
-        "## Problem Changes",
-        ...[
-          ...diff.added.map((item) => `- Added JTBD ${item.id}: ${item.text}`),
-          ...diff.updated.map((item) => `- Updated JTBD ${item.id}: ${item.text}`),
-          ...diff.removed.map((item) => `- Removed JTBD ${item.id}: ${item.text}`),
-        ],
-        `- Problem statement: ${formatText(currentSnapshot.productOverview?.problemStatement)}`,
-        `- Target user: ${formatText(currentSnapshot.productOverview?.targetUser)}`,
-        `- Environment / usage context: ${formatText(currentSnapshot.productOverview?.environmentContext)}`,
-      ].join("\n")
-    );
-  }
-
-  if (dirtySections.includes("insights")) {
-    const diff = diffById(
-      currentSnapshot.insights?.insights ?? [],
-      previousSnapshot.insights?.insights ?? [],
-      (current, previous) =>
-        current.insight === previous.insight &&
-        current.quote === previous.quote &&
-        current.sourceDocument === previous.sourceDocument
-    );
-    sections.push(
-      [
-        "## Insight Changes",
-        ...[
-          ...diff.added.map((item) => `- Added insight ${item.id}: ${item.insight}`),
-          ...diff.updated.map((item) => `- Updated insight ${item.id}: ${item.insight}`),
-          ...diff.removed.map((item) => `- Removed insight ${item.id}: ${item.insight}`),
-        ],
-      ].join("\n")
-    );
-  }
-
-  if (dirtySections.includes("personas")) {
-    const currentPainPoints = (currentSnapshot.personas ?? []).flatMap((persona) => persona.painPoints);
-    const previousPainPoints = (previousSnapshot.personas ?? []).flatMap((persona) => persona.painPoints);
-    const diff = diffById(
-      currentPainPoints,
-      previousPainPoints,
-      (current, previous) => current.text === previous.text
-    );
-    sections.push(
-      [
-        "## Persona Changes",
-        ...[
-          ...diff.added.map((item) => `- Added persona pain point ${item.id}: ${item.text}`),
-          ...diff.updated.map((item) => `- Updated persona pain point ${item.id}: ${item.text}`),
-          ...diff.removed.map((item) => `- Removed persona pain point ${item.id}: ${item.text}`),
-        ],
-      ].join("\n")
-    );
-  }
-
-  if (dirtySections.includes("journey-highlights")) {
-    const currentPainPoints = (currentSnapshot.journeyHighlights ?? []).flatMap((journeyMap) =>
-      journeyMap.stages.flatMap((stage) => stage.painPoints)
-    );
-    const previousPainPoints = (previousSnapshot.journeyHighlights ?? []).flatMap((journeyMap) =>
-      journeyMap.stages.flatMap((stage) => stage.painPoints)
-    );
-    const diff = diffById(
-      currentPainPoints,
-      previousPainPoints,
-      (current, previous) => current.text === previous.text
-    );
-    sections.push(
-      [
-        "## Journey Changes",
-        ...[
-          ...diff.added.map((item) => `- Added journey pain point ${item.id}: ${item.text}`),
-          ...diff.updated.map((item) => `- Updated journey pain point ${item.id}: ${item.text}`),
-          ...diff.removed.map((item) => `- Removed journey pain point ${item.id}: ${item.text}`),
-        ],
-      ].join("\n")
-    );
-  }
-
-  if (dirtySections.includes("selected-solution") && currentSnapshot.selectedSolution) {
-    sections.push(
-      [
-        "## Solution Direction Changes",
-        `- Selected idea: ${currentSnapshot.selectedSolution.id}: ${currentSnapshot.selectedSolution.title}`,
-        `- Why this changed: ${formatText(currentSnapshot.selectedSolution.description)}`,
-      ].join("\n")
-    );
-  }
-
-  if (dirtySections.includes("key-features")) {
-    const diff = diffById(
-      getExportableFeatures(currentSnapshot.keyFeatures),
-      getExportableFeatures(previousSnapshot.keyFeatures),
-      (current, previous) =>
-        current.name === previous.name &&
-        current.description === previous.description &&
-        current.priority === previous.priority &&
-        stableStringify(current.jtbdIds) === stableStringify(previous.jtbdIds) &&
-        stableStringify(current.painPointIds) === stableStringify(previous.painPointIds)
-    );
-    const featureChangeLines = [
-      ...diff.added.map((item) => `- Added feature ${item.id}: ${item.name}`),
-      ...diff.updated.map((item) => `- Updated feature ${item.id}: ${item.name}`),
-      ...diff.removed.map((item) => `- Removed feature ${item.id}: ${item.name}`),
-    ];
-    if (featureChangeLines.length > 0) {
-      sections.push(
-        [
-          "## Feature Changes",
-          ...featureChangeLines,
-        ].join("\n")
-      );
-    }
-  }
-
-  if (dirtySections.includes("information-architecture")) {
-    const currentPages = (currentSnapshot.informationArchitecture?.nodes ?? []).filter(
-      (node) => node.type === "page"
-    );
-    const previousPages = (previousSnapshot.informationArchitecture?.nodes ?? []).filter(
-      (node) => node.type === "page"
-    );
-    const diff = diffById(
-      currentPages,
-      previousPages,
-      (current, previous) =>
-        current.label === previous.label &&
-        current.type === previous.type &&
-        current.description === previous.description
-    );
-    sections.push(
-      [
-        "## Architecture Changes",
-        ...[
-          ...diff.added.map((item) => `- Added page ${item.id}: ${item.label}`),
-          ...diff.updated.map((item) => `- Updated page ${item.id}: ${item.label}`),
-          ...diff.removed.map((item) => `- Removed page ${item.id}: ${item.label}`),
-        ],
-      ].join("\n")
-    );
-  }
-
-  if (dirtySections.includes("user-flows")) {
-    const diff = diffById(
-      currentSnapshot.userFlows ?? [],
-      previousSnapshot.userFlows ?? [],
-      (current, previous) =>
-        current.jtbdIndex === previous.jtbdIndex &&
-        current.jtbdText === previous.jtbdText &&
-        stableStringify(current.personaNames) === stableStringify(previous.personaNames) &&
-        stableStringify(current.steps) === stableStringify(previous.steps)
-    );
-    sections.push(
-      [
-        "## Flow Changes",
-        ...[
-          ...diff.added.map((item) => `- Added flow ${item.id}: ${item.jtbdText}`),
-          ...diff.updated.map((item) => `- Updated flow ${item.id}: ${item.jtbdText}`),
-          ...diff.removed.map((item) => `- Removed flow ${item.id}: ${item.jtbdText}`),
-        ],
-      ].join("\n")
-    );
-  }
-
-  const changedPageIds = getChangedPageIds(currentSnapshot, previousSnapshot);
-  const affectedJtbdIds = new Set<string>();
-  const currentJtbds = currentSnapshot.productOverview?.jtbd ?? [];
-
-  for (const feature of getExportableFeatures(currentSnapshot.keyFeatures)) {
-    for (const jtbdId of feature.jtbdIds) affectedJtbdIds.add(jtbdId);
-  }
-
-  for (const flow of currentSnapshot.userFlows ?? []) {
-    const jtbdId = currentJtbds[flow.jtbdIndex]?.id;
-    if (jtbdId) affectedJtbdIds.add(jtbdId);
-  }
-
-  sections.push(
-    [
-      "## Build Impact",
-      `- Changed sections: ${dirtySections.map((section) => HANDOFF_SECTION_LABELS[section]).join(", ") || "None"}.`,
-      `- Revisit JTBD coverage for: ${
-        affectedJtbdIds.size > 0 ? [...affectedJtbdIds].join(", ") : "No JTBD refs available."
-      }`,
-      `- Update implementation for pages: ${
-        changedPageIds.length > 0 ? changedPageIds.join(", ") : "No page-specific impact derived."
-      }`,
-      `- Regenerate or adjust features and flows before building against the updated export.`,
-    ].join("\n")
-  );
-
   return [
     "# delta.md",
     "",
     "## Change Summary",
     bulletList(dirtySections.map((section) => HANDOFF_SECTION_LABELS[section])),
     "",
-    ...sections,
+    "## Discovery Changes",
+    buildDiscoveryChanges(currentSnapshot, previousSnapshot, dirtySections),
+    "",
+    "## Feature Traceability Changes",
+    buildFeatureTraceabilityChanges(currentSnapshot, previousSnapshot, dirtySections),
+    "",
+    "## Build Impact",
+    buildBuildImpact(currentSnapshot, previousSnapshot, dirtySections),
   ].join("\n");
 }

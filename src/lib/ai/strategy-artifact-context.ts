@@ -77,9 +77,12 @@ export function resolveSelectedStrategyArtifactContext(
     return buildContext({
       artifactId: selectedArtifactId,
       family: "insights",
-      label: "Key Insights",
+      label: "Pain Points",
       phaseHint: "problem-overview",
-      data: insightsData,
+      data: {
+        insights: insightsData,
+        canonicalPainPoints: manifestoData?.painPoints ?? [],
+      },
     });
   }
 
@@ -87,9 +90,52 @@ export function resolveSelectedStrategyArtifactContext(
     return buildContext({
       artifactId: selectedArtifactId,
       family: "overview",
-      label: manifestoData.title ? `Overview: ${manifestoData.title}` : "Product Overview",
+      label: "Overview",
       phaseHint: "problem-overview",
-      data: manifestoData,
+      data: {
+        problemStatement: manifestoData.problemStatement ?? "",
+        targetUser: manifestoData.targetUser ?? "",
+      },
+    });
+  }
+
+  if (selectedArtifactId === "jtbd-clusters" && manifestoData) {
+    return buildContext({
+      artifactId: selectedArtifactId,
+      family: "overview",
+      label: "JTBD Clusters",
+      phaseHint: "problem-overview",
+      data: {
+        painPoints: manifestoData.painPoints ?? [],
+        jtbd: manifestoData?.jtbd ?? [],
+      },
+    });
+  }
+
+  if (selectedArtifactId === "personas" && (personaData || manifestoData)) {
+    return buildContext({
+      artifactId: selectedArtifactId,
+      family: "personas",
+      label: "Personas",
+      phaseHint: "problem-overview",
+      data: {
+        personas: personaData ?? [],
+        canonicalPainPoints: manifestoData?.painPoints ?? [],
+      },
+    });
+  }
+
+  if (selectedArtifactId === "opportunity-map" && (personaData || manifestoData)) {
+    return buildContext({
+      artifactId: selectedArtifactId,
+      family: "personas",
+      label: "Opportunity Map",
+      phaseHint: "problem-overview",
+      data: {
+        personas: personaData ?? [],
+        jtbd: manifestoData?.jtbd ?? [],
+        hmw: manifestoData?.hmw ?? [],
+      },
     });
   }
 

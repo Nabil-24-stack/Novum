@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   DESIGN_SYSTEM_CODEGEN_PROMPT_FRAGMENT,
+  PROBLEM_OVERVIEW_SYSTEM_PROMPT,
   SOLUTION_DESIGN_SYSTEM_PROMPT,
   buildArtifactRefreshSystemPrompt,
   buildFoundationPrompt,
@@ -46,21 +47,44 @@ test("artifact refresh prompt limits allowed blocks and encodes dependency rules
 
   assert.match(prompt, /type="manifesto"/);
   assert.match(prompt, /type="personas"/);
-  assert.match(prompt, /type="journey-maps"/);
   assert.match(prompt, /type="ideas"/);
   assert.match(prompt, /type="features"/);
   assert.match(prompt, /type="ia"/);
   assert.match(prompt, /type="user-flows"/);
-  assert.match(prompt, /Persona changes: ALWAYS re-evaluate journey maps plus downstream solution artifacts/);
+  assert.match(prompt, /Persona changes: ALWAYS re-evaluate downstream solution artifacts/);
   assert.match(prompt, /Idea changes: re-evaluate the selected ideas first/);
   assert.match(prompt, /IA and user-flow changes: re-evaluate each other/);
 });
 
 test("solution design prompt requires page-level IA traceability fields", () => {
-  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /"jtbdIds": \["JTBD-1"\]/);
+  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /"kind": "core"/);
+  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /"supportingJustification": "Required for enterprise authentication and account security\."/);
+  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /"jtbdIds": \["jtbd-1"\]/);
+  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /"painPointIds": \["pain-point-2"\]/);
+  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /"traceabilityMode": "core"/);
   assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /"featureIds": \["feature-1", "feature-2"\]/);
-  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /Every `page` node MUST include `jtbdIds`/);
-  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /Non-page nodes MUST omit `jtbdIds` and `featureIds`/);
+  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /Core pages MUST include `jtbdIds`/);
+  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /Supporting pages MAY omit `jtbdIds`, but they MUST include `featureIds`/);
+  assert.match(SOLUTION_DESIGN_SYSTEM_PROMPT, /Non-page nodes MUST omit `traceabilityMode`, `jtbdIds`, and `featureIds`/);
+});
+
+test("problem overview prompt requires canonical pain points and linked ids", () => {
+  assert.match(PROBLEM_OVERVIEW_SYSTEM_PROMPT, /required order: overview → insights → personas/);
+  assert.match(PROBLEM_OVERVIEW_SYSTEM_PROMPT, /The overview block is always block #1, followed immediately by the insights block/);
+  assert.match(PROBLEM_OVERVIEW_SYSTEM_PROMPT, /"painPoints": \[/);
+  assert.match(
+    PROBLEM_OVERVIEW_SYSTEM_PROMPT,
+    /"painPoints": \[\s*\{\s*"id": "pain-point-1",\s*"text": "Reliable food logging takes too many taps in real-world moments"/,
+  );
+  assert.match(PROBLEM_OVERVIEW_SYSTEM_PROMPT, /"id": "jtbd-1"/);
+  assert.match(PROBLEM_OVERVIEW_SYSTEM_PROMPT, /"painPointIds": \["pain-point-1", "pain-point-2"\]/);
+  assert.match(PROBLEM_OVERVIEW_SYSTEM_PROMPT, /"personaNames": \["Alex Chen"\]/);
+  assert.match(PROBLEM_OVERVIEW_SYSTEM_PROMPT, /overview, pain-points, JTBD-clusters, personas, and opportunity-map artifacts/);
+  assert.match(PROBLEM_OVERVIEW_SYSTEM_PROMPT, /Use lowercase stable ids in the overview objects/);
+  assert.match(PROBLEM_OVERVIEW_SYSTEM_PROMPT, /`painPoints` should contain 3-5 canonical objects with `id` \+ `text`/);
+  assert.doesNotMatch(PROBLEM_OVERVIEW_SYSTEM_PROMPT, /insights → overview → personas/);
+  assert.doesNotMatch(PROBLEM_OVERVIEW_SYSTEM_PROMPT, /"title": "Product Title"/);
+  assert.doesNotMatch(PROBLEM_OVERVIEW_SYSTEM_PROMPT, /"environmentContext":/);
 });
 
 test("ideation prompt encodes active user-authored idea mode contract", () => {

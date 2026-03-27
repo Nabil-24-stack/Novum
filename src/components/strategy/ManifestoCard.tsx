@@ -3,13 +3,18 @@
 import { AlertTriangle, CheckCircle2, Circle, ShieldCheck, Sparkles } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import type { ManifestoData } from "@/hooks/useStrategyStore";
+import type {
+  HmwData,
+  JtbdData,
+  ManifestoData,
+} from "@/hooks/useStrategyStore";
 import type {
   CoverageDisplayState,
   CoverageSummary,
   JtbdCoverage,
 } from "@/lib/product-brain/types";
 import type { TraceableTextItem } from "@/lib/strategy/traceable";
+import { resolvePainPointsByIds } from "@/lib/strategy/pain-points";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   ARTIFACT_IDLE_CARD_CLASSNAME,
@@ -71,9 +76,10 @@ export function ManifestoCard({
       problemStatement: manifestoData.problemStatement ?? "",
       targetUser: manifestoData.targetUser ?? "",
       environmentContext: manifestoData.environmentContext ?? "",
+      painPoints: manifestoData.painPoints ?? [],
       jtbd: manifestoData.jtbd ?? [],
       hmw: manifestoData.hmw ?? [],
-    }),
+    } as ManifestoData),
     onCommit,
     normalize: normalizeManifestoData,
   });
@@ -87,13 +93,17 @@ export function ManifestoCard({
     onEdit: startEditing,
   });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
+  const painPoints = draft.painPoints ?? [];
+  const jtbd = draft.jtbd ?? [];
+  const hmw = draft.hmw ?? [];
 
   const hasTitle = Boolean(draft.title.trim());
   const hasProblem = Boolean(draft.problemStatement.trim());
   const hasUser = Boolean(draft.targetUser.trim());
   const hasEnvironmentContext = Boolean(draft.environmentContext.trim());
-  const hasJtbd = draft.jtbd.length > 0;
-  const hasHmw = draft.hmw.length > 0;
+  const hasPainPoints = painPoints.length > 0;
+  const hasJtbd = jtbd.length > 0;
+  const hasHmw = hmw.length > 0;
 
   return (
     <div
@@ -101,7 +111,7 @@ export function ManifestoCard({
       style={{
         left: x,
         top: y,
-        width: 600,
+        width: 640,
         touchAction: isEditing ? undefined : "none",
       }}
       {...cardInteractionProps}
@@ -182,18 +192,26 @@ export function ManifestoCard({
             />
 
             <EditableTraceableList
-              label="Jobs To Be Done"
-              values={draft.jtbd}
-              addLabel="Add JTBD"
+              label="Canonical Pain Points"
+              values={painPoints}
+              addLabel="Add pain point"
+              onChange={(painPoints) => setDraft((current) => ({ ...current, painPoints }))}
+              onSave={saveEditing}
+              onCancel={cancelEditing}
+            />
+
+            <EditableJtbdList
+              values={jtbd}
+              painPointOptions={painPoints}
               onChange={(jtbd) => setDraft((current) => ({ ...current, jtbd }))}
               onSave={saveEditing}
               onCancel={cancelEditing}
             />
 
-            <EditableStringList
-              label="How Might We"
-              values={draft.hmw}
-              addLabel="Add HMW"
+            <EditableHmwList
+              values={hmw}
+              jtbdOptions={jtbd}
+              painPointOptions={painPoints}
               onChange={(hmw) => setDraft((current) => ({ ...current, hmw }))}
               onSave={saveEditing}
               onCancel={cancelEditing}
@@ -225,7 +243,7 @@ export function ManifestoCard({
               </>
             )}
 
-            {(hasUser || hasEnvironmentContext) && hasJtbd && <div className="mb-5 border-t border-neutral-200/60" />}
+            {(hasUser || hasEnvironmentContext) && hasPainPoints && <div className="mb-5 border-t border-neutral-200/60" />}
 
             {hasEnvironmentContext && (
               <>
@@ -236,14 +254,32 @@ export function ManifestoCard({
               </>
             )}
 
+            {hasPainPoints && (
+              <>
+                <h3 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
+                  Canonical Pain Points
+                </h3>
+                <ul className="space-y-2">
+                  {painPoints.map((painPoint) => (
+                    <li key={painPoint.id} className="text-sm leading-relaxed text-neutral-700">
+                      {painPoint.text}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {(hasPainPoints || hasUser) && hasJtbd && <div className="mb-5 mt-6 border-t border-neutral-200/60" />}
+
             {hasJtbd && (
               <>
                 <h3 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
                   What {draft.targetUser || "Users"} Need To Get Done
                 </h3>
                 <ol className="space-y-3">
-                  {draft.jtbd.map((job, index) => {
+                  {jtbd.map((job, index) => {
                     const isAddressed = jtbdCoverage?.[index]?.addressed;
+                    const linkedPainPoints = resolvePainPointsByIds(job.painPointIds, draft);
                     return (
                       <li key={job.id} className="flex items-start gap-3">
                         {isAddressed ? (
@@ -257,15 +293,29 @@ export function ManifestoCard({
                             }`}
                           />
                         )}
-                        <span
-                          className={`text-base leading-relaxed transition-colors duration-500 ${
-                            isAddressed
-                              ? "text-neutral-400 line-through decoration-neutral-300"
-                              : "text-neutral-700"
-                          }`}
-                        >
-                          {job.text}
-                        </span>
+                        <div className="min-w-0">
+                          <span
+                            className={`text-base leading-relaxed transition-colors duration-500 ${
+                              isAddressed
+                                ? "text-neutral-400 line-through decoration-neutral-300"
+                                : "text-neutral-700"
+                            }`}
+                          >
+                            {job.text}
+                          </span>
+                          {linkedPainPoints.length > 0 && (
+                            <div className="mt-1 flex flex-wrap gap-1.5">
+                              {linkedPainPoints.map((painPoint) => (
+                                <span
+                                  key={painPoint.id}
+                                  className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700"
+                                >
+                                  {painPoint.text}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </li>
                     );
                   })}
@@ -281,16 +331,43 @@ export function ManifestoCard({
                   How Might We
                 </h3>
                 <ol className="space-y-3">
-                  {draft.hmw.map((question, index) => (
-                    <li key={index} className="flex items-start gap-3">
-                      <span className="mt-0.5 w-5 shrink-0 text-center text-sm font-semibold text-amber-500">
-                        {index + 1}
-                      </span>
-                      <span className="text-base italic leading-relaxed text-neutral-700">
-                        {question}
-                      </span>
-                    </li>
-                  ))}
+                  {hmw.map((question, index) => {
+                    const linkedPainPoints = resolvePainPointsByIds(question.painPointIds, draft);
+                    return (
+                      <li key={question.id} className="flex items-start gap-3">
+                        <span className="mt-0.5 w-5 shrink-0 text-center text-sm font-semibold text-amber-500">
+                          {index + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <span className="text-base italic leading-relaxed text-neutral-700">
+                            {question.text}
+                          </span>
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            {(question.jtbdIds ?? []).map((jtbdId) => {
+                              const linkedJtbd = jtbd.find((item) => item.id === jtbdId);
+                              if (!linkedJtbd) return null;
+                              return (
+                                <span
+                                  key={jtbdId}
+                                  className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700"
+                                >
+                                  {linkedJtbd.text}
+                                </span>
+                              );
+                            })}
+                            {linkedPainPoints.map((painPoint) => (
+                              <span
+                                key={painPoint.id}
+                                className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700"
+                              >
+                                {painPoint.text}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ol>
               </>
             )}
@@ -408,49 +485,6 @@ export function ManifestoCard({
   );
 }
 
-function EditableStringList(props: {
-  label: string;
-  values: string[];
-  addLabel: string;
-  onChange: (values: string[]) => void;
-  onSave: () => void;
-  onCancel: () => void;
-}) {
-  const { label, values, addLabel, onChange, onSave, onCancel } = props;
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
-        <AddListItemButton label={addLabel} onClick={() => onChange([...values, ""])} />
-      </div>
-      <div className="space-y-2">
-        {values.map((value, index) => (
-          <div key={index} className="flex items-start gap-2">
-            <Textarea
-              value={value}
-              placeholder={label}
-              onChange={(event) =>
-                onChange(values.map((item, itemIndex) => (itemIndex === index ? event.target.value : item)))
-              }
-              onKeyDown={(event) =>
-                handleEditorKeyDown(event, {
-                  onSave,
-                  onCancel,
-                })
-              }
-              className="min-h-[72px] text-sm"
-            />
-            <RemoveListItemButton
-              onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}
-            />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function EditableTraceableList(props: {
   label: string;
   values: TraceableTextItem[];
@@ -497,6 +531,206 @@ function EditableTraceableList(props: {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function EditableJtbdList(props: {
+  values: JtbdData[];
+  painPointOptions: TraceableTextItem[];
+  onChange: (values: JtbdData[]) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const { values, painPointOptions, onChange, onSave, onCancel } = props;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">Jobs To Be Done</p>
+        <AddListItemButton
+          label="Add JTBD"
+          onClick={() => onChange([...values, { id: "", text: "", painPointIds: [] }])}
+        />
+      </div>
+      <div className="space-y-3">
+        {values.map((value, index) => (
+          <div key={value.id || index} className="space-y-2 rounded-lg border border-neutral-200 bg-neutral-50/70 p-3">
+            <div className="flex items-start gap-2">
+              <Textarea
+                value={value.text}
+                placeholder={`JTBD ${index + 1}`}
+                onChange={(event) =>
+                  onChange(
+                    values.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, text: event.target.value } : item
+                    )
+                  )
+                }
+                onKeyDown={(event) =>
+                  handleEditorKeyDown(event, {
+                    onSave,
+                    onCancel,
+                  })
+                }
+                className="min-h-[72px] flex-1 text-sm"
+              />
+              <RemoveListItemButton
+                onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}
+              />
+            </div>
+            <IdSelector
+              label="Source pain points"
+              description="Link this JTBD to the canonical pain points it synthesizes."
+              options={painPointOptions.map((painPoint) => ({
+                id: painPoint.id,
+                label: painPoint.text,
+              }))}
+              selectedIds={value.painPointIds ?? []}
+              onChange={(painPointIds) =>
+                onChange(
+                  values.map((item, itemIndex) =>
+                    itemIndex === index ? { ...item, painPointIds } : item
+                  )
+                )
+              }
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EditableHmwList(props: {
+  values: HmwData[];
+  jtbdOptions: JtbdData[];
+  painPointOptions: TraceableTextItem[];
+  onChange: (values: HmwData[]) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const { values, jtbdOptions, painPointOptions, onChange, onSave, onCancel } = props;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">How Might We</p>
+        <AddListItemButton
+          label="Add HMW"
+          onClick={() => onChange([...values, { id: "", text: "", jtbdIds: [], painPointIds: [] }])}
+        />
+      </div>
+      <div className="space-y-3">
+        {values.map((value, index) => (
+          <div key={value.id || index} className="space-y-2 rounded-lg border border-neutral-200 bg-neutral-50/70 p-3">
+            <div className="flex items-start gap-2">
+              <Textarea
+                value={value.text}
+                placeholder={`HMW ${index + 1}`}
+                onChange={(event) =>
+                  onChange(
+                    values.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, text: event.target.value } : item
+                    )
+                  )
+                }
+                onKeyDown={(event) =>
+                  handleEditorKeyDown(event, {
+                    onSave,
+                    onCancel,
+                  })
+                }
+                className="min-h-[72px] flex-1 text-sm"
+              />
+              <RemoveListItemButton
+                onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}
+              />
+            </div>
+            <IdSelector
+              label="Linked JTBDs"
+              description="Connect this HMW to the JTBDs it reframes."
+              options={jtbdOptions.map((jtbd) => ({
+                id: jtbd.id,
+                label: jtbd.text,
+              }))}
+              selectedIds={value.jtbdIds ?? []}
+              onChange={(jtbdIds) =>
+                onChange(
+                  values.map((item, itemIndex) =>
+                    itemIndex === index ? { ...item, jtbdIds } : item
+                  )
+                )
+              }
+            />
+            <IdSelector
+              label="Linked pain points"
+              description="Connect this HMW to the canonical pain points it opens up."
+              options={painPointOptions.map((painPoint) => ({
+                id: painPoint.id,
+                label: painPoint.text,
+              }))}
+              selectedIds={value.painPointIds ?? []}
+              onChange={(painPointIds) =>
+                onChange(
+                  values.map((item, itemIndex) =>
+                    itemIndex === index ? { ...item, painPointIds } : item
+                  )
+                )
+              }
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function IdSelector(props: {
+  label: string;
+  description: string;
+  options: { id: string; label: string }[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const { label, description, options, selectedIds, onChange } = props;
+
+  return (
+    <div className="space-y-2 rounded-lg border border-neutral-200 bg-white p-3">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
+        <p className="mt-1 text-xs text-neutral-500">{description}</p>
+      </div>
+
+      {options.length > 0 ? (
+        <div className="space-y-2">
+          {options.map((option) => {
+            const checked = selectedIds.includes(option.id);
+            return (
+              <label
+                key={option.id}
+                className="flex cursor-pointer items-start gap-2 rounded-lg border border-transparent px-2 py-2 text-sm hover:border-neutral-200"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) =>
+                    onChange(
+                      event.target.checked
+                        ? [...selectedIds, option.id]
+                        : selectedIds.filter((id) => id !== option.id)
+                    )
+                  }
+                  className="mt-0.5 h-4 w-4 rounded border-neutral-300"
+                />
+                <span className="block text-sm text-neutral-800">{option.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-xs text-neutral-500">No options available yet.</p>
+      )}
     </div>
   );
 }

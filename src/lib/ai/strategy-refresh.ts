@@ -17,7 +17,10 @@ const STRATEGY_REFRESH_PATTERNS: Array<[StrategyRefreshArtifactFamily, RegExp[]]
       /\bmanifesto\b/,
       /\bproblem overview\b/,
       /\bproblem statement\b/,
+      /\bjtbd cluster\b/,
+      /\bjtbd clusters\b/,
       /\btarget user\b/,
+      /\btarget users\b/,
       /\bjtbd\b/,
       /\bjobs to be done\b/,
       /\bjobs-to-be-done\b/,
@@ -30,8 +33,11 @@ const STRATEGY_REFRESH_PATTERNS: Array<[StrategyRefreshArtifactFamily, RegExp[]]
     [
       /\bpersona\b/,
       /\bpersonas\b/,
+      /\bpersona roster\b/,
       /\buser persona\b/,
       /\buser personas\b/,
+      /\bopportunity map\b/,
+      /\bopportunity mapping\b/,
     ],
   ],
   [
@@ -88,6 +94,8 @@ const STRATEGY_REFRESH_PATTERNS: Array<[StrategyRefreshArtifactFamily, RegExp[]]
       /\binsights\b/,
       /\bresearch insight\b/,
       /\bresearch insights\b/,
+      /\bpain point\b/,
+      /\bpain points\b/,
     ],
   ],
 ];

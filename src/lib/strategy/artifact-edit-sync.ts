@@ -1,6 +1,8 @@
 import type { InsightsCardData } from "@/hooks/useDocumentStore";
 import type {
+  HmwData,
   IdeaData,
+  JtbdData,
   JourneyMapData,
   JourneyStage,
   KeyFeatureData,
@@ -12,8 +14,15 @@ import type {
 } from "@/hooks/useStrategyStore";
 import {
   createDeterministicTraceableId,
+  getTraceableText,
   normalizeTraceableTextList,
+  type TraceableTextItem,
 } from "./traceable.ts";
+import {
+  deriveHmwIdsFromJtbds,
+  derivePersonaNamesFromJtbds,
+  getResolvedFeaturePainPointIds,
+} from "./feature-traceability.ts";
 
 export interface StrategyArtifactState {
   manifestoData: ManifestoData | null;
@@ -48,8 +57,71 @@ function normalizeFeaturePriority(
   return "medium";
 }
 
+function normalizeFeatureKind(
+  kind: KeyFeatureData["kind"] | undefined
+): KeyFeatureData["kind"] {
+  return kind === "supporting" ? "supporting" : "core";
+}
+
 function normalizeIdList(values: string[] | null | undefined): string[] {
   return (values ?? []).map(trimText).filter(Boolean);
+}
+
+function normalizeTextKey(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function buildTextMatchIndex(items: TraceableTextItem[]): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const item of items) {
+    const key = normalizeTextKey(item.text);
+    if (key && !index.has(key)) {
+      index.set(key, item.id);
+    }
+  }
+  return index;
+}
+
+function getLegacyPainPointValues(value: unknown): Array<TraceableTextItem | string> {
+  if (!value || typeof value !== "object") return [];
+  const painPoints = (value as { painPoints?: unknown }).painPoints;
+  return Array.isArray(painPoints)
+    ? painPoints.filter(
+        (item): item is TraceableTextItem | string =>
+          typeof item === "string" || (Boolean(item) && typeof item === "object")
+      )
+    : [];
+}
+
+function buildFallbackPainPointsFromLegacyPersonas(personas: unknown[] | null | undefined): TraceableTextItem[] {
+  return normalizeTraceableTextList({
+    values: (personas ?? []).flatMap((persona) => getLegacyPainPointValues(persona)),
+    prefix: "pain-point",
+  });
+}
+
+function getPainPointIdsFromLegacyValues(
+  values: Array<TraceableTextItem | string>,
+  registry: TraceableTextItem[],
+): string[] {
+  const registryByText = buildTextMatchIndex(registry);
+  return [...new Set(
+    values
+      .map((value) => registryByText.get(normalizeTextKey(getTraceableText(value))))
+      .filter((id): id is string => typeof id === "string" && id.length > 0)
+  )];
+}
+
+function buildLinkedItemMap<T extends { id: string }>(
+  values: Array<T | string> | null | undefined,
+): Map<string, T> {
+  const map = new Map<string, T>();
+  for (const value of values ?? []) {
+    if (value && typeof value === "object" && "id" in value && typeof value.id === "string") {
+      map.set(value.id, value as T);
+    }
+  }
+  return map;
 }
 
 function normalizeUserFlowStep(step: UserFlowStep): UserFlowStep | null {
@@ -63,17 +135,34 @@ function normalizeUserFlowStep(step: UserFlowStep): UserFlowStep | null {
   };
 }
 
-function normalizeJourneyStage(stage: JourneyStage): JourneyStage | null {
+function normalizeJourneyStage(
+  stage: JourneyStage,
+  painPointRegistry: TraceableTextItem[]
+): JourneyStage | null {
+  const validPainPointIds = new Set(painPointRegistry.map((painPoint) => painPoint.id));
+  const explicitPainPointIds = normalizeIdList((stage as { painPointIds?: string[] }).painPointIds).filter(
+    (id) => validPainPointIds.has(id)
+  );
+  const legacyPainPoints = getLegacyPainPointValues(stage);
+  const migratedPainPointIds = getPainPointIdsFromLegacyValues(legacyPainPoints, painPointRegistry).filter(
+    (id) => validPainPointIds.has(id)
+  );
+  const registryByText = buildTextMatchIndex(painPointRegistry);
+  const migratedFrictionNotes = legacyPainPoints
+    .map((value) => getTraceableText(value))
+    .map(trimText)
+    .filter((text) => text && !registryByText.has(normalizeTextKey(text)));
+
   const normalized: JourneyStage = {
     stage: trimText(stage.stage),
     actions: normalizeStringList(stage.actions ?? []),
     thoughts: normalizeStringList(stage.thoughts ?? []),
     emotion: trimText(stage.emotion),
-    painPoints: normalizeTraceableTextList({
-      values: stage.painPoints ?? [],
-      prefix: "journey-pain",
-      previous: stage.painPoints ?? [],
-    }),
+    painPointIds: explicitPainPointIds.length > 0 ? explicitPainPointIds : migratedPainPointIds,
+    frictionNotes: [
+      ...normalizeStringList((stage as { frictionNotes?: string[] }).frictionNotes),
+      ...migratedFrictionNotes,
+    ].filter((value, index, items) => items.indexOf(value) === index),
     opportunities: normalizeStringList(stage.opportunities ?? []),
   };
 
@@ -82,7 +171,8 @@ function normalizeJourneyStage(stage: JourneyStage): JourneyStage | null {
     normalized.actions.length === 0 &&
     normalized.thoughts.length === 0 &&
     !normalized.emotion &&
-    normalized.painPoints.length === 0 &&
+    normalized.painPointIds.length === 0 &&
+    normalized.frictionNotes.length === 0 &&
     normalized.opportunities.length === 0
   ) {
     return null;
@@ -113,41 +203,108 @@ export function normalizeInsightsData(data: InsightsCardData): InsightsCardData 
   };
 }
 
-export function normalizeManifestoData(data: ManifestoData): ManifestoData {
+export function normalizeManifestoData(
+  data: ManifestoData,
+  options?: {
+    fallbackPainPoints?: TraceableTextItem[] | null | undefined;
+    validPersonaNames?: string[] | null | undefined;
+  }
+): ManifestoData {
+  const fallbackPainPoints = options?.fallbackPainPoints ?? [];
+  const validPersonaNames = new Set(normalizeStringList(options?.validPersonaNames));
+  const painPoints = normalizeTraceableTextList({
+    values:
+      Array.isArray((data as { painPoints?: unknown }).painPoints) &&
+      (data as { painPoints?: unknown[] }).painPoints!.length > 0
+        ? ((data as { painPoints?: Array<TraceableTextItem | string> }).painPoints ?? [])
+        : fallbackPainPoints,
+    prefix: "pain-point",
+    previous:
+      (Array.isArray((data as { painPoints?: unknown }).painPoints)
+        ? ((data as { painPoints?: TraceableTextItem[] }).painPoints ?? [])
+        : fallbackPainPoints),
+  });
+  const validPainPointIds = new Set(painPoints.map((painPoint) => painPoint.id));
+  const previousJtbds = buildLinkedItemMap<JtbdData>(data.jtbd as Array<JtbdData | string>);
+  const jtbdBase = normalizeTraceableTextList({
+    values: data.jtbd,
+    prefix: "jtbd",
+    previous: data.jtbd,
+  });
+  const jtbd = jtbdBase.map((item, index) => {
+    const current = data.jtbd[index] as Partial<JtbdData> | string | undefined;
+    const previous = previousJtbds.get(item.id);
+    return {
+      id: item.id,
+      text: item.text,
+      painPointIds: normalizeIdList(
+        typeof current === "string" ? previous?.painPointIds : Array.isArray(current?.painPointIds) ? current.painPointIds : previous?.painPointIds
+      ).filter((id) => validPainPointIds.has(id)),
+      personaNames: normalizeStringList(
+        typeof current === "string" ? previous?.personaNames : Array.isArray(current?.personaNames) ? current.personaNames : previous?.personaNames
+      ).filter((name) => validPersonaNames.size === 0 || validPersonaNames.has(name)),
+    };
+  });
+  const validJtbdIds = new Set(jtbd.map((item) => item.id));
+  const previousHmw = buildLinkedItemMap<HmwData>(data.hmw as Array<HmwData | string>);
+  const hmwBase = normalizeTraceableTextList({
+    values: data.hmw,
+    prefix: "hmw",
+    previous: data.hmw,
+  });
+  const hmw = hmwBase.map((item, index) => {
+    const current = data.hmw[index] as Partial<HmwData> | string | undefined;
+    const previous = previousHmw.get(item.id);
+    return {
+      id: item.id,
+      text: item.text,
+      jtbdIds: normalizeIdList(
+        typeof current === "string" ? previous?.jtbdIds : Array.isArray(current?.jtbdIds) ? current.jtbdIds : previous?.jtbdIds
+      ).filter((id) => validJtbdIds.has(id)),
+      painPointIds: normalizeIdList(
+        typeof current === "string" ? previous?.painPointIds : Array.isArray(current?.painPointIds) ? current.painPointIds : previous?.painPointIds
+      ).filter((id) => validPainPointIds.has(id)),
+    };
+  });
+
   return {
     title: trimText(data.title),
     problemStatement: trimText(data.problemStatement),
     targetUser: trimText(data.targetUser),
     environmentContext: trimText(data.environmentContext),
-    jtbd: normalizeTraceableTextList({
-      values: data.jtbd,
-      prefix: "jtbd",
-      previous: data.jtbd,
-    }),
-    hmw: normalizeStringList(data.hmw),
+    painPoints,
+    jtbd,
+    hmw,
   };
 }
 
-export function normalizePersonaData(data: PersonaData): PersonaData {
+export function normalizePersonaData(
+  data: PersonaData,
+  painPointRegistry: TraceableTextItem[] = []
+): PersonaData {
+  const explicitPainPointIds = normalizeIdList((data as { painPointIds?: string[] }).painPointIds);
+  const validPainPointIds = new Set(painPointRegistry.map((painPoint) => painPoint.id));
   return {
     name: trimText(data.name),
     role: trimText(data.role),
     bio: trimText(data.bio),
     goals: normalizeStringList(data.goals),
-    painPoints: normalizeTraceableTextList({
-      values: data.painPoints,
-      prefix: "persona-pain",
-      previous: data.painPoints,
-    }),
+    painPointIds: (explicitPainPointIds.length > 0
+      ? explicitPainPointIds
+      : getPainPointIdsFromLegacyValues(getLegacyPainPointValues(data), painPointRegistry)
+    ).filter((id) => validPainPointIds.size === 0 || validPainPointIds.has(id)),
     quote: trimText(data.quote),
   };
 }
 
-export function normalizeJourneyMapData(data: JourneyMapData): JourneyMapData {
+export function normalizeJourneyMapData(
+  data: JourneyMapData,
+  painPointRegistry: TraceableTextItem[] = []
+): JourneyMapData {
   return {
     personaName: trimText(data.personaName),
     stages: (data.stages ?? [])
-      .map(normalizeJourneyStage)
+      .map((stage) => normalizeJourneyStage(stage, painPointRegistry))
       .filter((stage): stage is JourneyStage => Boolean(stage)),
   };
 }
@@ -160,23 +317,54 @@ export function normalizeIdeaData(data: IdeaData): IdeaData {
   };
 }
 
-export function normalizeKeyFeaturesData(data: KeyFeaturesData): KeyFeaturesData {
+export function normalizeKeyFeaturesData(
+  data: KeyFeaturesData,
+  manifestoData: ManifestoData | null = null,
+  personaData: PersonaData[] | null = null
+): KeyFeaturesData {
+  const validJtbdIds = new Set((manifestoData?.jtbd ?? []).map((jtbd) => jtbd.id));
+  const validHmwIds = new Set((manifestoData?.hmw ?? []).map((hmw) => hmw.id));
+  const validPersonaNames = new Set((personaData ?? []).map((persona) => trimText(persona.name)).filter(Boolean));
+
   return {
     ideaTitle: trimText(data.ideaTitle),
     features: (data.features ?? [])
-      .map((feature, index): KeyFeatureData => ({
-        id:
-          trimText(feature.id) ||
-          createDeterministicTraceableId(
-            "feature",
-            `${index}:${trimText(feature.name)}:${trimText(feature.description)}`
-          ),
-        name: trimText(feature.name),
-        description: trimText(feature.description),
-        priority: normalizeFeaturePriority(feature.priority),
-        jtbdIds: normalizeIdList(feature.jtbdIds),
-        painPointIds: normalizeIdList(feature.painPointIds),
-      }))
+      .map((feature, index): KeyFeatureData => {
+        const jtbdIds = normalizeIdList(feature.jtbdIds).filter((id) => validJtbdIds.size === 0 || validJtbdIds.has(id));
+        const hmwIds = normalizeIdList(
+          feature.hmwIds?.length ? feature.hmwIds : deriveHmwIdsFromJtbds(jtbdIds, manifestoData)
+        ).filter((id) => validHmwIds.size === 0 || validHmwIds.has(id));
+        const personaNames = normalizeStringList(
+          feature.personaNames?.length ? feature.personaNames : derivePersonaNamesFromJtbds(jtbdIds, manifestoData)
+        ).filter((name) => validPersonaNames.size === 0 || validPersonaNames.has(name));
+        const painPointIds = getResolvedFeaturePainPointIds(
+          {
+            ...feature,
+            hmwIds,
+            jtbdIds,
+            painPointIds: normalizeIdList(feature.painPointIds),
+          },
+          manifestoData
+        );
+
+        return {
+          id:
+            trimText(feature.id) ||
+            createDeterministicTraceableId(
+              "feature",
+              `${index}:${trimText(feature.name)}:${trimText(feature.description)}`
+            ),
+          name: trimText(feature.name),
+          description: trimText(feature.description),
+          priority: normalizeFeaturePriority(feature.priority),
+          kind: normalizeFeatureKind(feature.kind),
+          supportingJustification: trimText(feature.supportingJustification),
+          hmwIds,
+          jtbdIds,
+          personaNames,
+          painPointIds,
+        };
+      })
       .filter((feature) => feature.name || feature.description),
   };
 }
@@ -262,13 +450,70 @@ function buildJtbdIndexMap(previousJtbds: ManifestoData["jtbd"], nextJtbds: Mani
 export function applyManualManifestoEdit(
   state: StrategyArtifactState,
   nextManifesto: ManifestoData
-): { manifestoData: ManifestoData; userFlowsData: UserFlow[] | null } {
-  const manifestoData = normalizeManifestoData(nextManifesto);
+): {
+  manifestoData: ManifestoData;
+  personaData: PersonaData[] | null;
+  journeyMapData: JourneyMapData[] | null;
+  keyFeaturesData: KeyFeaturesData | null;
+  userFlowsData: UserFlow[] | null;
+} {
+  const manifestoData = normalizeManifestoData(nextManifesto, {
+    fallbackPainPoints: buildFallbackPainPointsFromLegacyPersonas(state.personaData as unknown[]),
+    validPersonaNames: (state.personaData ?? []).map((persona) => persona.name),
+  });
   const previousJtbds = state.manifestoData?.jtbd ?? [];
   const nextJtbds = manifestoData.jtbd;
+  const validPainPointIds = new Set((manifestoData.painPoints ?? []).map((painPoint) => painPoint.id));
+  const validJtbdIds = new Set(nextJtbds.map((jtbd) => jtbd.id));
+
+  const personaData = state.personaData
+    ? state.personaData.map((persona) =>
+        normalizePersonaData(
+          {
+            ...persona,
+            painPointIds: persona.painPointIds.filter((id) => validPainPointIds.has(id)),
+          },
+          manifestoData.painPoints
+        )
+      )
+    : null;
+
+  const journeyMapData = state.journeyMapData
+    ? state.journeyMapData.map((journeyMap) =>
+        normalizeJourneyMapData(
+          {
+            ...journeyMap,
+            stages: journeyMap.stages.map((stage) => ({
+              ...stage,
+              painPointIds: stage.painPointIds.filter((id) => validPainPointIds.has(id)),
+            })),
+          },
+          manifestoData.painPoints
+        )
+      )
+    : null;
+
+  const keyFeaturesData = state.keyFeaturesData
+    ? normalizeKeyFeaturesData(
+        {
+          ...state.keyFeaturesData,
+          features: state.keyFeaturesData.features.map((feature) => ({
+            ...feature,
+            hmwIds: (feature.hmwIds ?? []).filter((id) => manifestoData.hmw.some((hmw) => hmw.id === id)),
+            jtbdIds: feature.jtbdIds.filter((id) => validJtbdIds.has(id)),
+            painPointIds: feature.painPointIds.filter((id) => validPainPointIds.has(id)),
+            personaNames: (feature.personaNames ?? []).filter((name) =>
+              (personaData ?? []).some((persona) => persona.name === name)
+            ),
+          })),
+        },
+        manifestoData,
+        personaData
+      )
+    : null;
 
   if (!state.userFlowsData) {
-    return { manifestoData, userFlowsData: null };
+    return { manifestoData, personaData, journeyMapData, keyFeaturesData, userFlowsData: null };
   }
 
   const exactIndexMap = buildJtbdIndexMap(previousJtbds, nextJtbds);
@@ -298,6 +543,9 @@ export function applyManualManifestoEdit(
 
   return {
     manifestoData,
+    personaData,
+    journeyMapData,
+    keyFeaturesData,
     userFlowsData,
   };
 }
@@ -309,9 +557,10 @@ export function applyManualPersonaEdit(
 ): {
   personaData: PersonaData[];
   journeyMapData: JourneyMapData[] | null;
+  keyFeaturesData: KeyFeaturesData | null;
   userFlowsData: UserFlow[] | null;
 } {
-  const normalizedPersona = normalizePersonaData(nextPersona);
+  const normalizedPersona = normalizePersonaData(nextPersona, state.manifestoData?.painPoints ?? []);
   const previousName = state.personaData?.[personaIndex]?.name ?? "";
   const nextName = normalizedPersona.name;
   const personaData = replaceAtIndex(state.personaData, personaIndex, normalizedPersona);
@@ -319,7 +568,7 @@ export function applyManualPersonaEdit(
   const journeyMapData = state.journeyMapData
     ? state.journeyMapData.map((journeyMap) =>
         journeyMap.personaName === previousName
-          ? normalizeJourneyMapData({ ...journeyMap, personaName: nextName })
+          ? normalizeJourneyMapData({ ...journeyMap, personaName: nextName }, state.manifestoData?.painPoints ?? [])
           : journeyMap
       )
     : null;
@@ -335,9 +584,26 @@ export function applyManualPersonaEdit(
       )
     : null;
 
+  const keyFeaturesData = state.keyFeaturesData
+    ? normalizeKeyFeaturesData(
+        {
+          ...state.keyFeaturesData,
+          features: state.keyFeaturesData.features.map((feature) => ({
+            ...feature,
+            personaNames: (feature.personaNames ?? []).map((personaName) =>
+              personaName === previousName ? nextName : personaName
+            ),
+          })),
+        },
+        state.manifestoData,
+        personaData
+      )
+    : null;
+
   return {
     personaData,
     journeyMapData,
+    keyFeaturesData,
     userFlowsData,
   };
 }
@@ -350,7 +616,7 @@ export function applyManualJourneyMapEdit(
   return replaceAtIndex(
     state.journeyMapData,
     journeyMapIndex,
-    normalizeJourneyMapData(nextJourneyMap)
+    normalizeJourneyMapData(nextJourneyMap, state.manifestoData?.painPoints ?? [])
   );
 }
 
@@ -367,10 +633,14 @@ export function applyManualIdeaEdit(
     previousIdea &&
     state.selectedIdeaId === previousIdea.id &&
     state.keyFeaturesData?.ideaTitle === previousIdea.title
-      ? normalizeKeyFeaturesData({
-          ...state.keyFeaturesData,
-          ideaTitle: normalizedIdea.title,
-        })
+      ? normalizeKeyFeaturesData(
+          {
+            ...state.keyFeaturesData,
+            ideaTitle: normalizedIdea.title,
+          },
+          state.manifestoData,
+          state.personaData
+        )
       : state.keyFeaturesData;
 
   return {
@@ -379,8 +649,12 @@ export function applyManualIdeaEdit(
   };
 }
 
-export function applyManualKeyFeaturesEdit(nextKeyFeatures: KeyFeaturesData): KeyFeaturesData {
-  return normalizeKeyFeaturesData(nextKeyFeatures);
+export function applyManualKeyFeaturesEdit(
+  nextKeyFeatures: KeyFeaturesData,
+  manifestoData: ManifestoData | null,
+  personaData: PersonaData[] | null = null
+): KeyFeaturesData {
+  return normalizeKeyFeaturesData(nextKeyFeatures, manifestoData, personaData);
 }
 
 export function applyManualUserFlowEdit(

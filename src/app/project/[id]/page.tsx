@@ -33,15 +33,16 @@ import { ComponentDialog } from "@/components/canvas/ComponentDialog";
 import { InspectorContextMenu } from "@/components/canvas/InspectorContextMenu";
 import { FlowFrame } from "@/components/flow/FlowFrame";
 import { FlowConnections } from "@/components/flow/FlowConnections";
-import { ManifestoCard } from "@/components/strategy/ManifestoCard";
 import { StrategyAnnotations } from "@/components/flow/StrategyAnnotations";
 import { useAnnotationStore } from "@/hooks/useAnnotationStore";
 import { useAnnotationResolution } from "@/hooks/useAnnotationResolution";
-import { InsightsCard } from "@/components/strategy/InsightsCard";
 import { useDocumentStore, type InsightsCardData } from "@/hooks/useDocumentStore";
-import { PersonaCard } from "@/components/strategy/PersonaCard";
-import { JourneyMapCard } from "@/components/strategy/JourneyMapCard";
 import { IdeaCard } from "@/components/strategy/IdeaCard";
+import { OverviewCard } from "@/components/strategy/OverviewCard";
+import { PainPointsCard } from "@/components/strategy/PainPointsCard";
+import { JtbdClustersCard } from "@/components/strategy/JtbdClustersCard";
+import { PersonasBoardCard } from "@/components/strategy/PersonasBoardCard";
+import { OpportunityMapCard } from "@/components/strategy/OpportunityMapCard";
 import {
   HandoffMarkdownCard,
   HANDOFF_CARD_HEIGHT,
@@ -60,6 +61,7 @@ import {
   applyManualPersonaEdit,
   applyManualUserFlowEdit,
 } from "@/lib/strategy/artifact-edit-sync";
+import { buildPainPointOptions, resolvePainPointsByIds } from "@/lib/strategy/pain-points";
 import { initializeTestAPI, updateTestAPI } from "@/lib/ast/test-utils";
 import { PublishDialog } from "@/components/editor/PublishDialog";
 import { AccountMenu } from "@/components/billing/AccountMenu";
@@ -93,6 +95,12 @@ import {
 } from "@/lib/handoff/snapshot";
 import { getHandoffWarningMessage } from "@/lib/handoff/validation";
 import { getTraceableText, getTraceableTexts } from "@/lib/strategy/traceable";
+import {
+  getOpportunityMapCardWidth,
+  getOpportunityMapGroupHeight,
+  getPersonasCardWidth,
+  getPersonasGroupHeight,
+} from "@/lib/strategy/artifact-card-layout";
 
 type ViewMode = "app" | "design-system";
 
@@ -430,25 +438,8 @@ export default function ProjectEditor() {
     [ideaData, selectedIdeaId]
   );
   const availablePainPointOptions = useMemo(
-    () => [
-      ...(personaData ?? []).flatMap((persona) =>
-        persona.painPoints.map((painPoint) => ({
-          id: painPoint.id,
-          label: painPoint.text,
-          source: `Persona: ${persona.name}`,
-        }))
-      ),
-      ...(journeyMapData ?? []).flatMap((journeyMap) =>
-        journeyMap.stages.flatMap((stage) =>
-          stage.painPoints.map((painPoint) => ({
-            id: painPoint.id,
-            label: painPoint.text,
-            source: `Journey: ${journeyMap.personaName} / ${stage.stage}`,
-          }))
-        )
-      ),
-    ],
-    [journeyMapData, personaData]
+    () => buildPainPointOptions(manifestoData),
+    [manifestoData]
   );
   const handoffSnapshot = useMemo(
     () =>
@@ -456,7 +447,6 @@ export default function ProjectEditor() {
         productOverview: manifestoData,
         insights: insightsData,
         personas: personaData,
-        journeyHighlights: journeyMapData,
         selectedSolution,
         keyFeatures: keyFeaturesData,
         informationArchitecture: flowData,
@@ -465,7 +455,6 @@ export default function ProjectEditor() {
     [
       flowData,
       insightsData,
-      journeyMapData,
       keyFeaturesData,
       manifestoData,
       personaData,
@@ -513,6 +502,15 @@ export default function ProjectEditor() {
     );
 
     useStrategyStore.getState().setManifestoData(result.manifestoData);
+    if (result.personaData !== null) {
+      useStrategyStore.getState().setPersonaData(result.personaData);
+    }
+    if (result.journeyMapData !== null) {
+      useStrategyStore.getState().setJourneyMapData(result.journeyMapData);
+    }
+    if (result.keyFeaturesData !== null) {
+      useStrategyStore.getState().setKeyFeaturesData(result.keyFeaturesData);
+    }
     if (result.userFlowsData !== null) {
       useStrategyStore.getState().setUserFlowsData(result.userFlowsData);
     }
@@ -544,6 +542,9 @@ export default function ProjectEditor() {
     useStrategyStore.getState().setPersonaData(result.personaData);
     if (result.journeyMapData !== null) {
       useStrategyStore.getState().setJourneyMapData(result.journeyMapData);
+    }
+    if (result.keyFeaturesData !== null) {
+      useStrategyStore.getState().setKeyFeaturesData(result.keyFeaturesData);
     }
     if (result.userFlowsData !== null) {
       useStrategyStore.getState().setUserFlowsData(result.userFlowsData);
@@ -643,10 +644,10 @@ export default function ProjectEditor() {
   }, [markStrategyEditedAfterBuild, selectedIdeaId]);
 
   const handleKeyFeaturesCommit = useCallback((nextKeyFeatures: NonNullable<typeof keyFeaturesData>) => {
-    const result = applyManualKeyFeaturesEdit(nextKeyFeatures);
+    const result = applyManualKeyFeaturesEdit(nextKeyFeatures, manifestoData, personaData);
 
     useStrategyStore.getState().setKeyFeaturesData(result);
-  }, []);
+  }, [manifestoData, personaData]);
 
   const handleUserFlowCommit = useCallback((userFlowIndex: number, nextUserFlow: NonNullable<typeof userFlowsData>[number]) => {
     const nextUserFlows = applyManualUserFlowEdit(
@@ -738,36 +739,49 @@ export default function ProjectEditor() {
   // --- Build group configs from current strategy data ---
   const buildGroupConfigs = useCallback((): GroupConfig[] => {
     const configs: GroupConfig[] = [];
-
-    // Insights group (first, left of product-overview)
-    configs.push({
-      id: "insights",
-      width: 600,
-      height: 500,
-      visible: !!(insightsData || streamingInsights || manifestoData || streamingOverview),
-    });
+    const jtbdClusterCount = (manifestoData || streamingOverview)?.jtbd?.length ?? 0;
+    const personaBoardCount = (personaData || streamingPersonas)?.length ?? 0;
 
     configs.push({
       id: "product-overview",
-      width: 600,
-      height: 450,
+      width: 520,
+      height: 420,
       visible: !!(manifestoData || streamingOverview),
     });
 
-    const personaCount = (personaData || streamingPersonas)?.length ?? 0;
     configs.push({
-      id: "personas",
-      width: personaCount > 0 ? personaCount * (PERSONA_CARD_WIDTH + 20) - 20 : 0,
-      height: 420,
-      visible: personaCount > 0,
+      id: "insights",
+      width: 620,
+      height: 640,
+      visible: !!(insightsData || streamingInsights || manifestoData?.painPoints?.length || streamingOverview?.painPoints?.length),
     });
 
-    const journeyCount = (journeyMapData || streamingJourneyMaps)?.length ?? 0;
+    configs.push({
+      id: "jtbd-clusters",
+      width: 560,
+      height: Math.max(420, jtbdClusterCount * 180),
+      visible: !!(manifestoData || streamingOverview || jtbdClusterCount > 0),
+    });
+
+    configs.push({
+      id: "personas",
+      width: getPersonasCardWidth(personaBoardCount),
+      height: getPersonasGroupHeight(personaBoardCount),
+      visible: personaBoardCount > 0,
+    });
+
+    configs.push({
+      id: "opportunity-map",
+      width: getOpportunityMapCardWidth(personaBoardCount),
+      height: getOpportunityMapGroupHeight(personaBoardCount),
+      visible: personaBoardCount > 0 && !!(manifestoData || streamingOverview),
+    });
+
     configs.push({
       id: "journey-maps",
-      width: 900,
-      height: journeyCount > 0 ? journeyCount * 550 - 30 : 0,
-      visible: journeyCount > 0,
+      width: 0,
+      height: 0,
+      visible: false,
     });
 
     const ideaCount = (ideaData || streamingIdeas)?.length ?? 0;
@@ -833,10 +847,8 @@ export default function ProjectEditor() {
     strategyPhase,
     streamingIdeas,
     streamingInsights,
-    streamingJourneyMaps,
     streamingOverview,
     streamingPersonas,
-    journeyMapData,
   ]);
 
   // Derived layout rects (for viewport animations) — useMemo avoids state-update
@@ -849,20 +861,40 @@ export default function ProjectEditor() {
 
   // --- Seed group positions when new groups appear ---
   // groupRects is now a useMemo (no state update needed). This effect only
-  // initialises drag-positions for groups that don't have one yet.
+  // initialises drag-positions for groups that don't have one yet, and keeps
+  // untouched groups aligned when a newly visible earlier artifact inserts
+  // itself before them in the horizontal flow.
+  const previousGroupRectsRef = useRef<Map<GroupId, { x: number; y: number }>>(new Map());
   useEffect(() => {
     if (groupRects.length === 0) return;
+    const previousRects = previousGroupRectsRef.current;
     setGroupPositions((prev) => {
       const next = new Map(prev);
       let changed = false;
       for (const o of groupRects) {
-        if (!next.has(o.id)) {
+        const current = next.get(o.id);
+        if (!current) {
+          next.set(o.id, { x: o.x, y: o.y });
+          changed = true;
+          continue;
+        }
+
+        const previousRect = previousRects.get(o.id);
+        const isAutoPositioned =
+          !!previousRect &&
+          Math.abs(current.x - previousRect.x) <= 1 &&
+          Math.abs(current.y - previousRect.y) <= 1;
+
+        if (isAutoPositioned && (Math.abs(current.x - o.x) > 1 || Math.abs(current.y - o.y) > 1)) {
           next.set(o.id, { x: o.x, y: o.y });
           changed = true;
         }
       }
       return changed ? next : prev;
     });
+    previousGroupRectsRef.current = new Map(
+      groupRects.map((rect) => [rect.id, { x: rect.x, y: rect.y }])
+    );
   }, [groupRects]);
 
   // Helper: get effective position for a group (user-dragged or computed)
@@ -1108,8 +1140,8 @@ export default function ProjectEditor() {
       });
     }
 
-    const mCtx = `Title: ${manifestoData.title}\nProblem: ${manifestoData.problemStatement}\nTarget User: ${manifestoData.targetUser}\nEnvironment / Usage Context: ${manifestoData.environmentContext || "Not specified yet."}\nJTBDs:\n${manifestoData.jtbd.map((j, i) => `${i + 1}. ${getTraceableText(j)}`).join("\n")}`;
-    const pCtx = personaData.map((p, i) => `Persona ${i + 1}: ${p.name} — ${p.role}\nGoals: ${p.goals.join("; ")}\nPain Points: ${getTraceableTexts(p.painPoints).join("; ")}`).join("\n\n");
+    const mCtx = `Problem: ${manifestoData.problemStatement}\nTarget Users: ${manifestoData.targetUser}\nJTBDs:\n${manifestoData.jtbd.map((j, i) => `${i + 1}. ${getTraceableText(j)}`).join("\n")}`;
+    const pCtx = personaData.map((p, i) => `Persona ${i + 1}: ${p.name} — ${p.role}\nGoals: ${p.goals.join("; ")}\nPain Points: ${resolvePainPointsByIds(p.painPointIds, manifestoData).map((painPoint) => painPoint.text).join("; ")}`).join("\n\n");
 
     const insData = useDocumentStore.getState().insightsData;
     const insCtx = insData
@@ -2193,19 +2225,16 @@ export default function ProjectEditor() {
 
   // --- Compute which section to focus the viewport on during AI strategy phases ---
   const focusSection = useMemo((): GroupId | null => {
-    // problem-overview: focus on whichever section is currently streaming/just appeared
     if (strategyPhase === "problem-overview") {
-      if (streamingJourneyMaps) return "journey-maps";
-      if (journeyMapData) return "journey-maps";
       if (streamingPersonas) return "personas";
-      if (personaData) return "personas";
+      if (streamingInsights) return "insights";
       if (streamingOverview) return "product-overview";
+      if (personaData) return "opportunity-map";
+      if (insightsData) return "insights";
       if (manifestoData) return "product-overview";
       return null;
     }
-    // ideation: focus on ideas
     if (strategyPhase === "ideation") return "ideas";
-    // solution-design: features → architecture → user-flows
     if (strategyPhase === "solution-design") {
       if (streamingUserFlows) return "user-flows";
       if (userFlowsData) return "user-flows";
@@ -2217,7 +2246,7 @@ export default function ProjectEditor() {
     if (strategyPhase === "handoff") return "handoff";
     return null;
   }, [strategyPhase, streamingOverview, manifestoData, streamingPersonas, personaData,
-      streamingJourneyMaps, journeyMapData, streamingKeyFeatures, activeKeyFeatures,
+      streamingInsights, insightsData, streamingKeyFeatures, activeKeyFeatures,
       flowData, streamingUserFlows, userFlowsData]);
 
   // --- Unified viewport animation: fit all visible groups + floating chat ---
@@ -2240,23 +2269,13 @@ export default function ProjectEditor() {
     // Focus viewport on the active section during AI strategy phases
     let focusRects = allRects;
     if (focusSection && focusSection !== "ideas") {
-      // For group-level sections (product-overview, key-features, architecture)
       const g = groupPositions.get(focusSection);
       const r = groupRects.find((gr) => gr.id === focusSection);
       if (g && r) {
         focusRects = [{ x: g.x, y: g.y, width: r.width, height: r.height }];
       }
 
-      // For per-card sections, override with individual card positions
-      if (focusSection === "personas" && personaPositions.length > 0) {
-        focusRects = personaPositions.map((pos) => ({
-          x: pos.x, y: pos.y, width: PERSONA_CARD_WIDTH, height: 420,
-        }));
-      } else if (focusSection === "journey-maps" && journeyMapPositions.length > 0) {
-        focusRects = journeyMapPositions.map((pos) => ({
-          x: pos.x, y: pos.y, width: 900, height: JOURNEY_CARD_ESTIMATED_HEIGHT,
-        }));
-      } else if (focusSection === "user-flows" && userFlowPositions.length > 0) {
+      if (focusSection === "user-flows" && userFlowPositions.length > 0) {
         focusRects = userFlowPositions.map((pos) => ({
           x: pos.x, y: pos.y,
           width: USER_FLOW_CARD_WIDTH,
@@ -2267,7 +2286,6 @@ export default function ProjectEditor() {
         if (kfr) focusRects = [{ x: keyFeaturesPosition.x, y: keyFeaturesPosition.y, width: kfr.width, height: kfr.height }];
       }
     } else if (focusSection === "ideas" && ideaPositions.length > 0) {
-      // Existing ideation behavior (unchanged)
       focusRects = ideaPositions.map((pos) => ({
         x: pos.x,
         y: pos.y,
@@ -2282,9 +2300,7 @@ export default function ProjectEditor() {
 
     // State key includes visible groups, chat mode, container size, phase, focus section,
     // item count in focused section, and content bounding box (rounded to avoid micro-jitter).
-    const focusCount = focusSection === "personas" ? personaPositions.length
-      : focusSection === "journey-maps" ? journeyMapPositions.length
-      : focusSection === "user-flows" ? userFlowPositions.length
+    const focusCount = focusSection === "user-flows" ? userFlowPositions.length
       : focusSection === "ideas" ? ideaPositions.length
       : 0;
     const layoutKey = `${visibleIds}:${chatMode}:${strategyPhase}:${focusSection ?? "all"}:${focusCount}:${Math.round(containerDimensions.width)}:${Math.round(bboxW / 50)}x${Math.round(bboxH / 50)}`;
@@ -2361,7 +2377,7 @@ export default function ProjectEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupPositions, groupRects, chatMode, containerDimensions, strategyPhase,
       isFrameExpanded,
-      focusSection, ideaPositions, personaPositions, journeyMapPositions,
+      focusSection, ideaPositions,
       keyFeaturesPosition, userFlowPositions]);
 
   const handlePhaseAction = useCallback((action: "approve-problem-overview" | "approve-ideation" | "approve-solution-design") => {
@@ -2745,7 +2761,28 @@ export default function ProjectEditor() {
           >
             {/* Strategy artifacts — placed directly on canvas, left to right */}
 
-            {/* Insights Card — first group, left of manifesto */}
+            {(manifestoData || streamingOverview) && (() => {
+              const g = getGroupOrigin("product-overview");
+              if (!g) return null;
+              const effectiveManifesto = (isDeepDive && streamingOverview && manifestoData)
+                ? { ...manifestoData, ...streamingOverview }
+                : (manifestoData || streamingOverview!);
+              return (
+                <OverviewCard
+                  manifestoData={effectiveManifesto}
+                  x={g.x}
+                  y={g.y}
+                  onMove={(nx, ny) => {
+                    setGroupPositions((prev) => new Map(prev).set("product-overview", { x: nx, y: ny }));
+                  }}
+                  onCommit={manifestoData ? handleManifestoCommit : undefined}
+                  isSelected={activeArtifactId === "product-overview"}
+                  onSelect={() => selectArtifact("product-overview")}
+                  onSingleClickConfirmed={() => scopeArtifactToChat("product-overview")}
+                />
+              );
+            })()}
+
             {(() => {
               const g = getGroupOrigin("insights");
               if (!g) return null;
@@ -2753,8 +2790,9 @@ export default function ProjectEditor() {
                 ? { ...insightsData, ...streamingInsights }
                 : (insightsData || streamingInsights || { insights: [], documents: [] });
               return (
-                <InsightsCard
+                <PainPointsCard
                   data={data}
+                  manifestoData={manifestoData}
                   x={g.x}
                   y={g.y}
                   onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("insights", { x: nx, y: ny }))}
@@ -2768,39 +2806,20 @@ export default function ProjectEditor() {
               );
             })()}
 
-            {(manifestoData || streamingOverview) && (() => {
-              const g = getGroupOrigin("product-overview");
-              if (!g) return null;
+            {(() => {
+              const g = getGroupOrigin("jtbd-clusters");
+              if (!g || !(manifestoData || streamingOverview)) return null;
               return (
-                <ManifestoCard
+                <JtbdClustersCard
                   manifestoData={(isDeepDive && streamingOverview && manifestoData)
                     ? { ...manifestoData, ...streamingOverview }
-                    : (manifestoData || streamingOverview!)}
+                    : (manifestoData || streamingOverview || {})}
                   x={g.x}
                   y={g.y}
-                  onMove={(nx, ny) => {
-                    setGroupPositions((prev) => new Map(prev).set("product-overview", { x: nx, y: ny }));
-                  }}
-                  jtbdCoverage={coverageSummary?.jtbdCoverage}
-                  coverageSummary={coverageSummary}
-                  coverageDisplayState={coverageDisplayState}
-                  coverageProgressNote={coverageProgressNote}
-                  onAddressGaps={() => {
-                    if (!coverageSummary || coverageSummary.gaps.length === 0) return;
-                    // Globally unaddressed JTBDs (for backward compat)
-                    const unaddressedJtbds = coverageSummary.jtbdCoverage
-                      .filter((j) => !j.addressed)
-                      .map((j) => ({ index: j.index, text: j.text }));
-                    useChatContextStore.getState().setPendingAddressGaps({
-                      unaddressedJtbds,
-                      gaps: coverageSummary.gaps,
-                    });
-                    setRightPanelTab("chat");
-                  }}
-                  onCommit={manifestoData ? handleManifestoCommit : undefined}
-                  isSelected={activeArtifactId === "product-overview"}
-                  onSelect={() => selectArtifact("product-overview")}
-                  onSingleClickConfirmed={() => scopeArtifactToChat("product-overview")}
+                  onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("jtbd-clusters", { x: nx, y: ny }))}
+                  isSelected={activeArtifactId === "jtbd-clusters"}
+                  onSelect={() => selectArtifact("jtbd-clusters")}
+                  onSingleClickConfirmed={() => scopeArtifactToChat("jtbd-clusters")}
                 />
               );
             })()}
@@ -2809,72 +2828,44 @@ export default function ProjectEditor() {
               const effectivePersonas = (isDeepDive && streamingPersonas && personaData)
                 ? mergeByKey(personaData, streamingPersonas, "name")
                 : (personaData || streamingPersonas);
-              return effectivePersonas && effectivePersonas.map((persona, index) => {
               const g = getGroupOrigin("personas");
-              if (!g) return null;
-              const pos = personaPositions[index];
-              const artifactId = `persona-${index}`;
+              if (!g || !effectivePersonas || effectivePersonas.length === 0) return null;
               return (
-                <PersonaCard
-                  key={index}
-                  persona={persona}
-                  x={pos?.x ?? g.x + index * (PERSONA_CARD_WIDTH + 20)}
-                  y={pos?.y ?? g.y}
-                  index={index}
-                  onMove={(nx, ny) => setPersonaPositions((prev) => {
-                    const updated = [...prev];
-                    updated[index] = { x: nx, y: ny };
-                    return updated;
-                  })}
-                  coveragePercent={coverageSummary?.personaCoverage.find(
-                    (p) => p.personaName === (persona as { name?: string }).name
-                  )?.coveragePercent}
-                  onCommit={personaData ? (nextPersona) => handlePersonaCommit(index, nextPersona) : undefined}
-                  isSelected={activeArtifactId === artifactId}
-                  onSelect={() => selectArtifact(artifactId)}
-                  onSingleClickConfirmed={() => scopeArtifactToChat(artifactId)}
+                <PersonasBoardCard
+                  manifestoData={(isDeepDive && streamingOverview && manifestoData)
+                    ? { ...manifestoData, ...streamingOverview }
+                    : (manifestoData || streamingOverview || {})}
+                  personaData={effectivePersonas as typeof personaData}
+                  x={g.x}
+                  y={g.y}
+                  onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("personas", { x: nx, y: ny }))}
+                  isSelected={activeArtifactId === "personas"}
+                  onSelect={() => selectArtifact("personas")}
+                  onSingleClickConfirmed={() => scopeArtifactToChat("personas")}
                 />
               );
-            });
             })()}
 
             {(() => {
-              const effectiveJourneyMaps = (isDeepDive && streamingJourneyMaps && journeyMapData)
-                ? mergeByKey(journeyMapData, streamingJourneyMaps, "personaName")
-                : (journeyMapData || streamingJourneyMaps);
-              return effectiveJourneyMaps && effectiveJourneyMaps.map((map, index) => {
-              const g = getGroupOrigin("journey-maps");
-              if (!g) return null;
-              const pos = journeyMapPositions[index];
-              const artifactId = `journey-${index}`;
+              const effectivePersonas = (isDeepDive && streamingPersonas && personaData)
+                ? mergeByKey(personaData, streamingPersonas, "name")
+                : (personaData || streamingPersonas);
+              const g = getGroupOrigin("opportunity-map");
+              if (!g || !effectivePersonas || effectivePersonas.length === 0) return null;
               return (
-                <JourneyMapCard
-                  key={index}
-                  journeyMap={map}
-                  x={pos?.x ?? g.x}
-                  y={pos?.y ?? g.y + index * (JOURNEY_CARD_ESTIMATED_HEIGHT + JOURNEY_CARD_GAP)}
-                  index={index}
-                  onMove={(nx, ny) => setJourneyMapPositions((prev) => {
-                    const updated = [...prev];
-                    updated[index] = { x: nx, y: ny };
-                    return updated;
-                  })}
-                  coveredStageIndices={
-                    coverageSummary
-                      ? new Set(
-                          coverageSummary.journeyStageCoverage
-                            .filter((c) => c.personaName === (map as { personaName?: string }).personaName && c.covered)
-                            .map((c) => c.stageIndex)
-                        )
-                      : undefined
-                  }
-                  onCommit={journeyMapData ? (nextJourneyMap) => handleJourneyMapCommit(index, nextJourneyMap) : undefined}
-                  isSelected={activeArtifactId === artifactId}
-                  onSelect={() => selectArtifact(artifactId)}
-                  onSingleClickConfirmed={() => scopeArtifactToChat(artifactId)}
+                <OpportunityMapCard
+                  manifestoData={(isDeepDive && streamingOverview && manifestoData)
+                    ? { ...manifestoData, ...streamingOverview }
+                    : (manifestoData || streamingOverview || {})}
+                  personaData={effectivePersonas as typeof personaData}
+                  x={g.x}
+                  y={g.y}
+                  onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("opportunity-map", { x: nx, y: ny }))}
+                  isSelected={activeArtifactId === "opportunity-map"}
+                  onSelect={() => selectArtifact("opportunity-map")}
+                  onSingleClickConfirmed={() => scopeArtifactToChat("opportunity-map")}
                 />
               );
-            });
             })()}
 
             {(() => {
@@ -2919,6 +2910,7 @@ export default function ProjectEditor() {
               return (
                 <KeyFeaturesCard
                   data={activeKeyFeatures}
+                  manifestoData={manifestoData}
                   jtbdOptions={manifestoData?.jtbd ?? []}
                   painPointOptions={availablePainPointOptions}
                   x={keyFeaturesPosition?.x ?? g.x}

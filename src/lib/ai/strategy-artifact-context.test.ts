@@ -3,6 +3,15 @@ import assert from "node:assert/strict";
 
 import { resolveSelectedStrategyArtifactContext } from "./strategy-artifact-context.ts";
 
+const painPoint = (id: string, text: string) => ({ id, text });
+const hmw = (id: string, text: string, overrides: { jtbdIds?: string[]; painPointIds?: string[] } = {}) => ({
+  id,
+  text,
+  jtbdIds: [],
+  painPointIds: [],
+  ...overrides,
+});
+
 const baseInput = {
   insightsData: {
     insights: [{ id: "insight-1", insight: "Users need clarity", source: "conversation" as const }],
@@ -13,8 +22,12 @@ const baseInput = {
     problemStatement: "Teams lose context.",
     targetUser: "Product teams",
     environmentContext: "Inside product planning and implementation reviews.",
-    jtbd: [{ id: "jtbd-1", text: "Track decisions" }],
-    hmw: ["Reduce confusion"],
+    painPoints: [
+      painPoint("pain-point-1", "Missing context"),
+      painPoint("pain-point-2", "Scattered docs"),
+    ],
+    jtbd: [{ id: "jtbd-1", text: "Track decisions", painPointIds: ["pain-point-1"], personaNames: ["Nora"] }],
+    hmw: [hmw("hmw-1", "Reduce confusion", { jtbdIds: ["jtbd-1"], painPointIds: ["pain-point-1", "pain-point-2"] })],
   },
   personaData: [
     {
@@ -22,7 +35,7 @@ const baseInput = {
       role: "PM",
       bio: "Runs planning.",
       goals: ["Stay aligned"],
-      painPoints: [{ id: "persona-pain-1", text: "Missing context" }],
+      painPointIds: ["pain-point-1"],
       quote: "I need one source of truth.",
     },
   ],
@@ -35,7 +48,8 @@ const baseInput = {
           actions: ["Collect notes"],
           thoughts: ["What changed?"],
           emotion: "anxious",
-          painPoints: [{ id: "journey-pain-1", text: "Scattered docs" }],
+          painPointIds: ["pain-point-2"],
+          frictionNotes: ["Scattered docs"],
           opportunities: ["Summarize changes"],
         },
       ],
@@ -57,8 +71,10 @@ const baseInput = {
         name: "Timeline",
         description: "Chronological updates",
         priority: "high" as const,
+        kind: "core" as const,
+        supportingJustification: "",
         jtbdIds: ["jtbd-1"],
-        painPointIds: ["persona-pain-1"],
+        painPointIds: ["pain-point-1"],
       },
     ],
   },
@@ -84,31 +100,41 @@ test("resolves overview and insights artifact context", () => {
   });
 
   assert.equal(insights?.family, "insights");
-  assert.match(insights?.promptContext ?? "", /Key Insights/);
+  assert.match(insights?.promptContext ?? "", /Pain Points/);
 
   assert.equal(overview?.family, "overview");
-  assert.match(overview?.promptContext ?? "", /Clarity Hub/);
+  assert.match(overview?.promptContext ?? "", /Overview/);
+  assert.match(overview?.promptContext ?? "", /Teams lose context/);
+  assert.doesNotMatch(overview?.promptContext ?? "", /Clarity Hub/);
+  assert.doesNotMatch(overview?.promptContext ?? "", /implementation reviews/);
 });
 
 test("resolves indexed artifact cards to the right families", () => {
-  const persona = resolveSelectedStrategyArtifactContext({
+  const jtbdClusters = resolveSelectedStrategyArtifactContext({
     ...baseInput,
-    selectedArtifactId: "persona-0",
+    selectedArtifactId: "jtbd-clusters",
   });
-  const journey = resolveSelectedStrategyArtifactContext({
+  const personas = resolveSelectedStrategyArtifactContext({
     ...baseInput,
-    selectedArtifactId: "journey-0",
+    selectedArtifactId: "personas",
+  });
+  const opportunityMap = resolveSelectedStrategyArtifactContext({
+    ...baseInput,
+    selectedArtifactId: "opportunity-map",
   });
   const userFlow = resolveSelectedStrategyArtifactContext({
     ...baseInput,
     selectedArtifactId: "user-flow-flow-1",
   });
 
-  assert.equal(persona?.family, "personas");
-  assert.match(persona?.label ?? "", /Nora/);
+  assert.equal(jtbdClusters?.family, "overview");
+  assert.match(jtbdClusters?.label ?? "", /JTBD Clusters/);
 
-  assert.equal(journey?.family, "journey-maps");
-  assert.match(journey?.label ?? "", /Nora/);
+  assert.equal(personas?.family, "personas");
+  assert.match(personas?.label ?? "", /Personas/);
+
+  assert.equal(opportunityMap?.family, "personas");
+  assert.match(opportunityMap?.label ?? "", /Opportunity Map/);
 
   assert.equal(userFlow?.family, "user-flows");
   assert.match(userFlow?.promptContext ?? "", /Track decisions/);

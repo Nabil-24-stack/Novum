@@ -1,7 +1,6 @@
 import type {
   FlowData,
   IdeaData,
-  JourneyMapData,
   KeyFeaturesData,
   ManifestoData,
   PersonaData,
@@ -15,7 +14,6 @@ export type HandoffDirtySection =
   | "product-overview"
   | "insights"
   | "personas"
-  | "journey-highlights"
   | "selected-solution"
   | "key-features"
   | "information-architecture"
@@ -25,7 +23,6 @@ export interface HandoffSnapshot {
   productOverview: ManifestoData | null;
   insights: InsightsCardData | null;
   personas: PersonaData[] | null;
-  journeyHighlights: JourneyMapData[] | null;
   selectedSolution: IdeaData | null;
   keyFeatures: KeyFeaturesData | null;
   informationArchitecture: FlowData | null;
@@ -48,7 +45,6 @@ export const HANDOFF_SECTION_LABELS: Record<HandoffDirtySection, string> = {
   "product-overview": "Product Overview",
   insights: "Insights",
   personas: "Personas",
-  "journey-highlights": "Journey Highlights",
   "selected-solution": "Selected Solution",
   "key-features": "Key Features",
   "information-architecture": "Information Architecture",

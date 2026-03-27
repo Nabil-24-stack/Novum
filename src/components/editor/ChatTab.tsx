@@ -42,6 +42,7 @@ import { notifyUsageChanged, useBillingStatus } from "@/hooks/useBillingStatus";
 import { checkRouteConsistency } from "@/lib/ai/route-consistency";
 import type { AutoAnnotationRequest } from "@/lib/ai/annotation-targets";
 import { parseStreamingContent } from "@/lib/streaming-parser";
+import { extractPartialOverview, shapeStreamingOverview } from "@/lib/ai/strategy-streaming";
 import { runVerificationLoop } from "@/lib/verification/verify-loop";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -53,13 +54,25 @@ import {
   normalizeUserIdeaBlockData,
   resolveResumedCustomIdeaMode,
 } from "@/lib/strategy/custom-idea-flow";
-import { getTraceableText, getTraceableTexts } from "@/lib/strategy/traceable";
+import { getTraceableText } from "@/lib/strategy/traceable";
+import { resolvePainPointsByIds } from "@/lib/strategy/pain-points";
 import type { FileUIPart } from "ai";
 
 const FILE_CODE_BLOCK_RE = /```\w*\s+file="[^"]+"/;
 function hasFileCodeBlocks(content: string): boolean {
   return FILE_CODE_BLOCK_RE.test(content);
 }
+
+function getPersonaPainPointTexts(
+  persona: PersonaData,
+  manifestoData: ManifestoDataLike | null | undefined
+): string[] {
+  return resolvePainPointsByIds(persona.painPointIds, manifestoData as never).map((painPoint) => painPoint.text);
+}
+
+type ManifestoDataLike = {
+  painPoints?: { id: string; text: string }[];
+};
 
 /** Strip strategy JSON blocks from text (manifesto, flow, options, page-built, confidence, personas, etc.) */
 function stripStrategyBlocks(text: string): string {
@@ -169,10 +182,10 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
   const ctx: Record<string, string> = {
     vfs,
     manifestoContext: storeState.manifestoData
-      ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\nEnvironment / Usage Context: ${storeState.manifestoData.environmentContext || "Not specified yet."}\nWhat ${storeState.manifestoData.targetUser} Need To Get Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i + 1}. ${getTraceableText(j)}`).join("\n")}\nHow Might We:\n${storeState.manifestoData.hmw.map((q, i) => `${i + 1}. ${q}`).join("\n")}`
+      ? `## Product Overview\n\nProblem: ${storeState.manifestoData.problemStatement}\nTarget Users: ${storeState.manifestoData.targetUser}\nCanonical Pain Points:\n${(storeState.manifestoData.painPoints ?? []).map((p, i) => `${i + 1}. ${p.id}: ${p.text}`).join("\n")}\nJobs To Be Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i + 1}. ${j.id}: ${getTraceableText(j)} | Personas: ${(j.personaNames ?? []).join(", ") || "none"}`).join("\n")}\nHow Might We:\n${storeState.manifestoData.hmw.map((q, i) => `${i + 1}. ${q.id}: ${getTraceableText(q)} | JTBDs: ${(q.jtbdIds ?? []).join(", ") || "none"}`).join("\n")}`
       : "",
     personaContext: storeState.personaData
-      ? `## User Personas\n\n${storeState.personaData.map((p, i) => `### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${p.painPoints.map((pp) => `- ${pp.text}`).join("\n")}\nQuote: "${p.quote}"`).join("\n\n")}`
+      ? `## User Personas\n\n${storeState.personaData.map((p, i) => `### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${getPersonaPainPointTexts(p, storeState.manifestoData).map((pp) => `- ${pp}`).join("\n")}\nQuote: "${p.quote}"`).join("\n\n")}`
       : "",
     flowContext: storeState.flowData
       ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`
@@ -231,20 +244,13 @@ function buildExistingArtifactsContext(): string {
   // Manifesto
   if (s.manifestoData) {
     const m = s.manifestoData;
-    sections.push(`### EXISTING MANIFESTO\n\nTitle: ${m.title}\nProblem Statement: ${m.problemStatement}\nTarget User: ${m.targetUser}\nEnvironment / Usage Context: ${m.environmentContext || "Not specified yet."}\nJTBDs:\n${m.jtbd.map((j, i) => `${i + 1}. ${getTraceableText(j)}`).join("\n")}\nHMW:\n${m.hmw.map((q, i) => `${i + 1}. ${q}`).join("\n")}`);
+    sections.push(`### EXISTING MANIFESTO\n\nProblem Statement: ${m.problemStatement}\nTarget Users: ${m.targetUser}\nPain Points:\n${(m.painPoints ?? []).map((p, i) => `${i + 1}. ${p.id}: ${p.text}`).join("\n")}\nJTBDs:\n${m.jtbd.map((j, i) => `${i + 1}. ${j.id}: ${getTraceableText(j)} | Personas: ${(j.personaNames ?? []).join(", ") || "none"}`).join("\n")}\nHMW:\n${m.hmw.map((q, i) => `${i + 1}. ${q.id}: ${getTraceableText(q)} | JTBDs: ${(q.jtbdIds ?? []).join(", ") || "none"}`).join("\n")}`);
   }
 
   // Personas
   if (s.personaData) {
     sections.push(`### EXISTING PERSONAS\n\n${s.personaData.map((p, i) =>
-      `#### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${p.painPoints.map((pp) => `- ${pp.text}`).join("\n")}\nQuote: "${p.quote}"`
-    ).join("\n\n")}`);
-  }
-
-  // Journey Maps (abbreviated — stage names only to save tokens)
-  if (s.journeyMapData) {
-    sections.push(`### EXISTING JOURNEY MAPS\n\n${s.journeyMapData.map((jm) =>
-      `#### ${jm.personaName}\nStages: ${jm.stages.map((st) => st.stage).join(" → ")}\nKey pain points: ${jm.stages.flatMap((st) => getTraceableTexts(st.painPoints)).slice(0, 5).join("; ")}`
+      `#### Persona ${i + 1}: ${p.name}\nRole: ${p.role}\nBio: ${p.bio}\nGoals:\n${p.goals.map((g) => `- ${g}`).join("\n")}\nPain Points:\n${getPersonaPainPointTexts(p, s.manifestoData).map((pp) => `- ${pp}`).join("\n")}\nQuote: "${p.quote}"`
     ).join("\n\n")}`);
   }
 
@@ -252,7 +258,7 @@ function buildExistingArtifactsContext(): string {
   if (s.keyFeaturesData) {
     const kf = s.keyFeaturesData;
     sections.push(`### EXISTING KEY FEATURES (Idea: "${kf.ideaTitle}")\n\n${kf.features.map((f, i) =>
-      `${i + 1}. **${f.name}** [${f.priority}]: ${f.description}`
+      `${i + 1}. **${f.name}** [${f.priority}]: ${f.description}\nHMWs: ${(f.hmwIds ?? []).join(", ") || "none"}\nJTBDs: ${f.jtbdIds.join(", ") || "none"}\nPersonas: ${(f.personaNames ?? []).join(", ") || "none"}`
     ).join("\n")}`);
   }
 
@@ -278,19 +284,27 @@ function buildStrategyArtifactsContext(options?: {
   const sections: string[] = [];
 
   if (options?.includeInsights !== false && docStore.insightsData) {
-    sections.push(`## ${sectionLabel} Insights\n\n${JSON.stringify(docStore.insightsData, null, 2)}`);
+    sections.push(`## ${sectionLabel} Pain Points\n\n${JSON.stringify(docStore.insightsData, null, 2)}`);
   }
 
   if (s.manifestoData) {
-    sections.push(`## ${sectionLabel} Overview\n\n${JSON.stringify(s.manifestoData, null, 2)}`);
+    sections.push(`## ${sectionLabel} Overview\n\n${JSON.stringify({
+      problemStatement: s.manifestoData.problemStatement,
+      targetUser: s.manifestoData.targetUser,
+    }, null, 2)}`);
+    sections.push(`## ${sectionLabel} JTBD Clusters\n\n${JSON.stringify({
+      painPoints: s.manifestoData.painPoints ?? [],
+      jtbd: s.manifestoData.jtbd ?? [],
+    }, null, 2)}`);
   }
 
   if (s.personaData) {
     sections.push(`## ${sectionLabel} Personas\n\n${JSON.stringify(s.personaData, null, 2)}`);
-  }
-
-  if (s.journeyMapData) {
-    sections.push(`## ${sectionLabel} Journey Maps\n\n${JSON.stringify(s.journeyMapData, null, 2)}`);
+    sections.push(`## ${sectionLabel} Opportunity Map\n\n${JSON.stringify({
+      personas: s.personaData,
+      jtbd: s.manifestoData?.jtbd ?? [],
+      hmw: s.manifestoData?.hmw ?? [],
+    }, null, 2)}`);
   }
 
   if (s.ideaData) {
@@ -704,35 +718,6 @@ function extractJsonArrayItems(content: string, key: string): string[] | undefin
   return items.length > 0 ? items : undefined;
 }
 
-function extractPartialOverview(text: string): Partial<import("@/hooks/useStrategyStore").ManifestoData> | null {
-  const marker = '```json type="manifesto"';
-  const blockStart = text.indexOf(marker);
-  if (blockStart === -1) return null;
-
-  const content = text.slice(blockStart + marker.length);
-  const result: Partial<import("@/hooks/useStrategyStore").ManifestoData> = {};
-
-  const title = extractJsonStringValue(content, 'title');
-  if (title !== undefined) result.title = title;
-
-  const problemStatement = extractJsonStringValue(content, 'problemStatement');
-  if (problemStatement !== undefined) result.problemStatement = problemStatement;
-
-  const targetUser = extractJsonStringValue(content, 'targetUser');
-  if (targetUser !== undefined) result.targetUser = targetUser;
-
-  const environmentContext = extractJsonStringValue(content, 'environmentContext');
-  if (environmentContext !== undefined) result.environmentContext = environmentContext;
-
-  const jtbd = extractJsonArrayItems(content, 'jtbd');
-  if (jtbd !== undefined) result.jtbd = jtbd as unknown as import("@/hooks/useStrategyStore").ManifestoData["jtbd"];
-
-  const hmw = extractJsonArrayItems(content, 'hmw');
-  if (hmw !== undefined) result.hmw = hmw;
-
-  return Object.keys(result).length > 0 ? result : null;
-}
-
 function extractPartialPersonas(text: string): Partial<PersonaData>[] | null {
   const marker = '```json type="personas"';
   const blockStart = text.indexOf(marker);
@@ -790,8 +775,13 @@ function extractPartialPersonas(text: string): Partial<PersonaData>[] | null {
           if (bio !== undefined) partial.bio = bio;
           const goals = extractJsonArrayItems(objStr, 'goals');
           if (goals !== undefined) partial.goals = goals;
-          const painPoints = extractJsonArrayItems(objStr, 'painPoints');
-          if (painPoints !== undefined) partial.painPoints = painPoints as unknown as PersonaData["painPoints"];
+          const painPointIds = extractJsonArrayItems(objStr, 'painPointIds');
+          if (painPointIds !== undefined) partial.painPointIds = painPointIds;
+          const legacyPainPoints = extractJsonArrayItems(objStr, 'painPoints');
+          if (legacyPainPoints !== undefined) {
+            (partial as Partial<PersonaData> & { painPoints?: import("@/lib/strategy/traceable").TraceableTextItem[] }).painPoints =
+              legacyPainPoints as unknown as import("@/lib/strategy/traceable").TraceableTextItem[];
+          }
           const quote = extractJsonStringValue(objStr, 'quote');
           if (quote !== undefined) partial.quote = quote;
           if (Object.keys(partial).length > 0) {
@@ -815,8 +805,13 @@ function extractPartialPersonas(text: string): Partial<PersonaData>[] | null {
     if (bio !== undefined) partial.bio = bio;
     const goals = extractJsonArrayItems(partialStr, 'goals');
     if (goals !== undefined) partial.goals = goals;
-    const painPoints = extractJsonArrayItems(partialStr, 'painPoints');
-    if (painPoints !== undefined) partial.painPoints = painPoints as unknown as PersonaData["painPoints"];
+    const painPointIds = extractJsonArrayItems(partialStr, 'painPointIds');
+    if (painPointIds !== undefined) partial.painPointIds = painPointIds;
+    const legacyPainPoints = extractJsonArrayItems(partialStr, 'painPoints');
+    if (legacyPainPoints !== undefined) {
+      (partial as Partial<PersonaData> & { painPoints?: import("@/lib/strategy/traceable").TraceableTextItem[] }).painPoints =
+        legacyPainPoints as unknown as import("@/lib/strategy/traceable").TraceableTextItem[];
+    }
     const quote = extractJsonStringValue(partialStr, 'quote');
     if (quote !== undefined) partial.quote = quote;
     if (Object.keys(partial).length > 0) {
@@ -945,8 +940,15 @@ function extractCompleteStages(stagesStr: string): Partial<JourneyStage>[] {
     if (thoughts !== undefined) stage.thoughts = thoughts;
     const emotion = extractJsonStringValue(partialStr, 'emotion');
     if (emotion !== undefined) stage.emotion = emotion;
-    const painPoints = extractJsonArrayItems(partialStr, 'painPoints');
-    if (painPoints !== undefined) stage.painPoints = painPoints as unknown as JourneyStage["painPoints"];
+    const painPointIds = extractJsonArrayItems(partialStr, 'painPointIds');
+    if (painPointIds !== undefined) stage.painPointIds = painPointIds as JourneyStage["painPointIds"];
+    const frictionNotes = extractJsonArrayItems(partialStr, 'frictionNotes');
+    if (frictionNotes !== undefined) stage.frictionNotes = frictionNotes;
+    const legacyPainPoints = extractJsonArrayItems(partialStr, 'painPoints');
+    if (legacyPainPoints !== undefined) {
+      (stage as Partial<JourneyStage> & { painPoints?: import("@/lib/strategy/traceable").TraceableTextItem[] }).painPoints =
+        legacyPainPoints as unknown as import("@/lib/strategy/traceable").TraceableTextItem[];
+    }
     const opportunities = extractJsonArrayItems(partialStr, 'opportunities');
     if (opportunities !== undefined) stage.opportunities = opportunities;
     if (Object.keys(stage).length > 0) stages.push(stage);
@@ -1162,16 +1164,25 @@ function extractPartialKeyFeatures(text: string): Partial<KeyFeaturesData> | nul
         if (name) {
           const id = extractJsonStringValue(partialObj, 'id');
           const description = extractJsonStringValue(partialObj, 'description') ?? '';
+          const kindRaw = extractJsonStringValue(partialObj, 'kind');
+          const kind = kindRaw === 'supporting' ? 'supporting' : 'core';
           const priorityRaw = extractJsonStringValue(partialObj, 'priority');
           const priority = (priorityRaw === 'high' || priorityRaw === 'medium' || priorityRaw === 'low') ? priorityRaw : undefined;
+          const supportingJustification = extractJsonStringValue(partialObj, 'supportingJustification') ?? '';
+          const hmwIds = extractJsonArrayItems(partialObj, 'hmwIds') ?? [];
           const jtbdIds = extractJsonArrayItems(partialObj, 'jtbdIds') ?? [];
+          const personaNames = extractJsonArrayItems(partialObj, 'personaNames') ?? [];
           const painPointIds = extractJsonArrayItems(partialObj, 'painPointIds') ?? [];
           features.push({
             id: id ?? "",
             name,
             description,
+            kind,
             priority: priority ?? 'medium',
+            supportingJustification,
+            hmwIds,
             jtbdIds,
+            personaNames,
             painPointIds,
           });
         }
@@ -1412,8 +1423,6 @@ export function ChatTab({
   const activeEditingPageIds = useStrategyStore((s) => s.activeEditingPageIds);
   const productMode = useStrategyStore((s) => s.productMode);
   const brainData = useProductBrainStore((s) => s.brainData);
-  const isJourneyMapContinuing = useStrategyStore((s) => s.isJourneyMapContinuing);
-  const journeyMapContinueAttempts = useStrategyStore((s) => s.journeyMapContinueAttempts);
   const parallelMode = useStreamingStore((s) => s.parallelMode);
   const pageBuilds = useStreamingStore((s) => s.pageBuilds);
   const buildPhase = useStreamingStore((s) => s.buildPhase);
@@ -1923,6 +1932,7 @@ export function ChatTab({
             problemStatement: partial.problemStatement || "",
             targetUser: partial.targetUser || "",
             environmentContext: partial.environmentContext || "",
+            painPoints: partial.painPoints || [],
             jtbd: partial.jtbd || [],
             hmw: partial.hmw || [],
           });
@@ -1949,7 +1959,11 @@ export function ChatTab({
 
     const partial = extractPartialOverview(textContent);
     if (partial) {
-      useStrategyStore.getState().setStreamingOverview(partial);
+      const store = useStrategyStore.getState();
+      const previousOverview = store.streamingOverview
+        ? { ...(store.manifestoData ?? {}), ...store.streamingOverview }
+        : store.manifestoData;
+      store.setStreamingOverview(shapeStreamingOverview(partial, previousOverview));
     }
   }, [messages, isLoading, flowData]);
 
@@ -2081,64 +2095,6 @@ export function ChatTab({
       useStrategyStore.getState().setStreamingJourneyMaps(partialMaps);
     }
   }, [messages, isLoading]);
-
-  // --- Auto-continue: detect incomplete journey maps and request missing ones ---
-  useEffect(() => {
-    if (isLoading) return;
-    if (strategyPhase !== "problem-overview") return;
-    if (!personaData || !journeyMapData) return;
-    if (isJourneyMapContinuing) return;
-
-    const store = useStrategyStore.getState();
-    if (store.journeyMapContinueAttempts >= 2) return;
-
-    // Check completeness: do we have a journey map for every persona?
-    const coveredNames = new Set(journeyMapData.map((jm) => jm.personaName));
-    const missingPersonas = personaData.filter((p) => !coveredNames.has(p.name));
-
-    if (missingPersonas.length === 0) {
-      // All personas covered — reset attempt counter
-      if (store.journeyMapContinueAttempts > 0) {
-        store.setJourneyMapContinueAttempts(0);
-      }
-      return;
-    }
-
-    console.log(`[Journey Map Auto-Continue] Missing maps for: ${missingPersonas.map(p => p.name).join(", ")}. Attempt ${store.journeyMapContinueAttempts + 1}/2`);
-
-    store.setIsJourneyMapContinuing(true);
-    store.setJourneyMapContinueAttempts(store.journeyMapContinueAttempts + 1);
-
-    // Build context for continuation
-    const parts: string[] = [];
-    if (store.manifestoData) {
-      parts.push(`## Current Overview\n\n${JSON.stringify(store.manifestoData, null, 2)}`);
-    }
-    if (store.personaData) {
-      parts.push(`## All Personas\n\n${JSON.stringify(store.personaData, null, 2)}`);
-    }
-    parts.push(`## Already Generated Journey Maps\n\n${JSON.stringify(journeyMapData, null, 2)}`);
-
-    const missingNames = missingPersonas.map((p) => p.name);
-    const vfsContext = parts.join("\n\n");
-
-    const timer = setTimeout(() => {
-      sendMessage(
-        {
-          text: `The journey maps are incomplete. You generated maps for ${coveredNames.size} out of ${personaData.length} personas. Please generate ONLY the missing journey maps for: ${missingNames.join(", ")}. Output them as a single \`\`\`json type="journey-maps"\`\`\` block containing ONLY the missing maps (do NOT repeat the ones already generated).`,
-        },
-        {
-          body: {
-            vfsContext,
-  
-            strategyPhase: "problem-overview",
-          },
-        }
-      );
-    }, 500);
-
-    return () => clearTimeout(timer);
-  }, [isLoading, strategyPhase, personaData, journeyMapData, isJourneyMapContinuing, sendMessage]);
 
   // --- Stream partial idea data to the canvas in real-time ---
   useEffect(() => {
@@ -2925,9 +2881,9 @@ export function ChatTab({
     const text = getMessageText(lastAssistant);
     const hasManifesto = /```json\s+type="manifesto"[\s\S]*?```/.test(text);
     const hasPersonas = /```json\s+type="personas"[\s\S]*?```/.test(text);
-    const hasJourneyMaps = /```json\s+type="journey-maps"[\s\S]*?```/.test(text);
+    const hasInsights = /```json\s+type="insights"[\s\S]*?```/.test(text);
 
-    if (hasManifesto || hasPersonas || hasJourneyMaps) {
+    if (hasInsights || hasManifesto || hasPersonas) {
       useStrategyStore.getState().setDeepDive(false);
     }
   }, [messages, isLoading]);
@@ -3214,7 +3170,7 @@ export function ChatTab({
     const vfsContext = buildStrategyArtifactsContext({ includeConfidence: true });
 
     sendMessage(
-      { text: "Let's wrap up this discussion. Based on everything we've discussed, update the overview, personas, and journey maps where needed." },
+      { text: "Let's wrap up this discussion. Based on everything we've discussed, update the overview, pain points, JTBD clusters, personas, and opportunity map where needed." },
       { body: { vfsContext, strategyPhase: "problem-overview", isDeepDive: true } }
     );
   }, [isLoading, stop, sendMessage]);
@@ -3227,7 +3183,7 @@ export function ChatTab({
       handleFinishDiscussion();
       return;
     }
-    sendQuickReply("I'm ready — generate the product overview now with what you know.");
+    sendQuickReply("I'm ready — generate the overview, pain points, JTBD clusters, personas, and opportunity map now with what you know.");
   }, [isLoading, sendQuickReply, isDeepDive, handleFinishDiscussion]);
 
   // Show confidence bar during manifesto phase (both initial and deep-dive)
@@ -3713,18 +3669,8 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           );
         })}
 
-        {/* Auto-continuing journey maps indicator */}
-        {strategyPhase === "problem-overview" && isJourneyMapContinuing && (
-          <div className="flex items-center justify-center gap-2 py-3">
-            <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
-            <span className="text-sm text-neutral-600">
-              Completing journey maps ({journeyMapData?.length || 0}/{personaData?.length || 0} personas)...
-            </span>
-          </div>
-        )}
-
         {/* Strategy phase approve + discuss more buttons */}
-        {strategyPhase === "problem-overview" && manifestoData && personaData && journeyMapData && !isLoading && !isDeepDive && !isJourneyMapContinuing && (journeyMapData.length >= personaData.length || journeyMapContinueAttempts >= 2) && (
+        {strategyPhase === "problem-overview" && insightsData && manifestoData && personaData && !isLoading && !isDeepDive && (
           <div className="flex flex-col items-center gap-2 pt-2">
             <button
               onClick={() => {
@@ -3732,7 +3678,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 // Send follow-up message to trigger ideation (Crazy 8's)
                 const context = buildStrategyArtifactsContext({ sectionLabel: "Approved" });
                 sendMessage(
-                  { text: "The overview, personas, and journey maps are approved. Generate 8 Crazy 8's ideas for solving this problem." },
+                  { text: "The overview, pain points, JTBD clusters, personas, and opportunity map are approved. Generate 8 Crazy 8's ideas for solving this problem." },
                   { body: { vfsContext: context, strategyPhase: "ideation" } }
                 );
               }}
@@ -3803,7 +3749,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                   ? `## Selected Idea: ${selectedIdea.title}\n\n${selectedIdea.description}`
                   : "";
                 sendMessage(
-                  { text: `I've selected the idea "${selectedIdea?.title}". Now design the Information Architecture AND map user flows for each job-to-be-done based on this idea.` },
+                  { text: `I've selected the idea "${selectedIdea?.title}". Now design the linked feature set, the Information Architecture, and the user flows for each job-to-be-done based on this idea.` },
                   { body: { vfsContext: { vfs: context, selectedIdeaContext }, strategyPhase: "solution-design" } }
                 );
               }}
@@ -3877,10 +3823,10 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                 // Build shared context
                 const sharedContext = {
                   manifestoContext: storeState.manifestoData
-                    ? `## Product Overview\n\nTitle: ${storeState.manifestoData.title}\nProblem: ${storeState.manifestoData.problemStatement}\nTarget User: ${storeState.manifestoData.targetUser}\nEnvironment / Usage Context: ${storeState.manifestoData.environmentContext || "Not specified yet."}\n\nJobs to be Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i}. ${getTraceableText(j)}`).join("\n")}`
+                    ? `## Product Overview\n\nProblem: ${storeState.manifestoData.problemStatement}\nTarget Users: ${storeState.manifestoData.targetUser}\nPain Points:\n${(storeState.manifestoData.painPoints ?? []).map((painPoint) => `- ${painPoint.id}: ${painPoint.text}`).join("\n")}\n\nJobs to be Done:\n${storeState.manifestoData.jtbd.map((j, i) => `${i}. ${j.id}: ${getTraceableText(j)}`).join("\n")}`
                     : "",
                   personaContext: storeState.personaData
-                    ? `## Personas\n\n${storeState.personaData.map((p) => `### ${p.name}\nRole: ${p.role}\nGoals: ${p.goals.join(", ")}\nPain Points: ${p.painPoints.map((painPoint) => painPoint.text).join(", ")}`).join("\n\n")}`
+                    ? `## Personas\n\n${storeState.personaData.map((p) => `### ${p.name}\nRole: ${p.role}\nGoals: ${p.goals.join(", ")}\nPain Points: ${getPersonaPainPointTexts(p, storeState.manifestoData).join(", ")}`).join("\n\n")}`
                     : "",
                   flowContext: storeState.flowData
                     ? `## App Architecture\n\nPages to build:\n${storeState.flowData.nodes.filter((n) => n.type === "page").map((n) => `- ${n.label} (${n.id}): ${n.description || "No description"}`).join("\n")}`
@@ -4213,7 +4159,7 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
                   : strategyPhase === "hero"
                   ? "e.g. My team wastes hours coordinating who's working on what..."
                   : strategyPhase === "problem-overview"
-                  ? "Refine the overview, personas, or journey maps..."
+                  ? "Refine the overview, pain points, JTBD clusters, personas, or opportunity map..."
                   : strategyPhase === "ideation"
                   ? "Discuss or refine the selected idea..."
                   : strategyPhase === "solution-design"
@@ -4532,17 +4478,15 @@ function getStreamingBlockLabel(
     case "confidence":
       return "Updating confidence...";
     case "manifesto":
-      return opts.manifestoData && opts.isDeepDive ? "Refining product overview..."
-        : opts.manifestoData ? "Regenerating product overview..."
-        : "Generating product overview...";
+      return opts.manifestoData && opts.isDeepDive ? "Refining overview and JTBD clusters..."
+        : opts.manifestoData ? "Regenerating overview and JTBD clusters..."
+        : "Generating overview and JTBD clusters...";
     case "personas":
-      return opts.personaData && opts.isDeepDive ? "Refining personas..."
-        : opts.personaData ? "Regenerating personas..."
-        : "Generating personas...";
+      return opts.personaData && opts.isDeepDive ? "Refining personas and opportunity map..."
+        : opts.personaData ? "Regenerating personas and opportunity map..."
+        : "Generating personas and opportunity map...";
     case "journey-maps":
-      return opts.journeyMapData && opts.isDeepDive ? "Refining journey maps..."
-        : opts.journeyMapData ? "Regenerating journey maps..."
-        : "Generating journey maps...";
+      return "Processing legacy journey maps...";
     case "ideas":
       return "Generating ideas...";
     case "user-idea":
@@ -4555,9 +4499,9 @@ function getStreamingBlockLabel(
     case "user-flows":
       return opts.userFlowsData ? "Refining user flows..." : "Generating user flows...";
     case "insights":
-      return opts.pendingReanalysis ? "Re-analyzing documents..."
-        : opts.insightsData ? "Refining document insights..."
-        : "Analyzing documents...";
+      return opts.pendingReanalysis ? "Re-analyzing pain points..."
+        : opts.insightsData ? "Refining pain points..."
+        : "Analyzing pain points...";
     case "decision-connections":
       return opts.currentBuildingPage ? `Mapping strategy for ${opts.currentBuildingPage}...` : "Mapping strategy connections...";
     case "page-built":

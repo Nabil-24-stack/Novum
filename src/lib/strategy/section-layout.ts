@@ -2,16 +2,18 @@
  * Horizontal layout calculator for strategy artifact groups.
  *
  * Places each visible group left-to-right in a single row:
- *   [Overview] → [Personas] → [Journey Maps] → [Ideas] → [Key Features] → [Architecture] → [User Flows] → [Handoff]
+ *   [Overview] → [Pain Points] → [JTBD Clusters] → [Personas] → [Opportunity Map] → [Ideas] → [Key Features] → [Architecture] → [User Flows] → [Handoff]
  *
  * Each group has its own internal card layout (personas side-by-side, etc.).
  * This module only computes the group origin positions — no visual containers.
  */
 
 export type GroupId =
-  | "insights"
   | "product-overview"
+  | "insights"
+  | "jtbd-clusters"
   | "personas"
+  | "opportunity-map"
   | "journey-maps"
   | "ideas"
   | "key-features"

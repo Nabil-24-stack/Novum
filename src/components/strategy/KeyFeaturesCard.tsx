@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import type { KeyFeaturesData } from "@/hooks/useStrategyStore";
+import type { KeyFeatureData, KeyFeaturesData, ManifestoData } from "@/hooks/useStrategyStore";
 import type { TraceableTextItem } from "@/lib/strategy/traceable";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
@@ -19,11 +19,16 @@ import {
   useFocusWhenEditing,
 } from "@/components/strategy/editing";
 import { normalizeKeyFeaturesData } from "@/lib/strategy/artifact-edit-sync";
+import {
+  getResolvedFeaturePainPointIds,
+  isFeatureExportableForManifesto,
+} from "@/lib/strategy/feature-traceability";
 
-export const KEY_FEATURES_CARD_WIDTH = 400;
+export const KEY_FEATURES_CARD_WIDTH = 420;
 
 interface KeyFeaturesCardProps {
   data: Partial<KeyFeaturesData>;
+  manifestoData?: ManifestoData | null;
   jtbdOptions: TraceableTextItem[];
   painPointOptions: { id: string; label: string; source: string }[];
   x: number;
@@ -35,8 +40,49 @@ interface KeyFeaturesCardProps {
   onSingleClickConfirmed?: () => void;
 }
 
+function getFeatureJtbdIds(feature: Partial<KeyFeatureData> | null | undefined): string[] {
+  return Array.isArray(feature?.jtbdIds)
+    ? feature.jtbdIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+    : [];
+}
+
+function getFeaturePainPointIds(feature: Partial<KeyFeatureData> | null | undefined): string[] {
+  return Array.isArray(feature?.painPointIds)
+    ? feature.painPointIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+    : [];
+}
+
+function getFeatureKind(feature: Partial<KeyFeatureData> | null | undefined): KeyFeatureData["kind"] {
+  return feature?.kind === "supporting" ? "supporting" : "core";
+}
+
+function getFeatureParkingMessage(
+  feature: Partial<KeyFeatureData> | null | undefined,
+  manifestoData: ManifestoData | null | undefined,
+  keyFeaturesData: KeyFeaturesData | null | undefined,
+): string | null {
+  const kind = getFeatureKind(feature);
+  if (kind === "supporting") {
+    return feature?.supportingJustification?.trim()
+      ? null
+      : "This supporting item is parked until you explain why it must ship without discovery linkage.";
+  }
+  const hasJtbd = getFeatureJtbdIds(feature).length > 0;
+  const hasPainPoints = getResolvedFeaturePainPointIds(feature, manifestoData).length > 0;
+  const isExportable = isFeatureExportableForManifesto(feature, manifestoData, keyFeaturesData);
+  if (isExportable) return null;
+  if (!hasJtbd && !hasPainPoints) {
+    return "This core feature is parked until it links to at least one JTBD and one pain point.";
+  }
+  if (!hasJtbd) {
+    return "This core feature is parked until it links to at least one JTBD.";
+  }
+  return "This core feature is parked until it links to at least one pain point.";
+}
+
 export function KeyFeaturesCard({
   data,
+  manifestoData = null,
   jtbdOptions,
   painPointOptions,
   x,
@@ -47,16 +93,6 @@ export function KeyFeaturesCard({
   onSelect,
   onSingleClickConfirmed,
 }: KeyFeaturesCardProps) {
-  const getFeatureJtbdIds = (feature: Partial<KeyFeaturesData["features"][number]> | null | undefined) =>
-    Array.isArray(feature?.jtbdIds)
-      ? feature.jtbdIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
-      : [];
-
-  const getFeaturePainPointIds = (feature: Partial<KeyFeaturesData["features"][number]> | null | undefined) =>
-    Array.isArray(feature?.painPointIds)
-      ? feature.painPointIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
-      : [];
-
   const {
     canEdit,
     isEditing,
@@ -69,9 +105,9 @@ export function KeyFeaturesCard({
     value: normalizeKeyFeaturesData({
       ideaTitle: data.ideaTitle ?? "",
       features: data.features ?? [],
-    }),
+    }, manifestoData),
     onCommit,
-    normalize: normalizeKeyFeaturesData,
+    normalize: (value) => normalizeKeyFeaturesData(value, manifestoData),
   });
   const { isDragging, cardInteractionProps } = useArtifactCardInteraction({
     x,
@@ -91,7 +127,9 @@ export function KeyFeaturesCard({
       low: draft.features.filter((feature) => feature.priority === "low"),
     };
   }, [draft.features]);
-  const unmappedFeatureCount = draft.features.filter((feature) => getFeatureJtbdIds(feature).length === 0).length;
+  const parkedFeatureCount = draft.features.filter(
+    (feature) => !isFeatureExportableForManifesto(feature, manifestoData, draft),
+  ).length;
 
   return (
     <div
@@ -129,143 +167,206 @@ export function KeyFeaturesCard({
             </div>
 
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-              Features without a JTBD link stay parked in Novum and are excluded from exported build files until linked.
+              Core features require JTBD + pain-point linkage. Supporting items require a supporting justification.
             </div>
 
             {draft.features.map((feature, index) => {
               const featureJtbdIds = getFeatureJtbdIds(feature);
-              const featurePainPointIds = getFeaturePainPointIds(feature);
+              const featurePainPointIds = getResolvedFeaturePainPointIds(feature, manifestoData);
+              const featureKind = getFeatureKind(feature);
+              const parkingMessage = getFeatureParkingMessage(feature, manifestoData, draft);
 
               return (
-              <div key={feature.id || index} className="space-y-2 rounded-xl border border-neutral-200/80 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                    Feature {index + 1}
-                  </p>
-                  <RemoveListItemButton
-                    onClick={() =>
-                      setDraft((current) => ({
-                        ...current,
-                        features: current.features.filter((_, featureIndex) => featureIndex !== index),
-                      }))
-                    }
-                  />
-                </div>
+                <div key={feature.id || index} className="space-y-2 rounded-xl border border-neutral-200/80 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                      Feature {index + 1}
+                    </p>
+                    <RemoveListItemButton
+                      onClick={() =>
+                        setDraft((current) => ({
+                          ...current,
+                          features: current.features.filter((_, featureIndex) => featureIndex !== index),
+                        }))
+                      }
+                    />
+                  </div>
 
-                <Input
-                  ref={index === 0 ? firstInputRef : undefined}
-                  value={feature.name}
-                  placeholder="Feature name"
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      features: current.features.map((item, featureIndex) =>
-                        featureIndex === index
-                          ? { ...item, name: event.target.value }
-                          : item
-                      ),
-                    }))
-                  }
-                  onKeyDown={(event) =>
-                    handleEditorKeyDown(event, {
-                      onSave: saveEditing,
-                      onCancel: cancelEditing,
-                    })
-                  }
-                  className="text-sm"
-                />
-
-                <Textarea
-                  value={feature.description}
-                  placeholder="Describe why this feature matters."
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      features: current.features.map((item, featureIndex) =>
-                        featureIndex === index
-                          ? { ...item, description: event.target.value }
-                          : item
-                      ),
-                    }))
-                  }
-                  onKeyDown={(event) =>
-                    handleEditorKeyDown(event, {
-                      onSave: saveEditing,
-                      onCancel: cancelEditing,
-                    })
-                  }
-                  className="min-h-[88px] text-sm"
-                />
-
-                <label className="space-y-1 text-xs font-medium text-neutral-500">
-                  Priority
-                  <select
-                    value={feature.priority}
+                  <Input
+                    ref={index === 0 ? firstInputRef : undefined}
+                    value={feature.name}
+                    placeholder="Feature name"
                     onChange={(event) =>
                       setDraft((current) => ({
                         ...current,
                         features: current.features.map((item, featureIndex) =>
                           featureIndex === index
-                            ? {
-                                ...item,
-                                priority: event.target.value as KeyFeaturesData["features"][number]["priority"],
-                              }
+                            ? { ...item, name: event.target.value }
                             : item
                         ),
                       }))
                     }
-                    className="h-10 w-full rounded-lg border border-neutral-200 bg-white px-3 text-sm text-neutral-700 outline-none focus:border-neutral-400"
-                  >
-                    <option value="high">High priority</option>
-                    <option value="medium">Medium priority</option>
-                    <option value="low">Low priority</option>
-                  </select>
-                </label>
+                    onKeyDown={(event) =>
+                      handleEditorKeyDown(event, {
+                        onSave: saveEditing,
+                        onCancel: cancelEditing,
+                      })
+                    }
+                    className="text-sm"
+                  />
 
-                <TraceabilitySelector
-                  label="Links to JTBDs"
-                  description="Required. Tie this feature to the job(s) it helps the user complete."
-                  options={jtbdOptions.map((jtbd) => ({
-                    id: jtbd.id,
-                    label: jtbd.text,
-                    meta: jtbd.id.toUpperCase(),
-                  }))}
-                  selectedIds={featureJtbdIds}
-                  onChange={(nextIds) =>
-                    setDraft((current) => ({
-                      ...current,
-                      features: current.features.map((item, featureIndex) =>
-                        featureIndex === index ? { ...item, jtbdIds: nextIds } : item
-                      ),
-                    }))
-                  }
-                />
+                  <Textarea
+                    value={feature.description}
+                    placeholder="Describe why this feature matters."
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        features: current.features.map((item, featureIndex) =>
+                          featureIndex === index
+                            ? { ...item, description: event.target.value }
+                            : item
+                        ),
+                      }))
+                    }
+                    onKeyDown={(event) =>
+                      handleEditorKeyDown(event, {
+                        onSave: saveEditing,
+                        onCancel: cancelEditing,
+                      })
+                    }
+                    className="min-h-[88px] text-sm"
+                  />
 
-                <TraceabilitySelector
-                  label="Links to pain points"
-                  description="Optional. Add specific friction points this feature resolves."
-                  options={painPointOptions.map((painPoint) => ({
-                    id: painPoint.id,
-                    label: painPoint.label,
-                    meta: painPoint.source,
-                  }))}
-                  selectedIds={featurePainPointIds}
-                  onChange={(nextIds) =>
-                    setDraft((current) => ({
-                      ...current,
-                      features: current.features.map((item, featureIndex) =>
-                        featureIndex === index ? { ...item, painPointIds: nextIds } : item
-                      ),
-                    }))
-                  }
-                />
+                  <label className="space-y-1 text-xs font-medium text-neutral-500">
+                    Type
+                    <select
+                      value={featureKind}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          features: current.features.map((item, featureIndex) =>
+                            featureIndex === index
+                              ? {
+                                  ...item,
+                                  kind: event.target.value as KeyFeatureData["kind"],
+                                }
+                              : item
+                          ),
+                        }))
+                      }
+                      className="h-10 w-full rounded-lg border border-neutral-200 bg-white px-3 text-sm text-neutral-700 outline-none focus:border-neutral-400"
+                    >
+                      <option value="core">Core</option>
+                      <option value="supporting">Supporting</option>
+                    </select>
+                  </label>
 
-                {featureJtbdIds.length === 0 && (
-                  <p className="text-xs font-medium text-red-600">
-                    This feature is parked until you link it to at least one JTBD.
-                  </p>
-                )}
-              </div>
+                  <label className="space-y-1 text-xs font-medium text-neutral-500">
+                    Priority
+                    <select
+                      value={feature.priority}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          features: current.features.map((item, featureIndex) =>
+                            featureIndex === index
+                              ? {
+                                  ...item,
+                                  priority: event.target.value as KeyFeatureData["priority"],
+                                }
+                              : item
+                          ),
+                        }))
+                      }
+                      className="h-10 w-full rounded-lg border border-neutral-200 bg-white px-3 text-sm text-neutral-700 outline-none focus:border-neutral-400"
+                    >
+                      <option value="high">High priority</option>
+                      <option value="medium">Medium priority</option>
+                      <option value="low">Low priority</option>
+                    </select>
+                  </label>
+
+                  {featureKind === "supporting" && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                        Supporting Justification
+                      </p>
+                      <Textarea
+                        value={feature.supportingJustification}
+                        placeholder="Explain why this must ship even without direct discovery linkage."
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            features: current.features.map((item, featureIndex) =>
+                              featureIndex === index
+                                ? { ...item, supportingJustification: event.target.value }
+                                : item
+                            ),
+                          }))
+                        }
+                        onKeyDown={(event) =>
+                          handleEditorKeyDown(event, {
+                            onSave: saveEditing,
+                            onCancel: cancelEditing,
+                          })
+                        }
+                        className="min-h-[88px] text-sm"
+                      />
+                    </div>
+                  )}
+
+                  <TraceabilitySelector
+                    label="Links to JTBDs"
+                    description={
+                      featureKind === "core"
+                        ? "Required for core features."
+                        : "Optional context for supporting items."
+                    }
+                    options={jtbdOptions.map((jtbd) => ({
+                      id: jtbd.id,
+                      label: jtbd.text,
+                      meta: jtbd.id.toUpperCase(),
+                    }))}
+                    selectedIds={featureJtbdIds}
+                    onChange={(nextIds) =>
+                      setDraft((current) => ({
+                        ...current,
+                        features: current.features.map((item, featureIndex) =>
+                          featureIndex === index ? { ...item, jtbdIds: nextIds } : item
+                        ),
+                      }))
+                    }
+                  />
+
+                  <TraceabilitySelector
+                    label="Links to pain points"
+                    description={
+                      featureKind === "core"
+                        ? "Required for core features."
+                        : "Optional context for supporting items."
+                    }
+                    options={painPointOptions.map((painPoint) => ({
+                      id: painPoint.id,
+                      label: painPoint.label,
+                      meta: painPoint.source,
+                    }))}
+                    selectedIds={featurePainPointIds}
+                    onChange={(nextIds) =>
+                      setDraft((current) => ({
+                        ...current,
+                        features: current.features.map((item, featureIndex) =>
+                          featureIndex === index ? { ...item, painPointIds: nextIds } : item
+                        ),
+                      }))
+                    }
+                  />
+
+                  {parkingMessage && (
+                    <p className="text-xs font-medium text-red-600">
+                      {parkingMessage}
+                    </p>
+                  )}
+                </div>
               );
             })}
 
@@ -281,6 +382,8 @@ export function KeyFeaturesCard({
                       name: "",
                       description: "",
                       priority: "medium",
+                      kind: "core",
+                      supportingJustification: "",
                       jtbdIds: [],
                       painPointIds: [],
                     },
@@ -292,9 +395,7 @@ export function KeyFeaturesCard({
             <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
           </div>
         ) : (
-          <div
-            className={canEdit ? "p-5" : "p-5"}
-          >
+          <div className="p-5">
             <div className="space-y-4">
               {(["high", "medium", "low"] as const).map((priority) => {
                 const group = featuresByPriority[priority];
@@ -326,23 +427,43 @@ export function KeyFeaturesCard({
                         {config.label}
                       </span>
                     </div>
-                    <div className="ml-4 space-y-2">
+                    <div className="ml-4 space-y-3">
                       {group.map((feature, index) => {
+                        const featureKind = getFeatureKind(feature);
                         const featureJtbdIds = getFeatureJtbdIds(feature);
+                        const featurePainPointIds = getFeaturePainPointIds(feature);
 
                         return (
-                        <div key={`${priority}-${index}`} className="min-w-0">
-                          <p className="text-sm font-semibold leading-tight text-neutral-900">
-                            {feature.name}
-                          </p>
-                          {feature.description && (
-                            <p className="mt-0.5 text-sm leading-relaxed text-neutral-600">
-                              {feature.description}
-                            </p>
-                          )}
-                          <div className="mt-1.5 flex flex-wrap gap-1.5">
-                            {featureJtbdIds.length > 0 ? (
-                              featureJtbdIds.map((jtbdId) => {
+                          <div key={`${priority}-${index}`} className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-semibold leading-tight text-neutral-900">
+                                {feature.name}
+                              </p>
+                              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                featureKind === "supporting"
+                                  ? "bg-slate-100 text-slate-700"
+                                  : "bg-blue-50 text-blue-700"
+                              }`}>
+                                {featureKind === "supporting" ? "Supporting" : "Core"}
+                              </span>
+                              {!isFeatureExportableForManifesto(feature, manifestoData, draft) && (
+                                <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-700">
+                                  Parked
+                                </span>
+                              )}
+                            </div>
+                            {feature.description && (
+                              <p className="mt-0.5 text-sm leading-relaxed text-neutral-600">
+                                {feature.description}
+                              </p>
+                            )}
+                            {featureKind === "supporting" && feature.supportingJustification && (
+                              <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+                                {feature.supportingJustification}
+                              </p>
+                            )}
+                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                              {featureJtbdIds.map((jtbdId) => {
                                 const jtbd = jtbdOptions.find((item) => item.id === jtbdId);
                                 if (!jtbd) return null;
                                 return (
@@ -353,14 +474,21 @@ export function KeyFeaturesCard({
                                     {jtbd.id.toUpperCase()}
                                   </span>
                                 );
-                              })
-                            ) : (
-                              <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-700">
-                                Parked
-                              </span>
-                            )}
+                              })}
+                              {featurePainPointIds.map((painPointId) => {
+                                const painPoint = painPointOptions.find((item) => item.id === painPointId);
+                                if (!painPoint) return null;
+                                return (
+                                  <span
+                                    key={painPointId}
+                                    className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700"
+                                  >
+                                    {painPoint.label}
+                                  </span>
+                                );
+                              })}
+                            </div>
                           </div>
-                        </div>
                         );
                       })}
                     </div>
@@ -369,9 +497,9 @@ export function KeyFeaturesCard({
               })}
             </div>
 
-            {unmappedFeatureCount > 0 && (
+            {parkedFeatureCount > 0 && (
               <p className="mt-4 text-xs font-medium text-amber-700">
-                {unmappedFeatureCount} parked feature{unmappedFeatureCount === 1 ? "" : "s"} will stay in Novum and be excluded from exported files until linked.
+                {parkedFeatureCount} parked feature{parkedFeatureCount === 1 ? "" : "s"} will stay in Novum and be excluded from exported files until linked or justified.
               </p>
             )}
 

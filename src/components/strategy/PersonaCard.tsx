@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { PersonaData } from "@/hooks/useStrategyStore";
 import type { TraceableTextItem } from "@/lib/strategy/traceable";
+import { resolvePainPointsByIds } from "@/lib/strategy/pain-points";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   ARTIFACT_IDLE_CARD_CLASSNAME,
@@ -31,6 +32,7 @@ const ACCENT_COLORS = [
 
 interface PersonaCardProps {
   persona: Partial<PersonaData>;
+  painPointRegistry: TraceableTextItem[];
   x: number;
   y: number;
   onMove?: (x: number, y: number) => void;
@@ -44,6 +46,7 @@ interface PersonaCardProps {
 
 export function PersonaCard({
   persona,
+  painPointRegistry,
   x,
   y,
   onMove,
@@ -64,16 +67,20 @@ export function PersonaCard({
     cancelEditing,
     saveEditing,
   } = useEditableCard({
-    value: normalizePersonaData({
-      name: persona.name ?? "",
-      role: persona.role ?? "",
-      bio: persona.bio ?? "",
-      goals: persona.goals ?? [],
-      painPoints: persona.painPoints ?? [],
-      quote: persona.quote ?? "",
-    }),
+    value: normalizePersonaData(
+      {
+        ...(persona as PersonaData & { painPoints?: TraceableTextItem[] }),
+        name: persona.name ?? "",
+        role: persona.role ?? "",
+        bio: persona.bio ?? "",
+        goals: persona.goals ?? [],
+        painPointIds: persona.painPointIds ?? [],
+        quote: persona.quote ?? "",
+      } as PersonaData,
+      painPointRegistry
+    ),
     onCommit,
-    normalize: normalizePersonaData,
+    normalize: (value) => normalizePersonaData(value, painPointRegistry),
   });
   const { isDragging, cardInteractionProps } = useArtifactCardInteraction({
     x,
@@ -95,6 +102,10 @@ export function PersonaCard({
       .toUpperCase()
       .slice(0, 2);
   }, [draft.name]);
+  const resolvedPainPoints = useMemo(
+    () => resolvePainPointsByIds(draft.painPointIds, { painPoints: painPointRegistry } as never),
+    [draft.painPointIds, painPointRegistry]
+  );
 
   return (
     <div
@@ -175,15 +186,17 @@ export function PersonaCard({
               onCancel={cancelEditing}
             />
 
-            <EditableTraceableList
+            <IdSelector
               label="Pain Points"
-              values={draft.painPoints}
-              addLabel="Add pain point"
-              onChange={(nextPainPoints) =>
-                setDraft((current) => ({ ...current, painPoints: nextPainPoints }))
+              description="Select canonical pain points from the overview registry."
+              options={painPointRegistry.map((painPoint) => ({
+                id: painPoint.id,
+                label: painPoint.text,
+              }))}
+              selectedIds={draft.painPointIds}
+              onChange={(painPointIds) =>
+                setDraft((current) => ({ ...current, painPointIds }))
               }
-              onSave={saveEditing}
-              onCancel={cancelEditing}
             />
 
             <div className="space-y-1">
@@ -258,7 +271,7 @@ export function PersonaCard({
               </div>
             )}
 
-            {draft.painPoints.length > 0 && (
+            {resolvedPainPoints.length > 0 && (
               <div className="mb-4">
                 <div className="mb-2 flex items-center gap-1.5">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
@@ -267,9 +280,9 @@ export function PersonaCard({
                   </h4>
                 </div>
                 <ul className="space-y-1.5">
-                  {draft.painPoints.map((painPoint, painPointIndex) => (
+                  {resolvedPainPoints.map((painPoint) => (
                     <li
-                      key={painPoint.id || painPointIndex}
+                      key={painPoint.id}
                       className="relative pl-5 text-sm leading-relaxed text-neutral-700"
                     >
                       <span className="absolute left-0 top-1.5 h-1.5 w-1.5 rounded-full bg-amber-400" />
@@ -282,7 +295,7 @@ export function PersonaCard({
 
             {draft.quote && (
               <>
-                {(draft.goals.length > 0 || draft.painPoints.length > 0) && (
+                {(draft.goals.length > 0 || resolvedPainPoints.length > 0) && (
                   <div className="mb-4 border-t border-neutral-200/60" />
                 )}
                 <div className={`border-l-2 pl-3 ${accent.border}`}>
@@ -363,52 +376,51 @@ function EditableStringList(props: {
   );
 }
 
-function EditableTraceableList(props: {
+function IdSelector(props: {
   label: string;
-  values: TraceableTextItem[];
-  addLabel: string;
-  onChange: (values: TraceableTextItem[]) => void;
-  onSave: () => void;
-  onCancel: () => void;
+  description: string;
+  options: { id: string; label: string }[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
 }) {
-  const { label, values, addLabel, onChange, onSave, onCancel } = props;
+  const { label, description, options, selectedIds, onChange } = props;
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-3">
+    <div className="space-y-2 rounded-lg border border-neutral-200 bg-neutral-50/70 p-3">
+      <div>
         <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
-        <AddListItemButton
-          label={addLabel}
-          onClick={() => onChange([...values, { id: "", text: "" }])}
-        />
+        <p className="mt-1 text-xs text-neutral-500">{description}</p>
       </div>
-      <div className="space-y-2">
-        {values.map((value, index) => (
-          <div key={value.id || index} className="flex items-start gap-2">
-            <Textarea
-              value={value.text}
-              placeholder={`${label} ${index + 1}`}
-              onChange={(event) =>
-                onChange(
-                  values.map((item, itemIndex) =>
-                    itemIndex === index ? { ...item, text: event.target.value } : item
-                  )
-                )
-              }
-              onKeyDown={(event) =>
-                handleEditorKeyDown(event, {
-                  onSave,
-                  onCancel,
-                })
-              }
-              className="min-h-[72px] flex-1 text-sm"
-            />
-            <RemoveListItemButton
-              onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}
-            />
-          </div>
-        ))}
-      </div>
+
+      {options.length > 0 ? (
+        <div className="space-y-2">
+          {options.map((option) => {
+            const checked = selectedIds.includes(option.id);
+            return (
+              <label
+                key={option.id}
+                className="flex cursor-pointer items-start gap-2 rounded-lg border border-transparent bg-white px-2 py-2 text-sm hover:border-neutral-200"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) =>
+                    onChange(
+                      event.target.checked
+                        ? [...selectedIds, option.id]
+                        : selectedIds.filter((id) => id !== option.id)
+                    )
+                  }
+                  className="mt-0.5 h-4 w-4 rounded border-neutral-300"
+                />
+                <span className="block text-sm text-neutral-800">{option.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-xs text-neutral-500">No canonical pain points available yet.</p>
+      )}
     </div>
   );
 }

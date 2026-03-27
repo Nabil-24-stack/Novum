@@ -11,15 +11,40 @@ import {
   getDirtyHandoffSections,
 } from "./snapshot.ts";
 
-const jtbd = (id: string, text: string) => ({ id, text });
+const jtbd = (
+  id: string,
+  text: string,
+  overrides: { painPointIds?: string[]; personaNames?: string[] } = {}
+) => ({
+  id,
+  text,
+  painPointIds: [],
+  personaNames: [],
+  ...overrides,
+});
+const hmw = (
+  id: string,
+  text: string,
+  overrides: { jtbdIds?: string[]; painPointIds?: string[] } = {}
+) => ({
+  id,
+  text,
+  jtbdIds: [],
+  painPointIds: [],
+  ...overrides,
+});
 const painPoint = (id: string, text: string) => ({ id, text });
 const feature = (overrides: Partial<NonNullable<ReturnType<typeof buildHandoffSnapshot>["keyFeatures"]>["features"][number]> = {}) => ({
   id: "feature-1",
   name: "Regenerate markdown",
   description: "Refresh the exported handoff after strategy changes.",
   priority: "high" as const,
+  kind: "core" as const,
+  supportingJustification: "",
+  hmwIds: ["hmw-1"],
   jtbdIds: ["jtbd-1"],
-  painPointIds: ["persona-pain-1"],
+  personaNames: ["Avery"],
+  painPointIds: ["pain-point-1"],
   ...overrides,
 });
 
@@ -30,8 +55,9 @@ test("detects dirty handoff sections", () => {
       problemStatement: "Teams lose context between planning and build.",
       targetUser: "Product teams",
       environmentContext: "During handoff and review workflows.",
+      painPoints: [painPoint("pain-point-1", "Planning context gets lost between workstreams.")],
       jtbd: [jtbd("jtbd-1", "Translate strategy into build-ready artifacts.")],
-      hmw: ["How might we keep strategy alive as requirements change?"],
+      hmw: [hmw("hmw-1", "How might we keep strategy alive as requirements change?", { jtbdIds: ["jtbd-1"], painPointIds: ["pain-point-1"] })],
     },
     insights: null,
     personas: null,
@@ -60,8 +86,9 @@ test("builds deterministic problem and solution markdown", () => {
       problemStatement: "Planning gets lost before build.",
       targetUser: "Product teams",
       environmentContext: "During product planning and implementation handoff.",
-      jtbd: [jtbd("jtbd-1", "Keep strategy synced with build context.")],
-      hmw: ["How might we generate living handoffs?"],
+      painPoints: [painPoint("pain-point-1", "Context gets lost"), painPoint("pain-point-2", "Planning changes are scattered")],
+      jtbd: [jtbd("jtbd-1", "Keep strategy synced with build context.", { painPointIds: ["pain-point-1", "pain-point-2"], personaNames: ["Avery"] })],
+      hmw: [hmw("hmw-1", "How might we generate living handoffs?", { jtbdIds: ["jtbd-1"], painPointIds: ["pain-point-1", "pain-point-2"] })],
     },
     insights: {
       insights: [{ id: "insight-1", insight: "Users value strategy more than generation." }],
@@ -73,7 +100,7 @@ test("builds deterministic problem and solution markdown", () => {
         role: "Founder",
         bio: "Leads product direction.",
         goals: ["Ship quickly"],
-        painPoints: [painPoint("persona-pain-1", "Context gets lost")],
+        painPointIds: ["pain-point-1"],
         quote: "I need strategy to stay in sync.",
       },
     ],
@@ -86,7 +113,8 @@ test("builds deterministic problem and solution markdown", () => {
             actions: ["Checks latest plan"],
             thoughts: ["Did anything drift?"],
             emotion: "anxious",
-            painPoints: [painPoint("journey-pain-1", "Changes are scattered")],
+            painPointIds: ["pain-point-1"],
+            frictionNotes: ["Changes are scattered"],
             opportunities: ["Centralize updates"],
           },
         ],
@@ -121,14 +149,20 @@ test("builds deterministic problem and solution markdown", () => {
   const solutionMarkdown = buildSolutionMarkdown({ snapshot });
 
   assert.match(problemMarkdown, /# problem\.md/);
-  assert.match(problemMarkdown, /Environment \/ Usage Context: During product planning and implementation handoff\./);
-  assert.match(problemMarkdown, /jtbd-1: Keep strategy synced with build context\./);
-  assert.match(problemMarkdown, /persona-pain-1: Context gets lost/);
-  assert.match(problemMarkdown, /journey-pain-1: Changes are scattered/);
+  assert.match(problemMarkdown, /Target Users: Product teams/);
+  assert.match(problemMarkdown, /### jtbd-1/);
+  assert.match(problemMarkdown, /- Job: Keep strategy synced with build context\./);
+  assert.match(problemMarkdown, /pain-point-1: Context gets lost/);
+  assert.match(problemMarkdown, /- Personas: Avery/);
+  assert.match(problemMarkdown, /## How Might We Opportunities/);
+  assert.doesNotMatch(problemMarkdown, /Title:/);
+  assert.doesNotMatch(problemMarkdown, /Environment \/ Usage Context:/);
 
   assert.match(solutionMarkdown, /# solution\.md/);
-  assert.match(solutionMarkdown, /feature-1: Regenerate markdown/);
-  assert.match(solutionMarkdown, /Solves For: jtbd-1: Keep strategy synced with build context\. \(Personas: Avery\)/);
+  assert.match(solutionMarkdown, /### feature-1: Regenerate markdown/);
+  assert.match(solutionMarkdown, /- HMWs: hmw-1: How might we generate living handoffs\?/);
+  assert.match(solutionMarkdown, /- JTBDs: jtbd-1: Keep strategy synced with build context\./);
+  assert.match(solutionMarkdown, /- Personas: Avery/);
   assert.match(solutionMarkdown, /### home: Home/);
   assert.match(solutionMarkdown, /Supports JTBDs: jtbd-1: Keep strategy synced with build context\./);
   assert.match(solutionMarkdown, /Anchoring Features: feature-1: Regenerate markdown/);
@@ -141,8 +175,9 @@ test("screen descriptions prefer explicit page linkage when present", () => {
       problemStatement: "Users need fast nutrition planning.",
       targetUser: "Weight-loss users",
       environmentContext: "During meal planning and review.",
-      jtbd: [jtbd("jtbd-1", "Set goals without friction.")],
-      hmw: [],
+      painPoints: [painPoint("pain-point-1", "Goal setup takes too many steps.")],
+      jtbd: [jtbd("jtbd-1", "Set goals without friction.", { painPointIds: ["pain-point-1"], personaNames: ["Avery"] })],
+      hmw: [hmw("hmw-1", "How might we reduce setup friction?", { jtbdIds: ["jtbd-1"], painPointIds: ["pain-point-1"] })],
     },
     insights: null,
     personas: null,
@@ -155,7 +190,7 @@ test("screen descriptions prefer explicit page linkage when present", () => {
     },
     keyFeatures: {
       ideaTitle: "Guided setup",
-      features: [feature({ id: "feature-setup", name: "Goal Setup", jtbdIds: ["jtbd-1"] })],
+      features: [feature({ id: "feature-setup", name: "Goal Setup", jtbdIds: ["jtbd-1"], personaNames: ["Avery"] })],
     },
     informationArchitecture: {
       nodes: [
@@ -187,8 +222,9 @@ test("legacy screen descriptions fall back to text-matched features when flow li
       problemStatement: "Users need setup guidance.",
       targetUser: "Weight-loss users",
       environmentContext: "During onboarding and account maintenance.",
-      jtbd: [jtbd("jtbd-1", "Set goals without friction.")],
-      hmw: [],
+      painPoints: [painPoint("pain-point-1", "Goal setup takes too many steps.")],
+      jtbd: [jtbd("jtbd-1", "Set goals without friction.", { painPointIds: ["pain-point-1"], personaNames: ["Avery"] })],
+      hmw: [hmw("hmw-1", "How might we reduce setup friction?", { jtbdIds: ["jtbd-1"], painPointIds: ["pain-point-1"] })],
     },
     insights: null,
     personas: null,
@@ -207,6 +243,7 @@ test("legacy screen descriptions fall back to text-matched features when flow li
           name: "Goal Setup & Onboarding",
           description: "Set calorie goal, macro targets, and goal weight with smart defaults.",
           jtbdIds: ["jtbd-1"],
+          personaNames: ["Avery"],
         }),
       ],
     },
@@ -238,6 +275,7 @@ test("unresolved page linkage is flagged in solution markdown and warning state"
       problemStatement: "Users need reporting context.",
       targetUser: "Weight-loss users",
       environmentContext: "During weekly review.",
+      painPoints: [painPoint("pain-point-1", "Reports feel hard to interpret.")],
       jtbd: [jtbd("jtbd-1", "Review weekly performance.")],
       hmw: [],
     },
@@ -290,13 +328,14 @@ test("unresolved page linkage is flagged in solution markdown and warning state"
   assert.match(solutionMarkdown, /Anchoring Features: Unresolved linkage: no feature mapping could be derived for this page\./);
   assert.doesNotMatch(solutionMarkdown, /No JTBDs linked yet\./);
   assert.doesNotMatch(solutionMarkdown, /No features linked yet\./);
-  assert.equal(
+  assert.ok(warningMessage);
+  assert.match(
     warningMessage,
-    "1 screen still has unresolved linkage: reports (JTBDs, features)."
+    /1 screen still has unresolved linkage: reports \(JTBDs, features\)\./
   );
 });
 
-test("solution markdown compacts pain point references while problem markdown keeps full pain detail", () => {
+test("solution markdown includes the full feature traceability chain", () => {
   const fullPainPointText =
     "Food search in other apps returns 50 results for chicken breast -- she never knows which one is right";
   const snapshot = buildHandoffSnapshot({
@@ -305,8 +344,9 @@ test("solution markdown compacts pain point references while problem markdown ke
       problemStatement: "Meal logging takes too long.",
       targetUser: "Weight-loss users",
       environmentContext: "During daily meal logging.",
-      jtbd: [jtbd("jtbd-1", "Log meals quickly.")],
-      hmw: [],
+      painPoints: [painPoint("pain-point-1", fullPainPointText)],
+      jtbd: [jtbd("jtbd-1", "Log meals quickly.", { painPointIds: ["pain-point-1"], personaNames: ["Maya"] })],
+      hmw: [hmw("hmw-1", "How might we speed up trusted meal logging?", { jtbdIds: ["jtbd-1"], painPointIds: ["pain-point-1"] })],
     },
     insights: null,
     personas: [
@@ -315,7 +355,7 @@ test("solution markdown compacts pain point references while problem markdown ke
         role: "Office administrator",
         bio: "Needs fast logging.",
         goals: ["Log meals quickly"],
-        painPoints: [painPoint("persona-pain-1", fullPainPointText)],
+        painPointIds: ["pain-point-1"],
         quote: "I need food search to be faster.",
       },
     ],
@@ -328,7 +368,7 @@ test("solution markdown compacts pain point references while problem markdown ke
     },
     keyFeatures: {
       ideaTitle: "Fast search",
-      features: [feature({ painPointIds: ["persona-pain-1"] })],
+      features: [feature({ hmwIds: ["hmw-1"], personaNames: ["Maya"], painPointIds: ["pain-point-1"] })],
     },
     informationArchitecture: {
       nodes: [{ id: "search", label: "Search", type: "page", description: "Search and log food" }],
@@ -349,9 +389,11 @@ test("solution markdown compacts pain point references while problem markdown ke
   const solutionMarkdown = buildSolutionMarkdown({ snapshot });
 
   assert.match(problemMarkdown, /Food search in other apps returns 50 results for chicken breast -- she never knows which one is right/);
-  assert.match(solutionMarkdown, /Resolves Pain Points: persona-pain-1 \(food search in other apps returns 50 results.../);
-  assert.doesNotMatch(solutionMarkdown, /Persona: Maya/);
-  assert.doesNotMatch(solutionMarkdown, /she never knows which one is right/);
+  assert.match(solutionMarkdown, /### feature-1: Regenerate markdown/);
+  assert.match(solutionMarkdown, /- HMWs: hmw-1: How might we speed up trusted meal logging\?/);
+  assert.match(solutionMarkdown, /- JTBDs: jtbd-1: Log meals quickly\./);
+  assert.match(solutionMarkdown, /- Personas: Maya/);
+  assert.match(solutionMarkdown, /- Pain Points: pain-point-1: Food search in other apps returns 50 results for chicken breast -- she never knows which one is right/);
 });
 
 test("builds actionable delta markdown for changed sections only", () => {
@@ -361,8 +403,9 @@ test("builds actionable delta markdown for changed sections only", () => {
       problemStatement: "Planning gets lost before build.",
       targetUser: "Product teams",
       environmentContext: "During product planning and implementation handoff.",
-      jtbd: [jtbd("jtbd-1", "Keep strategy synced with build context.")],
-      hmw: [],
+      painPoints: [painPoint("pain-point-1", "Planning context gets lost between workstreams.")],
+      jtbd: [jtbd("jtbd-1", "Keep strategy synced with build context.", { painPointIds: ["pain-point-1"], personaNames: ["Avery"] })],
+      hmw: [hmw("hmw-1", "How might we keep strategy alive as requirements change?", { jtbdIds: ["jtbd-1"], painPointIds: ["pain-point-1"] })],
     },
     insights: null,
     personas: null,
@@ -404,10 +447,11 @@ test("builds actionable delta markdown for changed sections only", () => {
   });
 
   assert.match(markdown, /# delta\.md/);
-  assert.match(markdown, /## Feature Changes/);
+  assert.match(markdown, /## Feature Traceability Changes/);
   assert.match(markdown, /Updated feature feature-1: Regenerate markdown/);
   assert.match(markdown, /## Build Impact/);
   assert.match(markdown, /Revisit JTBD coverage for: jtbd-1/);
+  assert.doesNotMatch(markdown, /Environment \/ usage context:/);
 });
 
 test("parked features are excluded from solution output and do not dirty exports on parked-only edits", () => {
@@ -417,7 +461,8 @@ test("parked features are excluded from solution output and do not dirty exports
       problemStatement: "Planning gets lost before build.",
       targetUser: "Product teams",
       environmentContext: "During product planning and implementation handoff.",
-      jtbd: [jtbd("jtbd-1", "Keep strategy synced with build context.")],
+      painPoints: [painPoint("pain-point-1", "Planning context gets lost between workstreams.")],
+      jtbd: [jtbd("jtbd-1", "Keep strategy synced with build context.", { painPointIds: ["pain-point-1"], personaNames: ["Avery"] })],
       hmw: [],
     },
     insights: null,
@@ -461,7 +506,8 @@ test("delta treats linked to parked features as removed from exported scope", ()
       problemStatement: "Planning gets lost before build.",
       targetUser: "Product teams",
       environmentContext: "During product planning and implementation handoff.",
-      jtbd: [jtbd("jtbd-1", "Keep strategy synced with build context.")],
+      painPoints: [painPoint("pain-point-1", "Planning context gets lost between workstreams.")],
+      jtbd: [jtbd("jtbd-1", "Keep strategy synced with build context.", { painPointIds: ["pain-point-1"], personaNames: ["Avery"] })],
       hmw: [],
     },
     insights: null,
@@ -502,7 +548,8 @@ test("legacy baseline feature snapshots without link arrays do not crash dirty-s
       problemStatement: "Planning gets lost before build.",
       targetUser: "Product teams",
       environmentContext: "During product planning and implementation handoff.",
-      jtbd: [jtbd("jtbd-1", "Keep strategy synced with build context.")],
+      painPoints: [painPoint("pain-point-1", "Planning context gets lost between workstreams.")],
+      jtbd: [jtbd("jtbd-1", "Keep strategy synced with build context.", { painPointIds: ["pain-point-1"], personaNames: ["Avery"] })],
       hmw: [],
     },
     insights: null,

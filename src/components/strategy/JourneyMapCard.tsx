@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { JourneyMapData, JourneyStage } from "@/hooks/useStrategyStore";
 import type { TraceableTextItem } from "@/lib/strategy/traceable";
+import { resolvePainPointsByIds } from "@/lib/strategy/pain-points";
 import {
   ARTIFACT_EDITOR_FIELDS_CLASSNAME,
   ARTIFACT_IDLE_CARD_CLASSNAME,
@@ -45,6 +46,7 @@ const ROW_DEFS = [
   { key: "thoughts", label: "Thoughts" },
   { key: "emotion", label: "Emotions" },
   { key: "painPoints", label: "Pain Points" },
+  { key: "frictionNotes", label: "Friction Notes" },
   { key: "opportunities", label: "Opportunities" },
 ] as const;
 
@@ -77,7 +79,11 @@ function getEmotionStyle(emotion: string): string {
   return "bg-amber-100 text-amber-700 border-amber-200";
 }
 
-function getCellContent(stage: Partial<JourneyStage>, rowKey: RowKey): ReactNode {
+function getCellContent(
+  stage: Partial<JourneyStage>,
+  rowKey: RowKey,
+  painPointRegistry: TraceableTextItem[],
+): ReactNode {
   switch (rowKey) {
     case "actions":
       return stage.actions?.map((item, index) => (
@@ -97,9 +103,17 @@ function getCellContent(stage: Partial<JourneyStage>, rowKey: RowKey): ReactNode
           </span>
         </div>
       );
-    case "painPoints":
-      return stage.painPoints?.map((item, index) => (
+    case "painPoints": {
+      const linkedPainPoints = resolvePainPointsByIds(stage.painPointIds ?? [], {
+        painPoints: painPointRegistry,
+      } as never);
+      return linkedPainPoints.map((item, index) => (
         <p key={item.id || index} className="text-[11px] leading-relaxed text-neutral-700">{item.text}</p>
+      ));
+    }
+    case "frictionNotes":
+      return stage.frictionNotes?.map((item, index) => (
+        <p key={index} className="text-[11px] leading-relaxed text-neutral-700">{item}</p>
       ));
     case "opportunities":
       return stage.opportunities?.map((item, index) => (
@@ -112,6 +126,7 @@ function getCellContent(stage: Partial<JourneyStage>, rowKey: RowKey): ReactNode
 
 interface JourneyMapCardProps {
   journeyMap: Partial<JourneyMapData>;
+  painPointRegistry: TraceableTextItem[];
   x: number;
   y: number;
   onMove?: (x: number, y: number) => void;
@@ -125,6 +140,7 @@ interface JourneyMapCardProps {
 
 export function JourneyMapCard({
   journeyMap,
+  painPointRegistry,
   x,
   y,
   onMove,
@@ -145,12 +161,16 @@ export function JourneyMapCard({
     cancelEditing,
     saveEditing,
   } = useEditableCard({
-    value: normalizeJourneyMapData({
-      personaName: journeyMap.personaName ?? "",
-      stages: journeyMap.stages ?? [],
-    }),
+    value: normalizeJourneyMapData(
+      {
+        ...(journeyMap as JourneyMapData & { stages?: JourneyStage[] }),
+        personaName: journeyMap.personaName ?? "",
+        stages: journeyMap.stages ?? [],
+      } as JourneyMapData,
+      painPointRegistry
+    ),
     onCommit,
-    normalize: normalizeJourneyMapData,
+    normalize: (value) => normalizeJourneyMapData(value, painPointRegistry),
   });
   const { isDragging, cardInteractionProps } = useArtifactCardInteraction({
     x,
@@ -162,7 +182,6 @@ export function JourneyMapCard({
     onEdit: startEditing,
   });
   const firstInputRef = useFocusWhenEditing<HTMLInputElement>(isEditing);
-
   const stageCount = draft.stages.length;
   const cardWidth = Math.max(JOURNEY_CARD_WIDTH, 100 + stageCount * 150 + 48);
 
@@ -216,7 +235,8 @@ export function JourneyMapCard({
                         actions: [],
                         thoughts: [],
                         emotion: "",
-                        painPoints: [],
+                        painPointIds: [],
+                        frictionNotes: [],
                         opportunities: [],
                       },
                     ],
@@ -225,130 +245,149 @@ export function JourneyMapCard({
               />
             </div>
 
-            <div className="space-y-3">
-              {draft.stages.map((stage, stageIndex) => (
-                <div key={stageIndex} className="space-y-3 rounded-xl border border-neutral-200/80 p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                      Stage {stageIndex + 1}
-                    </p>
-                    <RemoveListItemButton
-                      onClick={() =>
-                        setDraft((current) => ({
-                          ...current,
-                          stages: current.stages.filter((_, index) => index !== stageIndex),
-                        }))
-                      }
-                    />
-                  </div>
-
-                  <Input
-                    ref={stageIndex === 0 ? firstInputRef : undefined}
-                    value={stage.stage}
-                    placeholder="Stage name"
-                    onChange={(event) =>
+            {draft.stages.map((stage, stageIndex) => (
+              <div key={`${stage.stage}-${stageIndex}`} className="space-y-3 rounded-xl border border-neutral-200/80 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                    Stage {stageIndex + 1}
+                  </p>
+                  <RemoveListItemButton
+                    onClick={() =>
                       setDraft((current) => ({
                         ...current,
-                        stages: current.stages.map((item, index) =>
-                          index === stageIndex ? { ...item, stage: event.target.value } : item
-                        ),
+                        stages: current.stages.filter((_, indexToRemove) => indexToRemove !== stageIndex),
                       }))
                     }
-                    onKeyDown={(event) =>
-                      handleEditorKeyDown(event, {
-                        onSave: saveEditing,
-                        onCancel: cancelEditing,
-                      })
-                    }
-                    className="text-sm"
-                  />
-
-                  <Input
-                    value={stage.emotion}
-                    placeholder="Emotion"
-                    onChange={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        stages: current.stages.map((item, index) =>
-                          index === stageIndex ? { ...item, emotion: event.target.value } : item
-                        ),
-                      }))
-                    }
-                    onKeyDown={(event) =>
-                      handleEditorKeyDown(event, {
-                        onSave: saveEditing,
-                        onCancel: cancelEditing,
-                      })
-                    }
-                    className="text-sm"
-                  />
-
-                  <EditableStageList
-                    label="Actions"
-                    values={stage.actions}
-                    addLabel="Add action"
-                    onChange={(actions) =>
-                      setDraft((current) => ({
-                        ...current,
-                        stages: current.stages.map((item, index) =>
-                          index === stageIndex ? { ...item, actions } : item
-                        ),
-                      }))
-                    }
-                    onSave={saveEditing}
-                    onCancel={cancelEditing}
-                  />
-
-                  <EditableStageList
-                    label="Thoughts"
-                    values={stage.thoughts}
-                    addLabel="Add thought"
-                    onChange={(thoughts) =>
-                      setDraft((current) => ({
-                        ...current,
-                        stages: current.stages.map((item, index) =>
-                          index === stageIndex ? { ...item, thoughts } : item
-                        ),
-                      }))
-                    }
-                    onSave={saveEditing}
-                    onCancel={cancelEditing}
-                  />
-
-                  <EditableTraceableStageList
-                    label="Pain Points"
-                    values={stage.painPoints}
-                    addLabel="Add pain point"
-                    onChange={(painPoints) =>
-                      setDraft((current) => ({
-                        ...current,
-                        stages: current.stages.map((item, index) =>
-                          index === stageIndex ? { ...item, painPoints } : item
-                        ),
-                      }))
-                    }
-                    onSave={saveEditing}
-                    onCancel={cancelEditing}
-                  />
-
-                  <EditableStageList
-                    label="Opportunities"
-                    values={stage.opportunities}
-                    addLabel="Add opportunity"
-                    onChange={(opportunities) =>
-                      setDraft((current) => ({
-                        ...current,
-                        stages: current.stages.map((item, index) =>
-                          index === stageIndex ? { ...item, opportunities } : item
-                        ),
-                      }))
-                    }
-                    onSave={saveEditing}
-                    onCancel={cancelEditing}
                   />
                 </div>
-              ))}
-            </div>
+
+                <Input
+                  ref={stageIndex === 0 ? firstInputRef : undefined}
+                  value={stage.stage}
+                  placeholder="Stage name"
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      stages: current.stages.map((item, indexToUpdate) =>
+                        indexToUpdate === stageIndex ? { ...item, stage: event.target.value } : item
+                      ),
+                    }))
+                  }
+                  onKeyDown={(event) =>
+                    handleEditorKeyDown(event, {
+                      onSave: saveEditing,
+                      onCancel: cancelEditing,
+                    })
+                  }
+                  className="text-sm"
+                />
+
+                <EditableStringList
+                  label="Actions"
+                  values={stage.actions}
+                  addLabel="Add action"
+                  onChange={(actions) =>
+                    setDraft((current) => ({
+                      ...current,
+                      stages: current.stages.map((item, indexToUpdate) =>
+                        indexToUpdate === stageIndex ? { ...item, actions } : item
+                      ),
+                    }))
+                  }
+                  onSave={saveEditing}
+                  onCancel={cancelEditing}
+                />
+
+                <EditableStringList
+                  label="Thoughts"
+                  values={stage.thoughts}
+                  addLabel="Add thought"
+                  onChange={(thoughts) =>
+                    setDraft((current) => ({
+                      ...current,
+                      stages: current.stages.map((item, indexToUpdate) =>
+                        indexToUpdate === stageIndex ? { ...item, thoughts } : item
+                      ),
+                    }))
+                  }
+                  onSave={saveEditing}
+                  onCancel={cancelEditing}
+                />
+
+                <label className="space-y-1 text-xs font-medium text-neutral-500">
+                  Emotion
+                  <Input
+                    value={stage.emotion}
+                    placeholder="frustrated, confident, relieved..."
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        stages: current.stages.map((item, indexToUpdate) =>
+                          indexToUpdate === stageIndex ? { ...item, emotion: event.target.value } : item
+                        ),
+                      }))
+                    }
+                    onKeyDown={(event) =>
+                      handleEditorKeyDown(event, {
+                        onSave: saveEditing,
+                        onCancel: cancelEditing,
+                      })
+                    }
+                    className="text-sm"
+                  />
+                </label>
+
+                <IdSelector
+                  label="Canonical Pain Points"
+                  description="Link this stage to overview pain points when the stage reflects a known problem."
+                  options={painPointRegistry.map((painPoint) => ({
+                    id: painPoint.id,
+                    label: painPoint.text,
+                  }))}
+                  selectedIds={stage.painPointIds}
+                  onChange={(painPointIds) =>
+                    setDraft((current) => ({
+                      ...current,
+                      stages: current.stages.map((item, indexToUpdate) =>
+                        indexToUpdate === stageIndex ? { ...item, painPointIds } : item
+                      ),
+                    }))
+                  }
+                />
+
+                <EditableStringList
+                  label="Friction Notes"
+                  values={stage.frictionNotes}
+                  addLabel="Add friction note"
+                  onChange={(frictionNotes) =>
+                    setDraft((current) => ({
+                      ...current,
+                      stages: current.stages.map((item, indexToUpdate) =>
+                        indexToUpdate === stageIndex ? { ...item, frictionNotes } : item
+                      ),
+                    }))
+                  }
+                  onSave={saveEditing}
+                  onCancel={cancelEditing}
+                />
+
+                <EditableStringList
+                  label="Opportunities"
+                  values={stage.opportunities}
+                  addLabel="Add opportunity"
+                  onChange={(opportunities) =>
+                    setDraft((current) => ({
+                      ...current,
+                      stages: current.stages.map((item, indexToUpdate) =>
+                        indexToUpdate === stageIndex ? { ...item, opportunities } : item
+                      ),
+                    }))
+                  }
+                  onSave={saveEditing}
+                  onCancel={cancelEditing}
+                />
+              </div>
+            ))}
 
             <EditModeActions onSave={saveEditing} onCancel={cancelEditing} />
           </div>
@@ -366,7 +405,7 @@ export function JourneyMapCard({
 
                         return (
                           <th
-                            key={columnIndex}
+                            key={`${stage.stage}-${columnIndex}`}
                             className={`px-3 py-2.5 text-center text-[11px] font-bold uppercase tracking-wider ${color.header} ${
                               isCovered ? "border-b-2 border-emerald-400" : ""
                             }`}
@@ -390,12 +429,12 @@ export function JourneyMapCard({
 
                         {draft.stages.map((stage, columnIndex) => {
                           const color = STAGE_COLORS[columnIndex % STAGE_COLORS.length];
-                          const content = getCellContent(stage, row.key);
+                          const content = getCellContent(stage, row.key, painPointRegistry);
                           const isEmotion = row.key === "emotion";
 
                           return (
                             <td
-                              key={columnIndex}
+                              key={`${stage.stage}-${columnIndex}-${row.key}`}
                               className={`border-t border-neutral-100/80 px-3 py-2.5 ${color.cell} ${
                                 isEmotion ? "align-middle text-center" : "align-top"
                               }`}
@@ -421,7 +460,7 @@ export function JourneyMapCard({
   );
 }
 
-function EditableStageList(props: {
+function EditableStringList(props: {
   label: string;
   values: string[];
   addLabel: string;
@@ -435,11 +474,14 @@ function EditableStageList(props: {
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
-        <AddListItemButton label={addLabel} onClick={() => onChange([...values, ""])} />
+        <AddListItemButton
+          label={addLabel}
+          onClick={() => onChange([...values, ""])}
+        />
       </div>
       <div className="space-y-2">
         {values.map((value, index) => (
-          <div key={index} className="flex items-start gap-2">
+          <div key={`${label}-${index}`} className="flex items-start gap-2">
             <Textarea
               value={value}
               placeholder={label}
@@ -464,52 +506,51 @@ function EditableStageList(props: {
   );
 }
 
-function EditableTraceableStageList(props: {
+function IdSelector(props: {
   label: string;
-  values: TraceableTextItem[];
-  addLabel: string;
-  onChange: (values: TraceableTextItem[]) => void;
-  onSave: () => void;
-  onCancel: () => void;
+  description: string;
+  options: { id: string; label: string }[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
 }) {
-  const { label, values, addLabel, onChange, onSave, onCancel } = props;
+  const { label, description, options, selectedIds, onChange } = props;
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-3">
+    <div className="space-y-2 rounded-lg border border-neutral-200 bg-neutral-50/70 p-3">
+      <div>
         <p className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
-        <AddListItemButton
-          label={addLabel}
-          onClick={() => onChange([...values, { id: "", text: "" }])}
-        />
+        <p className="mt-1 text-xs text-neutral-500">{description}</p>
       </div>
-      <div className="space-y-2">
-        {values.map((value, index) => (
-          <div key={value.id || index} className="flex items-start gap-2">
-            <Textarea
-              value={value.text}
-              placeholder={`${label} ${index + 1}`}
-              onChange={(event) =>
-                onChange(
-                  values.map((item, itemIndex) =>
-                    itemIndex === index ? { ...item, text: event.target.value } : item
-                  )
-                )
-              }
-              onKeyDown={(event) =>
-                handleEditorKeyDown(event, {
-                  onSave,
-                  onCancel,
-                })
-              }
-              className="min-h-[72px] flex-1 text-sm"
-            />
-            <RemoveListItemButton
-              onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))}
-            />
-          </div>
-        ))}
-      </div>
+
+      {options.length > 0 ? (
+        <div className="space-y-2">
+          {options.map((option) => {
+            const checked = selectedIds.includes(option.id);
+            return (
+              <label
+                key={option.id}
+                className="flex cursor-pointer items-start gap-2 rounded-lg border border-transparent bg-white px-2 py-2 text-sm hover:border-neutral-200"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) =>
+                    onChange(
+                      event.target.checked
+                        ? [...selectedIds, option.id]
+                        : selectedIds.filter((id) => id !== option.id)
+                    )
+                  }
+                  className="mt-0.5 h-4 w-4 rounded border-neutral-300"
+                />
+                <span className="block text-sm text-neutral-800">{option.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-xs text-neutral-500">No canonical pain points available yet.</p>
+      )}
     </div>
   );
 }

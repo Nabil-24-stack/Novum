@@ -119,12 +119,13 @@ export function resolvePageTraceability(snapshot: HandoffSnapshot): ResolvedPage
 
   const pageNodes = architecture.nodes.filter(isPageNode);
   const validJtbdIds = new Set((snapshot.productOverview?.jtbd ?? []).map((jtbd) => jtbd.id));
-  const exportableFeatures = getExportableFeatures(snapshot.keyFeatures);
+  const exportableFeatures = getExportableFeatures(snapshot.keyFeatures, snapshot.productOverview);
   const exportableFeatureIds = new Set(exportableFeatures.map((feature) => feature.id));
   const exportableFeaturesById = new Map(exportableFeatures.map((feature) => [feature.id, feature]));
   const flowJtbdsByPage = buildPageFlowJtbdMap(snapshot);
 
   return pageNodes.map((page) => {
+    const traceabilityMode = page.traceabilityMode === "supporting" ? "supporting" : "core";
     const hasExplicitTraceability =
       Array.isArray(page.jtbdIds) || Array.isArray(page.featureIds);
 
@@ -167,7 +168,7 @@ export function resolvePageTraceability(snapshot: HandoffSnapshot): ResolvedPage
       ...(page.description ? { pageDescription: page.description } : {}),
       jtbdIds,
       featureIds,
-      unresolvedJtbds: jtbdIds.length === 0,
+      unresolvedJtbds: traceabilityMode === "core" ? jtbdIds.length === 0 : false,
       unresolvedFeatures: featureIds.length === 0,
     };
   });
@@ -189,7 +190,7 @@ function formatMissingLinkageKinds(page: ResolvedPageTraceability): string {
 export function getHandoffWarningMessage(snapshot: HandoffSnapshot): string | null {
   const warnings: string[] = [];
 
-  const parkedFeatureWarning = getParkedFeatureWarning(snapshot.keyFeatures);
+  const parkedFeatureWarning = getParkedFeatureWarning(snapshot.keyFeatures, snapshot.productOverview);
   if (parkedFeatureWarning) {
     warnings.push(parkedFeatureWarning);
   }
