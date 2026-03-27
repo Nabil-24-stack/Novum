@@ -16,6 +16,12 @@ import {
   derivePersonaNamesFromJtbds,
   getResolvedFeaturePainPointIds,
 } from "../lib/strategy/feature-traceability.ts";
+import {
+  createIdleProblemOverviewSequenceState,
+  type ProblemOverviewSequenceStage,
+  type ProblemOverviewSequenceState,
+  type ProblemOverviewSourceBlock,
+} from "../lib/strategy/problem-overview-sequencing.ts";
 
 export type StrategyPhase =
   | "hero"
@@ -708,6 +714,7 @@ interface StrategyState {
   verifiedPages: string[];
   productMode: ProductMode | null;
   handoff: HandoffState;
+  problemOverviewSequence: ProblemOverviewSequenceState;
 
   // Actions
   setPhase: (phase: StrategyPhase) => void;
@@ -745,6 +752,12 @@ interface StrategyState {
   setJourneyMapContinueAttempts: (n: number) => void;
   setIsJourneyMapContinuing: (v: boolean) => void;
   addVerifiedPage: (pageId: string) => void;
+  startProblemOverviewSequence: () => void;
+  setProblemOverviewSequenceStage: (stage: ProblemOverviewSequenceStage) => void;
+  setProblemOverviewSequenceViewportSettled: (settled: boolean) => void;
+  setProblemOverviewSourceBlockCompleted: (block: ProblemOverviewSourceBlock, completed: boolean) => void;
+  completeProblemOverviewSequence: () => void;
+  clearProblemOverviewSequence: () => void;
   hydrate: (data: Partial<typeof initialState>) => void;
   reset: () => void;
 }
@@ -789,12 +802,19 @@ const initialState = {
   verifiedPages: [] as string[],
   productMode: null as ProductMode | null,
   handoff: createEmptyHandoffState(),
+  problemOverviewSequence: createIdleProblemOverviewSequenceState(),
 };
 
 export const useStrategyStore = create<StrategyState>((set, get) => ({
   ...initialState,
 
-  setPhase: (phase) => set({ phase }),
+  setPhase: (phase) =>
+    set((state) => ({
+      phase,
+      ...(phase !== "problem-overview" && state.problemOverviewSequence.status !== "idle"
+        ? { problemOverviewSequence: createIdleProblemOverviewSequenceState() }
+        : {}),
+    })),
 
   setProductMode: (productMode) => set({ productMode }),
 
@@ -1003,6 +1023,112 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
         : [...state.verifiedPages, pageId],
     })),
 
+  startProblemOverviewSequence: () =>
+    set({
+      problemOverviewSequence: {
+        status: "running",
+        stage: "overview",
+        completedBlocks: {
+          overview: false,
+          "pain-points": false,
+          personas: false,
+        },
+        viewportSettled: false,
+      },
+    }),
+
+  setProblemOverviewSequenceStage: (stage) =>
+    set((state) => {
+      if (state.problemOverviewSequence.status !== "running") {
+        return state;
+      }
+
+      if (state.problemOverviewSequence.stage === stage) {
+        return state;
+      }
+
+      return {
+        problemOverviewSequence: {
+          ...state.problemOverviewSequence,
+          stage,
+          viewportSettled: false,
+        },
+      };
+    }),
+
+  setProblemOverviewSequenceViewportSettled: (settled) =>
+    set((state) => {
+      if (state.problemOverviewSequence.status === "idle") {
+        return state;
+      }
+
+      if (state.problemOverviewSequence.viewportSettled === settled) {
+        return state;
+      }
+
+      return {
+        problemOverviewSequence: {
+          ...state.problemOverviewSequence,
+          viewportSettled: settled,
+        },
+      };
+    }),
+
+  setProblemOverviewSourceBlockCompleted: (block, completed) =>
+    set((state) => {
+      if (state.problemOverviewSequence.status === "idle") {
+        return state;
+      }
+
+      if (state.problemOverviewSequence.completedBlocks[block] === completed) {
+        return state;
+      }
+
+      const resetsViewportForCurrentStage =
+        completed &&
+        ((block === "overview" && state.problemOverviewSequence.stage === "overview") ||
+          (block === "pain-points" && state.problemOverviewSequence.stage === "pain-points") ||
+          (block === "personas" && state.problemOverviewSequence.stage === "personas"));
+
+      return {
+        problemOverviewSequence: {
+          ...state.problemOverviewSequence,
+          completedBlocks: {
+            ...state.problemOverviewSequence.completedBlocks,
+            [block]: completed,
+          },
+          ...(resetsViewportForCurrentStage ? { viewportSettled: false } : {}),
+        },
+      };
+    }),
+
+  completeProblemOverviewSequence: () =>
+    set((state) => {
+      if (state.problemOverviewSequence.status !== "running") {
+        return state;
+      }
+
+      return {
+        problemOverviewSequence: {
+          ...state.problemOverviewSequence,
+          status: "completed",
+          stage: "fit-all",
+          viewportSettled: true,
+        },
+      };
+    }),
+
+  clearProblemOverviewSequence: () =>
+    set((state) => {
+      if (state.problemOverviewSequence.status === "idle") {
+        return state;
+      }
+
+      return {
+        problemOverviewSequence: createIdleProblemOverviewSequenceState(),
+      };
+    }),
+
   hydrate: (data: Partial<typeof initialState>) =>
     set(() => {
       const fallbackPainPoints = buildFallbackPainPointsFromLegacyPersonas(data.personaData as unknown[]);
@@ -1038,6 +1164,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
           ? data.userFlowsData.map(normalizeUserFlowState)
           : initialState.userFlowsData,
         handoff: normalizeHandoffState(data.handoff),
+        problemOverviewSequence: createIdleProblemOverviewSequenceState(),
       };
     }),
 

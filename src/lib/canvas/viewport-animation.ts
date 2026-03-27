@@ -41,12 +41,13 @@ export function animateViewport(
   from: ViewportState,
   to: ViewportState,
   onUpdate: (state: ViewportState) => void,
-  options?: { duration?: number }
+  options?: { duration?: number; onComplete?: () => void }
 ): () => void {
   const duration = options?.duration ?? 300; // Default 300ms
   const startTime = performance.now();
   let animationFrameId: number | null = null;
   let isCancelled = false;
+  let didComplete = false;
 
   function animate(currentTime: number) {
     if (isCancelled) return;
@@ -65,6 +66,9 @@ export function animateViewport(
 
     if (progress < 1) {
       animationFrameId = requestAnimationFrame(animate);
+    } else if (!didComplete) {
+      didComplete = true;
+      options?.onComplete?.();
     }
   }
 

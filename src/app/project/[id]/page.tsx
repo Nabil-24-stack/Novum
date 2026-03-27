@@ -101,6 +101,11 @@ import {
   getPersonasCardWidth,
   getPersonasGroupHeight,
 } from "@/lib/strategy/artifact-card-layout";
+import {
+  getProblemOverviewFocusTarget,
+  isProblemOverviewGroupVisibleForStage,
+  resolveNextProblemOverviewSequenceStage,
+} from "@/lib/strategy/problem-overview-sequencing";
 
 type ViewMode = "app" | "design-system";
 
@@ -359,6 +364,10 @@ export default function ProjectEditor() {
   const persistedCoverageDisplayState = useStrategyStore((s) => s.coverageDisplayState);
   const productMode = useStrategyStore((s) => s.productMode);
   const handoffState = useStrategyStore((s) => s.handoff);
+  const problemOverviewSequence = useStrategyStore((s) => s.problemOverviewSequence);
+  const setProblemOverviewSequenceStage = useStrategyStore((s) => s.setProblemOverviewSequenceStage);
+  const setProblemOverviewSequenceViewportSettled = useStrategyStore((s) => s.setProblemOverviewSequenceViewportSettled);
+  const completeProblemOverviewSequence = useStrategyStore((s) => s.completeProblemOverviewSequence);
   const repairChatIntent = useStreamingStore((s) => s.repairChatIntent);
   const verificationPausedErrorText = useStreamingStore((s) => s.verificationPausedErrorText);
   const verificationPausedErrorPath = useStreamingStore((s) => s.verificationPausedErrorPath);
@@ -735,6 +744,15 @@ export default function ProjectEditor() {
 
   // Dynamic idea card height tracking (declared before buildGroupConfigs which reads it)
   const ideaCardHeightsRef = useRef<number[]>([]);
+  const isRunningProblemOverviewSequence = problemOverviewSequence.status === "running";
+
+  const isProblemOverviewGroupVisible = useCallback((groupId: GroupId, baseVisible: boolean) => {
+    if (!baseVisible) return false;
+    if (!isRunningProblemOverviewSequence || problemOverviewSequence.stage === null) {
+      return baseVisible;
+    }
+    return isProblemOverviewGroupVisibleForStage(problemOverviewSequence.stage, groupId);
+  }, [isRunningProblemOverviewSequence, problemOverviewSequence.stage]);
 
   // --- Build group configs from current strategy data ---
   const buildGroupConfigs = useCallback((): GroupConfig[] => {
@@ -746,35 +764,41 @@ export default function ProjectEditor() {
       id: "product-overview",
       width: 520,
       height: 420,
-      visible: !!(manifestoData || streamingOverview),
+      visible: isProblemOverviewGroupVisible("product-overview", !!(manifestoData || streamingOverview)),
     });
 
     configs.push({
       id: "insights",
       width: 620,
       height: 640,
-      visible: !!(insightsData || streamingInsights || manifestoData?.painPoints?.length || streamingOverview?.painPoints?.length),
+      visible: isProblemOverviewGroupVisible(
+        "insights",
+        !!(insightsData || streamingInsights || manifestoData?.painPoints?.length || streamingOverview?.painPoints?.length),
+      ),
     });
 
     configs.push({
       id: "jtbd-clusters",
       width: 560,
       height: Math.max(420, jtbdClusterCount * 180),
-      visible: !!(manifestoData || streamingOverview || jtbdClusterCount > 0),
+      visible: isProblemOverviewGroupVisible("jtbd-clusters", !!(manifestoData || streamingOverview || jtbdClusterCount > 0)),
     });
 
     configs.push({
       id: "personas",
       width: getPersonasCardWidth(personaBoardCount),
       height: getPersonasGroupHeight(personaBoardCount),
-      visible: personaBoardCount > 0,
+      visible: isProblemOverviewGroupVisible("personas", personaBoardCount > 0),
     });
 
     configs.push({
       id: "opportunity-map",
       width: getOpportunityMapCardWidth(personaBoardCount),
       height: getOpportunityMapGroupHeight(personaBoardCount),
-      visible: personaBoardCount > 0 && !!(manifestoData || streamingOverview),
+      visible: isProblemOverviewGroupVisible(
+        "opportunity-map",
+        personaBoardCount > 0 && !!(manifestoData || streamingOverview),
+      ),
     });
 
     configs.push({
@@ -849,6 +873,7 @@ export default function ProjectEditor() {
     streamingInsights,
     streamingOverview,
     streamingPersonas,
+    isProblemOverviewGroupVisible,
   ]);
 
   // Derived layout rects (for viewport animations) — useMemo avoids state-update
@@ -898,9 +923,13 @@ export default function ProjectEditor() {
   }, [groupRects]);
 
   // Helper: get effective position for a group (user-dragged or computed)
+  const visibleGroupIds = useMemo(() => new Set(groupRects.map((rect) => rect.id)), [groupRects]);
   const getGroupOrigin = useCallback((id: GroupId) => {
+    if (!visibleGroupIds.has(id)) {
+      return null;
+    }
     return groupPositions.get(id) ?? groupRects.find((r) => r.id === id) ?? null;
-  }, [groupPositions, groupRects]);
+  }, [groupPositions, groupRects, visibleGroupIds]);
 
   // --- Per-card positions for individually draggable cards ---
   const [personaPositions, setPersonaPositions] = useState<{ x: number; y: number }[]>([]);
@@ -2224,7 +2253,12 @@ export default function ProjectEditor() {
   }, []); // Mount only
 
   // --- Compute which section to focus the viewport on during AI strategy phases ---
-  const focusSection = useMemo((): GroupId | null => {
+  const focusSection = useMemo((): GroupId | "fit-all" | null => {
+    const sequenceFocusTarget = getProblemOverviewFocusTarget(problemOverviewSequence);
+    if (strategyPhase === "problem-overview" && sequenceFocusTarget) {
+      return sequenceFocusTarget;
+    }
+
     if (strategyPhase === "problem-overview") {
       if (streamingPersonas) return "personas";
       if (streamingInsights) return "insights";
@@ -2245,7 +2279,7 @@ export default function ProjectEditor() {
     }
     if (strategyPhase === "handoff") return "handoff";
     return null;
-  }, [strategyPhase, streamingOverview, manifestoData, streamingPersonas, personaData,
+  }, [strategyPhase, problemOverviewSequence, streamingOverview, manifestoData, streamingPersonas, personaData,
       streamingInsights, insightsData, streamingKeyFeatures, activeKeyFeatures,
       flowData, streamingUserFlows, userFlowsData]);
 
@@ -2253,7 +2287,7 @@ export default function ProjectEditor() {
   const prevLayoutKeyRef = useRef<string>("");
   const cancelViewportAnimRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    const visibleIds = Array.from(groupPositions.keys()).sort().join(",");
+    const visibleIds = groupRects.map((rect) => rect.id).sort().join(",");
     if (visibleIds === "") return;
 
     // Build world-space rects from group positions + computed dimensions
@@ -2266,9 +2300,19 @@ export default function ProjectEditor() {
     }
     if (allRects.length === 0) return;
 
+    const awaitingSequenceTarget =
+      problemOverviewSequence.status === "running" &&
+      focusSection !== null &&
+      focusSection !== "fit-all" &&
+      focusSection !== "ideas" &&
+      !groupRects.some((rect) => rect.id === focusSection);
+    if (awaitingSequenceTarget) {
+      return;
+    }
+
     // Focus viewport on the active section during AI strategy phases
     let focusRects = allRects;
-    if (focusSection && focusSection !== "ideas") {
+    if (focusSection && focusSection !== "ideas" && focusSection !== "fit-all") {
       const g = groupPositions.get(focusSection);
       const r = groupRects.find((gr) => gr.id === focusSection);
       if (g && r) {
@@ -2303,7 +2347,18 @@ export default function ProjectEditor() {
     const focusCount = focusSection === "user-flows" ? userFlowPositions.length
       : focusSection === "ideas" ? ideaPositions.length
       : 0;
-    const layoutKey = `${visibleIds}:${chatMode}:${strategyPhase}:${focusSection ?? "all"}:${focusCount}:${Math.round(containerDimensions.width)}:${Math.round(bboxW / 50)}x${Math.round(bboxH / 50)}`;
+    const sequenceCompletionKey = problemOverviewSequence.stage !== null
+      ? `${problemOverviewSequence.stage}:${
+          problemOverviewSequence.stage === "overview"
+            ? Number(problemOverviewSequence.completedBlocks.overview)
+            : problemOverviewSequence.stage === "pain-points"
+              ? Number(problemOverviewSequence.completedBlocks["pain-points"])
+              : problemOverviewSequence.stage === "personas"
+                ? Number(problemOverviewSequence.completedBlocks.personas)
+                : 0
+        }`
+      : problemOverviewSequence.status;
+    const layoutKey = `${visibleIds}:${chatMode}:${strategyPhase}:${focusSection ?? "all"}:${focusCount}:${sequenceCompletionKey}:${Math.round(containerDimensions.width)}:${Math.round(bboxW / 50)}x${Math.round(bboxH / 50)}`;
     // Prototype view owns the viewport, so container resizes there should not
     // re-run the canvas auto-fit animation. Keep the key in sync so collapsing
     // prototype restores the saved viewport instead of immediately re-fitting.
@@ -2350,7 +2405,12 @@ export default function ProjectEditor() {
         y: (screenH - totalWorldHeight * scale) / 2 - worldTop * scale,
         scale,
       };
-      cancelViewportAnimRef.current = animateViewport(viewportRef.current, targetViewport, setViewport, { duration: 400 });
+      cancelViewportAnimRef.current = animateViewport(viewportRef.current, targetViewport, setViewport, {
+        duration: 400,
+        onComplete: problemOverviewSequence.status === "running"
+          ? () => setProblemOverviewSequenceViewportSettled(true)
+          : undefined,
+      });
 
       // Floating chat uses position:fixed (viewport-relative), so add the
       // canvas wrapper's offset from the browser viewport origin.
@@ -2372,13 +2432,33 @@ export default function ProjectEditor() {
       if (showRightPanel && isEarlyStrategyPhase) {
         target.x += 40;
       }
-      cancelViewportAnimRef.current = animateViewport(viewportRef.current, target, setViewport, { duration: 400 });
+      cancelViewportAnimRef.current = animateViewport(viewportRef.current, target, setViewport, {
+        duration: 400,
+        onComplete: problemOverviewSequence.status === "running"
+          ? () => setProblemOverviewSequenceViewportSettled(true)
+          : undefined,
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupPositions, groupRects, chatMode, containerDimensions, strategyPhase,
       isFrameExpanded,
       focusSection, ideaPositions,
-      keyFeaturesPosition, userFlowPositions]);
+      keyFeaturesPosition, userFlowPositions, problemOverviewSequence,
+      setProblemOverviewSequenceViewportSettled]);
+
+  useEffect(() => {
+    const nextStage = resolveNextProblemOverviewSequenceStage(problemOverviewSequence);
+    if (!nextStage) {
+      return;
+    }
+
+    if (nextStage === "complete") {
+      completeProblemOverviewSequence();
+      return;
+    }
+
+    setProblemOverviewSequenceStage(nextStage);
+  }, [completeProblemOverviewSequence, problemOverviewSequence, setProblemOverviewSequenceStage]);
 
   const handlePhaseAction = useCallback((action: "approve-problem-overview" | "approve-ideation" | "approve-solution-design") => {
     if (action === "approve-problem-overview") {

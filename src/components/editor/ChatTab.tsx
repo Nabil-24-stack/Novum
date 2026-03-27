@@ -56,6 +56,7 @@ import {
 } from "@/lib/strategy/custom-idea-flow";
 import { getTraceableText } from "@/lib/strategy/traceable";
 import { resolvePainPointsByIds } from "@/lib/strategy/pain-points";
+import { shouldRunFullProblemOverviewSequence } from "@/lib/strategy/problem-overview-sequencing";
 import type { FileUIPart } from "ai";
 
 const FILE_CODE_BLOCK_RE = /```\w*\s+file="[^"]+"/;
@@ -1608,6 +1609,15 @@ export function ChatTab({
     globalVerificationStatus === "reviewing" ||
     globalVerificationStatus === "fixing";
 
+  const prepareProblemOverviewSequence = useCallback((shouldStartFullRun: boolean) => {
+    const store = useStrategyStore.getState();
+    if (shouldStartFullRun) {
+      store.startProblemOverviewSequence();
+    } else {
+      store.clearProblemOverviewSequence();
+    }
+  }, []);
+
   const beginEditingRequest = useCallback((
     context: EditContext,
     messageText: string,
@@ -1794,6 +1804,7 @@ export function ChatTab({
     if (!pendingReanalysis || isLoading) return;
 
     useDocumentStore.getState().setPendingReanalysis(false);
+    prepareProblemOverviewSequence(false);
 
     // Auto-send re-analysis request
     const docs = useDocumentStore.getState().documents;
@@ -1817,7 +1828,7 @@ export function ChatTab({
         },
       }
     );
-  }, [pendingReanalysis, isLoading, sendMessage]);
+  }, [pendingReanalysis, isLoading, prepareProblemOverviewSequence, sendMessage]);
 
   // --- Pending address gaps: auto-send message when "Address Gaps with AI" clicked ---
   useEffect(() => {
@@ -2441,6 +2452,7 @@ export function ChatTab({
             const parsed = JSON.parse(match[1]);
             if (parsed.insights && Array.isArray(parsed.insights)) {
               useDocumentStore.getState().setInsightsData(parsed);
+              useStrategyStore.getState().setProblemOverviewSourceBlockCompleted("pain-points", true);
             }
           } catch (e) {
             console.warn("[Strategy] Failed to parse insights JSON:", e);
@@ -2458,6 +2470,7 @@ export function ChatTab({
             const parsed = JSON.parse(match[1]);
             if (parsed.title && parsed.problemStatement && parsed.targetUser && Array.isArray(parsed.jtbd) && Array.isArray(parsed.hmw)) {
               useStrategyStore.getState().setManifestoData(parsed);
+              useStrategyStore.getState().setProblemOverviewSourceBlockCompleted("overview", true);
             }
           } catch (e) {
             console.warn("[Strategy] Failed to parse manifesto JSON:", e);
@@ -2475,6 +2488,7 @@ export function ChatTab({
             const parsed = JSON.parse(match[1]);
             if (Array.isArray(parsed) && parsed.length > 0 && (parsed[0].name || parsed[0].role)) {
               useStrategyStore.getState().setPersonaData(parsed);
+              useStrategyStore.getState().setProblemOverviewSourceBlockCompleted("personas", true);
             }
           } catch (e) {
             console.warn("[Strategy] Failed to parse personas JSON:", e);
@@ -3102,13 +3116,14 @@ export function ChatTab({
   const handleDiscussMore = useCallback(() => {
     if (isLoading) return;
     useStrategyStore.getState().setDeepDive(true);
+    prepareProblemOverviewSequence(false);
     const vfsContext = buildStrategyArtifactsContext({ includeConfidence: true });
 
     sendMessage(
       { text: "I'd like to discuss the problem more before moving on. What areas should we go deeper on?" },
       { body: { vfsContext, strategyPhase: "problem-overview", isDeepDive: true } }
     );
-  }, [isLoading, sendMessage]);
+  }, [isLoading, prepareProblemOverviewSequence, sendMessage]);
 
   // --- "Build Anyway" handler (strategy alignment override) ---
 
@@ -3167,13 +3182,14 @@ export function ChatTab({
     if (isLoading) {
       stop();
     }
+    prepareProblemOverviewSequence(true);
     const vfsContext = buildStrategyArtifactsContext({ includeConfidence: true });
 
     sendMessage(
       { text: "Let's wrap up this discussion. Based on everything we've discussed, update the overview, pain points, JTBD clusters, personas, and opportunity map where needed." },
       { body: { vfsContext, strategyPhase: "problem-overview", isDeepDive: true } }
     );
-  }, [isLoading, stop, sendMessage]);
+  }, [isLoading, prepareProblemOverviewSequence, stop, sendMessage]);
 
   // --- "I'm ready" / "Finish discussion" override for confidence gating ---
 
@@ -3183,8 +3199,9 @@ export function ChatTab({
       handleFinishDiscussion();
       return;
     }
+    prepareProblemOverviewSequence(true);
     sendQuickReply("I'm ready — generate the overview, pain points, JTBD clusters, personas, and opportunity map now with what you know.");
-  }, [isLoading, sendQuickReply, isDeepDive, handleFinishDiscussion]);
+  }, [isLoading, prepareProblemOverviewSequence, sendQuickReply, isDeepDive, handleFinishDiscussion]);
 
   // Show confidence bar during manifesto phase (both initial and deep-dive)
   const showConfidenceBar = strategyPhase === "problem-overview" && confidenceData !== null;
@@ -3325,6 +3342,15 @@ export function ChatTab({
     } else {
       requestStrategyPhase = effectivePhase ?? "hero";
     }
+
+    const shouldStartFullProblemOverviewSequence =
+      requestStrategyPhase === "problem-overview" &&
+      shouldRunFullProblemOverviewSequence({
+        isInitialGeneration: strategyPhase === "hero",
+        explicitArtifactFamilies,
+      });
+
+    prepareProblemOverviewSequence(shouldStartFullProblemOverviewSequence);
 
     // Build context based on strategy phase
     let vfsContext: string | Record<string, string> = "";
@@ -4478,13 +4504,13 @@ function getStreamingBlockLabel(
     case "confidence":
       return "Updating confidence...";
     case "manifesto":
-      return opts.manifestoData && opts.isDeepDive ? "Refining overview and JTBD clusters..."
-        : opts.manifestoData ? "Regenerating overview and JTBD clusters..."
-        : "Generating overview and JTBD clusters...";
+      return opts.manifestoData && opts.isDeepDive ? "Refining overview..."
+        : opts.manifestoData ? "Regenerating overview..."
+        : "Generating overview...";
     case "personas":
-      return opts.personaData && opts.isDeepDive ? "Refining personas and opportunity map..."
-        : opts.personaData ? "Regenerating personas and opportunity map..."
-        : "Generating personas and opportunity map...";
+      return opts.personaData && opts.isDeepDive ? "Refining personas..."
+        : opts.personaData ? "Regenerating personas..."
+        : "Generating personas...";
     case "journey-maps":
       return "Processing legacy journey maps...";
     case "ideas":
