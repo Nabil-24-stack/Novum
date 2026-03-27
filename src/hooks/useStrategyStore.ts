@@ -755,6 +755,7 @@ interface StrategyState {
   startProblemOverviewSequence: () => void;
   setProblemOverviewSequenceStage: (stage: ProblemOverviewSequenceStage) => void;
   setProblemOverviewSequenceViewportSettled: (settled: boolean) => void;
+  setProblemOverviewSequenceStageRevealCompleted: (completed: boolean) => void;
   setProblemOverviewSourceBlockCompleted: (block: ProblemOverviewSourceBlock, completed: boolean) => void;
   completeProblemOverviewSequence: () => void;
   clearProblemOverviewSequence: () => void;
@@ -1034,6 +1035,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
           personas: false,
         },
         viewportSettled: false,
+        stageRevealCompleted: false,
       },
     }),
 
@@ -1052,6 +1054,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
           ...state.problemOverviewSequence,
           stage,
           viewportSettled: false,
+          stageRevealCompleted: false,
         },
       };
     }),
@@ -1074,6 +1077,24 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
       };
     }),
 
+  setProblemOverviewSequenceStageRevealCompleted: (completed) =>
+    set((state) => {
+      if (state.problemOverviewSequence.status === "idle") {
+        return state;
+      }
+
+      if (state.problemOverviewSequence.stageRevealCompleted === completed) {
+        return state;
+      }
+
+      return {
+        problemOverviewSequence: {
+          ...state.problemOverviewSequence,
+          stageRevealCompleted: completed,
+        },
+      };
+    }),
+
   setProblemOverviewSourceBlockCompleted: (block, completed) =>
     set((state) => {
       if (state.problemOverviewSequence.status === "idle") {
@@ -1084,12 +1105,6 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
         return state;
       }
 
-      const resetsViewportForCurrentStage =
-        completed &&
-        ((block === "overview" && state.problemOverviewSequence.stage === "overview") ||
-          (block === "pain-points" && state.problemOverviewSequence.stage === "pain-points") ||
-          (block === "personas" && state.problemOverviewSequence.stage === "personas"));
-
       return {
         problemOverviewSequence: {
           ...state.problemOverviewSequence,
@@ -1097,7 +1112,6 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
             ...state.problemOverviewSequence.completedBlocks,
             [block]: completed,
           },
-          ...(resetsViewportForCurrentStage ? { viewportSettled: false } : {}),
         },
       };
     }),
@@ -1114,6 +1128,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
           status: "completed",
           stage: "fit-all",
           viewportSettled: true,
+          stageRevealCompleted: true,
         },
       };
     }),

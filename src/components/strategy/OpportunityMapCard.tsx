@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowRightLeft, Sparkles, Users2 } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { ManifestoData, PersonaData } from "@/hooks/useStrategyStore";
 import {
   artifactCardLayout,
@@ -16,6 +17,7 @@ import {
 interface OpportunityMapCardProps {
   manifestoData: Partial<ManifestoData>;
   personaData?: PersonaData[] | null;
+  visiblePersonaCount?: number;
   x: number;
   y: number;
   onMove?: (x: number, y: number) => void;
@@ -27,6 +29,7 @@ interface OpportunityMapCardProps {
 export function OpportunityMapCard({
   manifestoData,
   personaData = null,
+  visiblePersonaCount,
   x,
   y,
   onMove,
@@ -48,6 +51,10 @@ export function OpportunityMapCard({
   const hmw = manifestoData.hmw ?? [];
   const columnCount = getOpportunityMapColumnCount(personas.length);
   const cardWidth = getOpportunityMapCardWidth(personas.length);
+  const revealedPersonaCount = visiblePersonaCount === undefined
+    ? personas.length
+    : Math.min(visiblePersonaCount, personas.length);
+  const shouldShowStreamingPlaceholder = visiblePersonaCount !== undefined && revealedPersonaCount < Math.max(1, personas.length);
 
   return (
     <div
@@ -72,14 +79,14 @@ export function OpportunityMapCard({
           </div>
         </div>
 
-        {personas.length > 0 ? (
+        {personas.length > 0 || visiblePersonaCount !== undefined ? (
           <div
             className="grid items-start gap-4"
             style={{
               gridTemplateColumns: `repeat(${columnCount}, minmax(0, ${artifactCardLayout.opportunityMap.columnWidth}px))`,
             }}
           >
-            {personas.map((persona, personaIndex) => {
+            {personas.slice(0, revealedPersonaCount).map((persona, personaIndex) => {
               const personaName = typeof persona.name === "string" ? persona.name : "";
               const personaRole = typeof persona.role === "string" ? persona.role : "";
               const mappedJtbds = jtbds.filter((jtbd) => (jtbd.personaNames ?? []).includes(personaName));
@@ -159,12 +166,43 @@ export function OpportunityMapCard({
                 </div>
               );
             })}
+            {shouldShowStreamingPlaceholder && <OpportunityMapPlaceholderColumn />}
           </div>
         ) : (
           <div className="rounded-2xl border border-dashed border-neutral-200 bg-neutral-50/60 p-4 text-sm text-neutral-500">
             Persona mapping will appear here once the discovery phase identifies who each job belongs to.
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function OpportunityMapPlaceholderColumn() {
+  return (
+    <div className="rounded-2xl border border-amber-100 bg-amber-50/50 p-4">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="flex items-center gap-2">
+            <Users2 className="h-4 w-4 text-amber-600" />
+            <Skeleton className="h-4 w-24 bg-white/80" />
+          </div>
+          <Skeleton className="h-3 w-28 bg-white/80" />
+        </div>
+        <Skeleton className="h-6 w-16 rounded-full bg-white/80" />
+      </div>
+
+      <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-3">
+        <Skeleton className="h-3 w-16 bg-blue-100/80" />
+        <Skeleton className="mt-2 h-4 w-full bg-blue-100/80" />
+        <Skeleton className="mt-2 h-4 w-5/6 bg-blue-100/80" />
+        <div className="mt-3 space-y-2">
+          <Skeleton className="h-3 w-24 bg-fuchsia-100/80" />
+          <div className="flex flex-wrap gap-2">
+            <Skeleton className="h-6 w-24 rounded-full bg-white/80" />
+            <Skeleton className="h-6 w-20 rounded-full bg-white/80" />
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 "use client";
 
 import { Briefcase } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { ManifestoData } from "@/hooks/useStrategyStore";
 import {
   buildJtbdClusterViewModels,
@@ -14,6 +15,7 @@ import {
 
 interface JtbdClustersCardProps {
   manifestoData: Partial<ManifestoData>;
+  visibleClusterCount?: number;
   x: number;
   y: number;
   onMove?: (x: number, y: number) => void;
@@ -24,6 +26,7 @@ interface JtbdClustersCardProps {
 
 export function JtbdClustersCard({
   manifestoData,
+  visibleClusterCount,
   x,
   y,
   onMove,
@@ -40,6 +43,10 @@ export function JtbdClustersCard({
     onSingleClickConfirmed,
   });
   const jtbdClusters = buildJtbdClusterViewModels(manifestoData);
+  const revealedClusterCount = visibleClusterCount === undefined
+    ? jtbdClusters.length
+    : Math.min(visibleClusterCount, jtbdClusters.length);
+  const shouldShowStreamingPlaceholder = visibleClusterCount !== undefined && revealedClusterCount < Math.max(1, jtbdClusters.length);
 
   return (
     <div
@@ -68,54 +75,80 @@ export function JtbdClustersCard({
         </div>
 
         <div className="space-y-3">
-          {jtbdClusters.length > 0 ? (
-            jtbdClusters.map((jtbd) => (
-              <div
-                key={jtbd.key}
-                className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-blue-600">
-                      {jtbd.label}
-                    </p>
-                    <p className="mt-1 text-sm font-medium leading-relaxed text-neutral-800">
-                      {jtbd.text}
-                    </p>
-                  </div>
-                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-neutral-500">
-                    {jtbd.personaCount} persona{jtbd.personaCount === 1 ? "" : "s"}
-                  </span>
-                </div>
-
-                <div className="mt-3">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                    Linked Pain Points
-                  </p>
-                  {jtbd.painPoints.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {jtbd.painPoints.map((painPoint) => (
-                        <span
-                          key={`pain-point-${painPoint.id}`}
-                          className="rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-700"
-                        >
-                          {painPoint.text}
-                        </span>
-                      ))}
+          {jtbdClusters.length > 0 || visibleClusterCount !== undefined ? (
+            <>
+              {jtbdClusters.slice(0, revealedClusterCount).map((jtbd) => (
+                <div
+                  key={jtbd.key}
+                  className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-blue-600">
+                        {jtbd.label}
+                      </p>
+                      <p className="mt-1 text-sm font-medium leading-relaxed text-neutral-800">
+                        {jtbd.text}
+                      </p>
                     </div>
-                  ) : (
-                    <p className="text-xs text-neutral-500">
-                      {JTBD_CLUSTER_EMPTY_PAIN_POINTS_TEXT}
+                    <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-neutral-500">
+                      {jtbd.personaCount} persona{jtbd.personaCount === 1 ? "" : "s"}
+                    </span>
+                  </div>
+
+                  <div className="mt-3">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                      Linked Pain Points
                     </p>
-                  )}
+                    {jtbd.painPoints.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {jtbd.painPoints.map((painPoint) => (
+                          <span
+                            key={`pain-point-${painPoint.id}`}
+                            className="rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-700"
+                          >
+                            {painPoint.text}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-neutral-500">
+                        {JTBD_CLUSTER_EMPTY_PAIN_POINTS_TEXT}
+                      </p>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+              {shouldShowStreamingPlaceholder && <JtbdClusterPlaceholder />}
+            </>
           ) : (
             <div className="rounded-2xl border border-dashed border-neutral-200 bg-neutral-50/60 p-4 text-sm text-neutral-500">
               JTBD clusters will appear here once the manifesto is generated.
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function JtbdClusterPlaceholder() {
+  return (
+    <div className="rounded-2xl border border-blue-100 bg-blue-50/40 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-2">
+          <Skeleton className="h-3 w-16 bg-blue-100/80" />
+          <Skeleton className="h-4 w-full bg-blue-100/80" />
+          <Skeleton className="h-4 w-5/6 bg-blue-100/80" />
+        </div>
+        <Skeleton className="h-6 w-20 rounded-full bg-white/80" />
+      </div>
+
+      <div className="mt-3 space-y-2">
+        <Skeleton className="h-3 w-28 bg-blue-100/80" />
+        <div className="flex flex-wrap gap-2">
+          <Skeleton className="h-6 w-28 rounded-full bg-white/80" />
+          <Skeleton className="h-6 w-24 rounded-full bg-white/80" />
         </div>
       </div>
     </div>

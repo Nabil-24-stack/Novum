@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle, Quote, Target, Users2 } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { ManifestoData, PersonaData } from "@/hooks/useStrategyStore";
 import { resolvePainPointsByIds } from "@/lib/strategy/pain-points";
 import {
@@ -25,6 +26,7 @@ const ACCENT_COLORS = [
 interface PersonasBoardCardProps {
   manifestoData?: Partial<ManifestoData> | null;
   personaData?: Array<Partial<PersonaData>> | null;
+  visiblePersonaCount?: number;
   x: number;
   y: number;
   onMove?: (x: number, y: number) => void;
@@ -46,6 +48,7 @@ function getInitials(name: string): string {
 export function PersonasBoardCard({
   manifestoData = null,
   personaData = null,
+  visiblePersonaCount,
   x,
   y,
   onMove,
@@ -65,6 +68,10 @@ export function PersonasBoardCard({
   const painPointRegistry = manifestoData?.painPoints ?? [];
   const columnCount = getPersonasColumnCount(personas.length);
   const cardWidth = getPersonasCardWidth(personas.length);
+  const revealedPersonaCount = visiblePersonaCount === undefined
+    ? personas.length
+    : Math.min(visiblePersonaCount, personas.length);
+  const shouldShowStreamingPlaceholder = visiblePersonaCount !== undefined && revealedPersonaCount < Math.max(1, personas.length);
 
   return (
     <div
@@ -92,14 +99,14 @@ export function PersonasBoardCard({
           </span>
         </div>
 
-        {personas.length > 0 ? (
+        {personas.length > 0 || visiblePersonaCount !== undefined ? (
           <div
             className="grid items-start gap-4"
             style={{
               gridTemplateColumns: `repeat(${columnCount}, minmax(0, ${artifactCardLayout.personas.columnWidth}px))`,
             }}
           >
-            {personas.map((persona, personaIndex) => {
+            {personas.slice(0, revealedPersonaCount).map((persona, personaIndex) => {
               const accent = ACCENT_COLORS[personaIndex] ?? ACCENT_COLORS[0];
               const name = typeof persona.name === "string" ? persona.name : "";
               const role = typeof persona.role === "string" ? persona.role : "";
@@ -207,12 +214,40 @@ export function PersonasBoardCard({
                 </div>
               );
             })}
+            {shouldShowStreamingPlaceholder && <PersonaPlaceholderCard />}
           </div>
         ) : (
           <div className="rounded-2xl border border-dashed border-neutral-200 bg-neutral-50/60 p-4 text-sm text-neutral-500">
             Rich persona details will appear here once the discovery phase identifies the users behind each job.
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function PersonaPlaceholderCard() {
+  return (
+    <div className="rounded-2xl border border-neutral-200/60 bg-white/90 p-6 shadow-lg backdrop-blur-sm">
+      <div className="mb-4 flex items-center gap-3">
+        <Skeleton className="h-10 w-10 rounded-full bg-amber-100/80" />
+        <div className="min-w-0 flex-1 space-y-2">
+          <Skeleton className="h-4 w-2/3 bg-amber-100/80" />
+          <Skeleton className="h-3 w-1/2 bg-neutral-200/80" />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Skeleton className="h-4 w-full bg-neutral-200/80" />
+        <Skeleton className="h-4 w-5/6 bg-neutral-200/80" />
+      </div>
+
+      <div className="mb-4 mt-4 border-t border-neutral-200/60" />
+
+      <div className="space-y-2">
+        <Skeleton className="h-3 w-16 bg-emerald-100/80" />
+        <Skeleton className="h-4 w-3/4 bg-neutral-200/80" />
+        <Skeleton className="h-4 w-2/3 bg-neutral-200/80" />
       </div>
     </div>
   );

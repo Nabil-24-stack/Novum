@@ -20,7 +20,7 @@ test("initial running stage only shows the overview card", () => {
 test("pain points unlock only after overview block completion and viewport settle", () => {
   const sequence = createRunningProblemOverviewSequenceState();
 
-  sequence.completedBlocks.overview = true;
+  sequence.stageRevealCompleted = true;
   assert.equal(resolveNextProblemOverviewSequenceStage(sequence), null);
 
   sequence.viewportSettled = true;
@@ -34,7 +34,7 @@ test("jtbd clusters unlock only after pain points completion and viewport settle
   sequence.viewportSettled = true;
   assert.equal(resolveNextProblemOverviewSequenceStage(sequence), null);
 
-  sequence.completedBlocks["pain-points"] = true;
+  sequence.stageRevealCompleted = true;
   assert.equal(resolveNextProblemOverviewSequenceStage(sequence), "jtbd-clusters");
 });
 
@@ -45,6 +45,9 @@ test("personas unlock only after jtbd viewport settle", () => {
   assert.equal(resolveNextProblemOverviewSequenceStage(sequence), null);
 
   sequence.viewportSettled = true;
+  assert.equal(resolveNextProblemOverviewSequenceStage(sequence), null);
+
+  sequence.stageRevealCompleted = true;
   assert.equal(resolveNextProblemOverviewSequenceStage(sequence), "personas");
 });
 
@@ -52,7 +55,7 @@ test("opportunity map unlocks only after personas completion and viewport settle
   const sequence = createRunningProblemOverviewSequenceState();
 
   sequence.stage = "personas";
-  sequence.completedBlocks.personas = true;
+  sequence.stageRevealCompleted = true;
   assert.equal(resolveNextProblemOverviewSequenceStage(sequence), null);
 
   sequence.viewportSettled = true;
@@ -63,11 +66,23 @@ test("fit-all is the last step after opportunity map and then completes", () => 
   const sequence = createRunningProblemOverviewSequenceState();
 
   sequence.stage = "opportunity-map";
+  sequence.stageRevealCompleted = true;
   sequence.viewportSettled = true;
   assert.equal(resolveNextProblemOverviewSequenceStage(sequence), "fit-all");
 
   sequence.stage = "fit-all";
+  sequence.stageRevealCompleted = true;
   assert.equal(resolveNextProblemOverviewSequenceStage(sequence), "complete");
+});
+
+test("stages do not advance until stage reveal has completed", () => {
+  const sequence = createRunningProblemOverviewSequenceState();
+
+  sequence.viewportSettled = true;
+  assert.equal(resolveNextProblemOverviewSequenceStage(sequence), null);
+
+  sequence.stageRevealCompleted = true;
+  assert.equal(resolveNextProblemOverviewSequenceStage(sequence), "pain-points");
 });
 
 test("initial generation always uses the full ordered sequence", () => {

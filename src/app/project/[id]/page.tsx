@@ -105,7 +105,14 @@ import {
   getProblemOverviewFocusTarget,
   isProblemOverviewGroupVisibleForStage,
   resolveNextProblemOverviewSequenceStage,
+  type ProblemOverviewSequenceStage,
 } from "@/lib/strategy/problem-overview-sequencing";
+import {
+  PROBLEM_OVERVIEW_STAGE_REVEAL_STEP_MS,
+  getProblemOverviewStageRequiredElapsedMs,
+  getProblemOverviewStageRevealTotal,
+  isProblemOverviewStageRevealComplete,
+} from "@/lib/strategy/problem-overview-stage-reveal";
 
 type ViewMode = "app" | "design-system";
 
@@ -367,6 +374,8 @@ export default function ProjectEditor() {
   const problemOverviewSequence = useStrategyStore((s) => s.problemOverviewSequence);
   const setProblemOverviewSequenceStage = useStrategyStore((s) => s.setProblemOverviewSequenceStage);
   const setProblemOverviewSequenceViewportSettled = useStrategyStore((s) => s.setProblemOverviewSequenceViewportSettled);
+  const setProblemOverviewSequenceStageRevealCompleted =
+    useStrategyStore((s) => s.setProblemOverviewSequenceStageRevealCompleted);
   const completeProblemOverviewSequence = useStrategyStore((s) => s.completeProblemOverviewSequence);
   const repairChatIntent = useStreamingStore((s) => s.repairChatIntent);
   const verificationPausedErrorText = useStreamingStore((s) => s.verificationPausedErrorText);
@@ -745,6 +754,72 @@ export default function ProjectEditor() {
   // Dynamic idea card height tracking (declared before buildGroupConfigs which reads it)
   const ideaCardHeightsRef = useRef<number[]>([]);
   const isRunningProblemOverviewSequence = problemOverviewSequence.status === "running";
+  const problemOverviewRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [problemOverviewRevealStage, setProblemOverviewRevealStage] = useState<ProblemOverviewSequenceStage | null>(null);
+  const [problemOverviewRevealStartedAt, setProblemOverviewRevealStartedAt] = useState<number | null>(null);
+  const [problemOverviewRevealNow, setProblemOverviewRevealNow] = useState(() => Date.now());
+  const [problemOverviewRevealVisibleUnits, setProblemOverviewRevealVisibleUnits] = useState(0);
+
+  const problemOverviewRevealData = useMemo(
+    () => ({
+      overview: (isDeepDive && streamingOverview && manifestoData)
+        ? { ...manifestoData, ...streamingOverview }
+        : (manifestoData || streamingOverview),
+      painPoints: (isDeepDive && streamingInsights && insightsData)
+        ? { ...insightsData, ...streamingInsights }
+        : (insightsData || streamingInsights),
+      personas: ((isDeepDive && streamingPersonas && personaData)
+        ? mergeByKey(personaData, streamingPersonas, "name")
+        : (personaData || streamingPersonas)) ?? null,
+    }),
+    [insightsData, isDeepDive, manifestoData, personaData, streamingInsights, streamingOverview, streamingPersonas],
+  );
+
+  const activeProblemOverviewStage = isRunningProblemOverviewSequence
+    ? problemOverviewSequence.stage
+    : null;
+  const activeProblemOverviewRevealTotal = useMemo(() => {
+    if (!activeProblemOverviewStage) {
+      return 0;
+    }
+
+    return getProblemOverviewStageRevealTotal(activeProblemOverviewStage, problemOverviewRevealData);
+  }, [activeProblemOverviewStage, problemOverviewRevealData]);
+  const activeProblemOverviewRevealElapsedMs = problemOverviewRevealStartedAt === null
+    ? 0
+    : Math.max(0, problemOverviewRevealNow - problemOverviewRevealStartedAt);
+  const activeProblemOverviewVisibleUnits = useMemo(() => {
+    if (
+      !activeProblemOverviewStage ||
+      activeProblemOverviewStage === "fit-all" ||
+      problemOverviewRevealStage !== activeProblemOverviewStage
+    ) {
+      return 0;
+    }
+
+    return Math.min(problemOverviewRevealVisibleUnits, activeProblemOverviewRevealTotal);
+  }, [
+    activeProblemOverviewRevealTotal,
+    activeProblemOverviewStage,
+    problemOverviewRevealStage,
+    problemOverviewRevealVisibleUnits,
+  ]);
+  const overviewVisibleSections = isRunningProblemOverviewSequence && activeProblemOverviewStage === "overview"
+    ? activeProblemOverviewVisibleUnits
+    : undefined;
+  const painPointVisibleItems = isRunningProblemOverviewSequence && activeProblemOverviewStage === "pain-points"
+    ? activeProblemOverviewVisibleUnits
+    : undefined;
+  const jtbdVisibleClusters = isRunningProblemOverviewSequence && activeProblemOverviewStage === "jtbd-clusters"
+    ? activeProblemOverviewVisibleUnits
+    : undefined;
+  const personaVisibleCards = isRunningProblemOverviewSequence && activeProblemOverviewStage === "personas"
+    ? activeProblemOverviewVisibleUnits
+    : undefined;
+  const opportunityVisibleColumns =
+    isRunningProblemOverviewSequence && activeProblemOverviewStage === "opportunity-map"
+      ? activeProblemOverviewVisibleUnits
+      : undefined;
 
   const isProblemOverviewGroupVisible = useCallback((groupId: GroupId, baseVisible: boolean) => {
     if (!baseVisible) return false;
@@ -759,6 +834,15 @@ export default function ProjectEditor() {
     const configs: GroupConfig[] = [];
     const jtbdClusterCount = (manifestoData || streamingOverview)?.jtbd?.length ?? 0;
     const personaBoardCount = (personaData || streamingPersonas)?.length ?? 0;
+    const shouldForcePersonaStageVisible =
+      isRunningProblemOverviewSequence &&
+      (problemOverviewSequence.stage === "personas" ||
+        problemOverviewSequence.stage === "opportunity-map" ||
+        problemOverviewSequence.stage === "fit-all");
+    const shouldForceOpportunityStageVisible =
+      isRunningProblemOverviewSequence &&
+      (problemOverviewSequence.stage === "opportunity-map" ||
+        problemOverviewSequence.stage === "fit-all");
 
     configs.push({
       id: "product-overview",
@@ -788,7 +872,7 @@ export default function ProjectEditor() {
       id: "personas",
       width: getPersonasCardWidth(personaBoardCount),
       height: getPersonasGroupHeight(personaBoardCount),
-      visible: isProblemOverviewGroupVisible("personas", personaBoardCount > 0),
+      visible: isProblemOverviewGroupVisible("personas", personaBoardCount > 0 || shouldForcePersonaStageVisible),
     });
 
     configs.push({
@@ -797,7 +881,7 @@ export default function ProjectEditor() {
       height: getOpportunityMapGroupHeight(personaBoardCount),
       visible: isProblemOverviewGroupVisible(
         "opportunity-map",
-        personaBoardCount > 0 && !!(manifestoData || streamingOverview),
+        (personaBoardCount > 0 || shouldForceOpportunityStageVisible) && !!(manifestoData || streamingOverview),
       ),
     });
 
@@ -869,10 +953,12 @@ export default function ProjectEditor() {
     manifestoData,
     personaData,
     strategyPhase,
+    problemOverviewSequence.stage,
     streamingIdeas,
     streamingInsights,
     streamingOverview,
     streamingPersonas,
+    isRunningProblemOverviewSequence,
     isProblemOverviewGroupVisible,
   ]);
 
@@ -2283,6 +2369,135 @@ export default function ProjectEditor() {
       streamingInsights, insightsData, streamingKeyFeatures, activeKeyFeatures,
       flowData, streamingUserFlows, userFlowsData]);
 
+  useEffect(() => {
+    if (problemOverviewRevealTimerRef.current) {
+      clearTimeout(problemOverviewRevealTimerRef.current);
+      problemOverviewRevealTimerRef.current = null;
+    }
+
+    if (!isRunningProblemOverviewSequence || activeProblemOverviewStage === null) {
+      setProblemOverviewRevealStage(null);
+      setProblemOverviewRevealStartedAt(null);
+      setProblemOverviewRevealNow(Date.now());
+      setProblemOverviewRevealVisibleUnits(0);
+      setProblemOverviewSequenceStageRevealCompleted(false);
+      return;
+    }
+
+    const now = Date.now();
+    setProblemOverviewRevealStage(activeProblemOverviewStage);
+    setProblemOverviewRevealStartedAt(now);
+    setProblemOverviewRevealNow(now);
+    setProblemOverviewRevealVisibleUnits(0);
+    setProblemOverviewSequenceStageRevealCompleted(activeProblemOverviewStage === "fit-all");
+
+    return () => {
+      if (problemOverviewRevealTimerRef.current) {
+        clearTimeout(problemOverviewRevealTimerRef.current);
+        problemOverviewRevealTimerRef.current = null;
+      }
+    };
+  }, [
+    activeProblemOverviewStage,
+    isRunningProblemOverviewSequence,
+    setProblemOverviewSequenceStageRevealCompleted,
+  ]);
+
+  useEffect(() => {
+    if (problemOverviewRevealTimerRef.current) {
+      clearTimeout(problemOverviewRevealTimerRef.current);
+      problemOverviewRevealTimerRef.current = null;
+    }
+
+    if (
+      !isRunningProblemOverviewSequence ||
+      activeProblemOverviewStage === null ||
+      activeProblemOverviewStage === "fit-all" ||
+      problemOverviewRevealStartedAt === null ||
+      problemOverviewRevealStage !== activeProblemOverviewStage
+    ) {
+      return;
+    }
+
+    if (activeProblemOverviewVisibleUnits < activeProblemOverviewRevealTotal) {
+      problemOverviewRevealTimerRef.current = setTimeout(() => {
+        setProblemOverviewRevealVisibleUnits((current) => Math.min(
+          activeProblemOverviewRevealTotal,
+          current + 1,
+        ));
+        setProblemOverviewRevealNow(Date.now());
+      }, PROBLEM_OVERVIEW_STAGE_REVEAL_STEP_MS);
+      return () => {
+        if (problemOverviewRevealTimerRef.current) {
+          clearTimeout(problemOverviewRevealTimerRef.current);
+          problemOverviewRevealTimerRef.current = null;
+        }
+      };
+    }
+
+    const requiredElapsedMs = getProblemOverviewStageRequiredElapsedMs(
+      activeProblemOverviewStage,
+      problemOverviewRevealData,
+    );
+    const remainingMs = Math.max(0, requiredElapsedMs - activeProblemOverviewRevealElapsedMs);
+    if (remainingMs > 0) {
+      problemOverviewRevealTimerRef.current = setTimeout(() => {
+        setProblemOverviewRevealNow(Date.now());
+      }, remainingMs);
+    }
+
+    return () => {
+      if (problemOverviewRevealTimerRef.current) {
+        clearTimeout(problemOverviewRevealTimerRef.current);
+        problemOverviewRevealTimerRef.current = null;
+      }
+    };
+  }, [
+    activeProblemOverviewRevealElapsedMs,
+    activeProblemOverviewRevealTotal,
+    activeProblemOverviewStage,
+    activeProblemOverviewVisibleUnits,
+    isRunningProblemOverviewSequence,
+    problemOverviewRevealData,
+    problemOverviewRevealStage,
+    problemOverviewRevealStartedAt,
+  ]);
+
+  useEffect(() => {
+    if (!isRunningProblemOverviewSequence || activeProblemOverviewStage === null) {
+      return;
+    }
+
+    if (activeProblemOverviewStage === "fit-all") {
+      setProblemOverviewSequenceStageRevealCompleted(true);
+      return;
+    }
+
+    if (problemOverviewRevealStage !== activeProblemOverviewStage) {
+      setProblemOverviewSequenceStageRevealCompleted(false);
+      return;
+    }
+
+    setProblemOverviewSequenceStageRevealCompleted(
+      isProblemOverviewStageRevealComplete({
+        stage: activeProblemOverviewStage,
+        data: problemOverviewRevealData,
+        visibleUnits: activeProblemOverviewVisibleUnits,
+        elapsedMs: activeProblemOverviewRevealElapsedMs,
+        completedBlocks: problemOverviewSequence.completedBlocks,
+      }),
+    );
+  }, [
+    activeProblemOverviewRevealElapsedMs,
+    activeProblemOverviewStage,
+    activeProblemOverviewVisibleUnits,
+    isRunningProblemOverviewSequence,
+    problemOverviewRevealData,
+    problemOverviewRevealStage,
+    problemOverviewSequence.completedBlocks,
+    setProblemOverviewSequenceStageRevealCompleted,
+  ]);
+
   // --- Unified viewport animation: fit all visible groups + floating chat ---
   const prevLayoutKeyRef = useRef<string>("");
   const cancelViewportAnimRef = useRef<(() => void) | null>(null);
@@ -2347,18 +2562,8 @@ export default function ProjectEditor() {
     const focusCount = focusSection === "user-flows" ? userFlowPositions.length
       : focusSection === "ideas" ? ideaPositions.length
       : 0;
-    const sequenceCompletionKey = problemOverviewSequence.stage !== null
-      ? `${problemOverviewSequence.stage}:${
-          problemOverviewSequence.stage === "overview"
-            ? Number(problemOverviewSequence.completedBlocks.overview)
-            : problemOverviewSequence.stage === "pain-points"
-              ? Number(problemOverviewSequence.completedBlocks["pain-points"])
-              : problemOverviewSequence.stage === "personas"
-                ? Number(problemOverviewSequence.completedBlocks.personas)
-                : 0
-        }`
-      : problemOverviewSequence.status;
-    const layoutKey = `${visibleIds}:${chatMode}:${strategyPhase}:${focusSection ?? "all"}:${focusCount}:${sequenceCompletionKey}:${Math.round(containerDimensions.width)}:${Math.round(bboxW / 50)}x${Math.round(bboxH / 50)}`;
+    const sequenceStageKey = `${problemOverviewSequence.status}:${problemOverviewSequence.stage ?? "none"}`;
+    const layoutKey = `${visibleIds}:${chatMode}:${strategyPhase}:${focusSection ?? "all"}:${focusCount}:${sequenceStageKey}:${Math.round(containerDimensions.width)}:${Math.round(bboxW / 50)}x${Math.round(bboxH / 50)}`;
     // Prototype view owns the viewport, so container resizes there should not
     // re-run the canvas auto-fit animation. Keep the key in sync so collapsing
     // prototype restores the saved viewport instead of immediately re-fitting.
@@ -2850,6 +3055,7 @@ export default function ProjectEditor() {
               return (
                 <OverviewCard
                   manifestoData={effectiveManifesto}
+                  visibleSections={overviewVisibleSections}
                   x={g.x}
                   y={g.y}
                   onMove={(nx, ny) => {
@@ -2873,6 +3079,7 @@ export default function ProjectEditor() {
                 <PainPointsCard
                   data={data}
                   manifestoData={manifestoData}
+                  visiblePainPointCount={painPointVisibleItems}
                   x={g.x}
                   y={g.y}
                   onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("insights", { x: nx, y: ny }))}
@@ -2894,6 +3101,7 @@ export default function ProjectEditor() {
                   manifestoData={(isDeepDive && streamingOverview && manifestoData)
                     ? { ...manifestoData, ...streamingOverview }
                     : (manifestoData || streamingOverview || {})}
+                  visibleClusterCount={jtbdVisibleClusters}
                   x={g.x}
                   y={g.y}
                   onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("jtbd-clusters", { x: nx, y: ny }))}
@@ -2909,13 +3117,14 @@ export default function ProjectEditor() {
                 ? mergeByKey(personaData, streamingPersonas, "name")
                 : (personaData || streamingPersonas);
               const g = getGroupOrigin("personas");
-              if (!g || !effectivePersonas || effectivePersonas.length === 0) return null;
+              if (!g || ((!effectivePersonas || effectivePersonas.length === 0) && personaVisibleCards === undefined)) return null;
               return (
                 <PersonasBoardCard
                   manifestoData={(isDeepDive && streamingOverview && manifestoData)
                     ? { ...manifestoData, ...streamingOverview }
                     : (manifestoData || streamingOverview || {})}
-                  personaData={effectivePersonas as typeof personaData}
+                  personaData={(effectivePersonas ?? []) as typeof personaData}
+                  visiblePersonaCount={personaVisibleCards}
                   x={g.x}
                   y={g.y}
                   onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("personas", { x: nx, y: ny }))}
@@ -2931,13 +3140,14 @@ export default function ProjectEditor() {
                 ? mergeByKey(personaData, streamingPersonas, "name")
                 : (personaData || streamingPersonas);
               const g = getGroupOrigin("opportunity-map");
-              if (!g || !effectivePersonas || effectivePersonas.length === 0) return null;
+              if (!g || ((!effectivePersonas || effectivePersonas.length === 0) && opportunityVisibleColumns === undefined)) return null;
               return (
                 <OpportunityMapCard
                   manifestoData={(isDeepDive && streamingOverview && manifestoData)
                     ? { ...manifestoData, ...streamingOverview }
                     : (manifestoData || streamingOverview || {})}
-                  personaData={effectivePersonas as typeof personaData}
+                  personaData={(effectivePersonas ?? []) as typeof personaData}
+                  visiblePersonaCount={opportunityVisibleColumns}
                   x={g.x}
                   y={g.y}
                   onMove={(nx, ny) => setGroupPositions((prev) => new Map(prev).set("opportunity-map", { x: nx, y: ny }))}

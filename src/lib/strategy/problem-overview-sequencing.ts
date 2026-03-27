@@ -24,6 +24,7 @@ export interface ProblemOverviewSequenceState {
   stage: ProblemOverviewSequenceStage | null;
   completedBlocks: Record<ProblemOverviewSourceBlock, boolean>;
   viewportSettled: boolean;
+  stageRevealCompleted: boolean;
 }
 
 export type ProblemOverviewFocusTarget = GroupId | "fit-all";
@@ -63,6 +64,7 @@ export function createIdleProblemOverviewSequenceState(): ProblemOverviewSequenc
       personas: false,
     },
     viewportSettled: false,
+    stageRevealCompleted: false,
   };
 }
 
@@ -76,6 +78,7 @@ export function createRunningProblemOverviewSequenceState(): ProblemOverviewSequ
       personas: false,
     },
     viewportSettled: false,
+    stageRevealCompleted: false,
   };
 }
 
@@ -128,19 +131,23 @@ export function resolveNextProblemOverviewSequenceStage(
     return null;
   }
 
+  if (!sequence.viewportSettled || !sequence.stageRevealCompleted) {
+    return null;
+  }
+
   switch (sequence.stage) {
     case "overview":
-      return sequence.viewportSettled && sequence.completedBlocks.overview ? "pain-points" : null;
+      return "pain-points";
     case "pain-points":
-      return sequence.viewportSettled && sequence.completedBlocks["pain-points"] ? "jtbd-clusters" : null;
+      return "jtbd-clusters";
     case "jtbd-clusters":
-      return sequence.viewportSettled ? "personas" : null;
+      return "personas";
     case "personas":
-      return sequence.viewportSettled && sequence.completedBlocks.personas ? "opportunity-map" : null;
+      return "opportunity-map";
     case "opportunity-map":
-      return sequence.viewportSettled ? "fit-all" : null;
+      return "fit-all";
     case "fit-all":
-      return sequence.viewportSettled ? "complete" : null;
+      return "complete";
     default:
       return null;
   }

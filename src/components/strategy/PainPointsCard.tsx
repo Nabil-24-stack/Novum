@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { AlertCircle, Check, FileText, Loader2, Upload } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import type { InsightData, InsightsCardData } from "@/hooks/useDocumentStore";
 import type { ManifestoData } from "@/hooks/useStrategyStore";
@@ -24,6 +25,7 @@ import { normalizeInsightsData } from "@/lib/strategy/artifact-edit-sync";
 interface PainPointsCardProps {
   data: Partial<InsightsCardData>;
   manifestoData?: Partial<ManifestoData> | null;
+  visiblePainPointCount?: number;
   x: number;
   y: number;
   onMove?: (x: number, y: number) => void;
@@ -92,6 +94,7 @@ function getEvidenceScore(painPointText: string, insight: InsightData): number {
 export function PainPointsCard({
   data,
   manifestoData = null,
+  visiblePainPointCount,
   x,
   y,
   onMove,
@@ -129,7 +132,10 @@ export function PainPointsCard({
   });
   const firstInputRef = useFocusWhenEditing<HTMLTextAreaElement>(isEditing);
 
-  const canonicalPainPoints = manifestoData?.painPoints ?? [];
+  const canonicalPainPoints = useMemo(
+    () => manifestoData?.painPoints ?? [],
+    [manifestoData],
+  );
   const evidenceMap = useMemo(() => {
     return new Map(
       canonicalPainPoints.map((painPoint) => {
@@ -154,6 +160,14 @@ export function PainPointsCard({
   const hasPainPoints = canonicalPainPoints.length > 0;
   const hasInsights = draft.insights.length > 0;
   const hasDocs = draft.documents.length > 0;
+  const totalRevealItems = hasPainPoints
+    ? Math.max(1, canonicalPainPoints.length)
+    : Math.max(1, draft.insights.length);
+  const revealedPainPointCount = visiblePainPointCount === undefined
+    ? (hasPainPoints ? canonicalPainPoints.length : draft.insights.length)
+    : Math.min(visiblePainPointCount, hasPainPoints ? canonicalPainPoints.length : draft.insights.length);
+  const shouldShowStreamingPlaceholder = visiblePainPointCount !== undefined && revealedPainPointCount < totalRevealItems;
+  const shouldShowSupplementarySections = visiblePainPointCount === undefined || !shouldShowStreamingPlaceholder;
 
   return (
     <div
@@ -337,7 +351,7 @@ export function PainPointsCard({
                   Canonical Pain Points
                 </h3>
                 <div className="space-y-4">
-                  {canonicalPainPoints.map((painPoint, index) => (
+                  {canonicalPainPoints.slice(0, revealedPainPointCount).map((painPoint, index) => (
                     <PainPointItem
                       key={painPoint.id}
                       index={index}
@@ -345,6 +359,7 @@ export function PainPointsCard({
                       evidence={evidenceMap.get(painPoint.id) ?? []}
                     />
                   ))}
+                  {shouldShowStreamingPlaceholder && <PainPointItemPlaceholder />}
                 </div>
               </>
             ) : hasInsights ? (
@@ -353,11 +368,16 @@ export function PainPointsCard({
                   Surfaced Pain Signals
                 </h3>
                 <ol className="space-y-4">
-                  {draft.insights.map((item, index) => (
+                  {draft.insights.slice(0, revealedPainPointCount).map((item, index) => (
                     <EvidenceItem key={item.id || index} item={item} index={index} />
                   ))}
+                  {shouldShowStreamingPlaceholder && <EvidenceItemPlaceholder />}
                 </ol>
               </>
+            ) : visiblePainPointCount !== undefined ? (
+              <div className="space-y-4">
+                <PainPointItemPlaceholder />
+              </div>
             ) : (
               <div className="flex items-center gap-2 py-4 text-sm text-neutral-400">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -365,7 +385,7 @@ export function PainPointsCard({
               </div>
             )}
 
-            {unmatchedInsights.length > 0 && hasPainPoints && (
+            {shouldShowSupplementarySections && unmatchedInsights.length > 0 && hasPainPoints && (
               <>
                 <div className="mb-5 mt-6 border-t border-neutral-200/60" />
                 <h3 className="mb-3 text-sm font-semibold uppercase tracking-wider text-neutral-500">
@@ -379,7 +399,7 @@ export function PainPointsCard({
               </>
             )}
 
-            {hasDocs && (
+            {shouldShowSupplementarySections && hasDocs && (
               <>
                 <div className="mb-5 mt-6 border-t border-neutral-200/60" />
                 <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-neutral-500">
@@ -476,6 +496,24 @@ function PainPointItem({
   );
 }
 
+function PainPointItemPlaceholder() {
+  return (
+    <div className="rounded-2xl border border-rose-100 bg-rose-50/40 p-4">
+      <div className="flex items-start gap-3">
+        <Skeleton className="mt-0.5 h-4 w-5 bg-rose-100/80" />
+        <div className="min-w-0 flex-1 space-y-3">
+          <Skeleton className="h-4 w-full bg-rose-100/80" />
+          <Skeleton className="h-4 w-5/6 bg-rose-100/80" />
+          <div className="rounded-xl border border-white/80 bg-white/80 p-3">
+            <Skeleton className="h-4 w-full bg-neutral-200/80" />
+            <Skeleton className="mt-2 h-4 w-4/5 bg-neutral-200/80" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EvidenceItem({ item, index }: { item: InsightData; index: number }) {
   return (
     <li className="space-y-1.5">
@@ -496,6 +534,23 @@ function EvidenceItem({ item, index }: { item: InsightData; index: number }) {
       {item.source === "conversation" && !item.quote && (
         <p className="ml-8 text-xs italic text-neutral-400">From conversation</p>
       )}
+    </li>
+  );
+}
+
+function EvidenceItemPlaceholder() {
+  return (
+    <li className="space-y-1.5">
+      <div className="flex items-start gap-3">
+        <Skeleton className="mt-0.5 h-4 w-5 bg-rose-100/80" />
+        <div className="min-w-0 flex-1 space-y-2">
+          <Skeleton className="h-4 w-full bg-rose-100/80" />
+          <Skeleton className="h-4 w-5/6 bg-rose-100/80" />
+        </div>
+      </div>
+      <div className="ml-8 border-l-2 border-rose-200 py-1 pl-3">
+        <Skeleton className="h-4 w-5/6 bg-neutral-200/80" />
+      </div>
     </li>
   );
 }
