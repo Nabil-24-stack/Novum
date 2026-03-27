@@ -36,6 +36,7 @@ import {
   type StrategyRefreshArtifactFamily,
 } from "@/lib/ai/strategy-refresh";
 import { resolveSelectedStrategyArtifactContext } from "@/lib/ai/strategy-artifact-context";
+import { finalizeManifestoBlockData } from "@/lib/ai/strategy-manifesto-finalization";
 import { trackEvent } from "@/lib/analytics/track-event";
 import { useBillingStore } from "@/hooks/useBillingStore";
 import { notifyUsageChanged, useBillingStatus } from "@/hooks/useBillingStatus";
@@ -2467,8 +2468,8 @@ export function ChatTab({
         if (!processedStrategyBlocksSet.has(blockKey)) {
           processedStrategyBlocksSet.add(blockKey);
           try {
-            const parsed = JSON.parse(match[1]);
-            if (parsed.title && parsed.problemStatement && parsed.targetUser && Array.isArray(parsed.jtbd) && Array.isArray(parsed.hmw)) {
+            const parsed = finalizeManifestoBlockData(JSON.parse(match[1]));
+            if (parsed) {
               useStrategyStore.getState().setManifestoData(parsed);
               useStrategyStore.getState().setProblemOverviewSourceBlockCompleted("overview", true);
             }
