@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import { useEffect, useRef, useState, useCallback, useMemo, DragEvent, ClipboardEvent, FormEvent } from "react";
-import { Send, Loader2, X, ImagePlus, ArrowRight, Check, AlertTriangle, Square, FileText, RotateCcw, Zap } from "lucide-react";
+import { Send, Loader2, X, ImagePlus, ArrowRight, Check, AlertTriangle, Square, FileText, RotateCcw, Zap, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { useChatContextStore, type PinnedElement, type AddressGapsPayload } from "@/hooks/useChatContextStore";
 import { useStrategyArtifactSelectionStore } from "@/hooks/useStrategyArtifactSelectionStore";
@@ -88,6 +88,7 @@ function stripStrategyBlocks(text: string): string {
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024; // 4MB
 const MAX_IMAGES_PER_MESSAGE = 5;
+const AUTO_SCROLL_BOTTOM_THRESHOLD = 72;
 
 
 interface ChatTabProps {
@@ -1396,7 +1397,11 @@ export function ChatTab({
   const billingCanBuild = useBillingStatus((s) => s.status === null || !!s.status.canStartInitialGeneration);
   const [isDragOver, setIsDragOver] = useState(false);
   const [activeRepairContext, setActiveRepairContext] = useState<RepairChatDraft | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [shouldRestoreAutoScroll, setShouldRestoreAutoScroll] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { pinnedElements, unpinElement, clearPinnedElements } = useChatContextStore();
   const chatScopedArtifactId = useStrategyArtifactSelectionStore((s) => s.chatScopedArtifactId);
@@ -2781,11 +2786,70 @@ export function ChatTab({
     }
   }, [activeEditingPageIds, currentBuildingPage]);
 
-  // Auto-scroll to bottom
-  useEffect(() => {
-    const behavior = status === "streaming" ? "instant" : "smooth";
+  const updateScrollState = useCallback((container: HTMLDivElement) => {
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const nearBottom = distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD;
+    setIsNearBottom(nearBottom);
+    setShowJumpToLatest(!nearBottom);
+    return nearBottom;
+  }, []);
+
+  const handleMessagesScroll = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const nearBottom = updateScrollState(container);
+    if (nearBottom && shouldRestoreAutoScroll) {
+      setShouldRestoreAutoScroll(false);
+    }
+  }, [shouldRestoreAutoScroll, updateScrollState]);
+
+  const scrollToLatestMessage = useCallback((behavior: ScrollBehavior) => {
     messagesEndRef.current?.scrollIntoView({ behavior });
-  }, [messages, status, currentOptionBlocks.length, strategyPhase, annotationEvaluation.status]);
+    window.requestAnimationFrame(() => {
+      const container = messagesContainerRef.current;
+      if (!container) return;
+      const nearBottom = updateScrollState(container);
+      if (nearBottom) {
+        setShouldRestoreAutoScroll(false);
+      }
+    });
+  }, [updateScrollState]);
+
+  // Auto-scroll to bottom while the user remains pinned to the latest message.
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const canAutoScroll = shouldRestoreAutoScroll || isNearBottom;
+    if (!canAutoScroll) {
+      updateScrollState(container);
+      return;
+    }
+
+    const behavior = shouldRestoreAutoScroll
+      ? "smooth"
+      : status === "streaming"
+        ? "instant"
+        : "smooth";
+
+    scrollToLatestMessage(behavior);
+  }, [
+    annotationEvaluation.status,
+    currentOptionBlocks.length,
+    isNearBottom,
+    messages,
+    scrollToLatestMessage,
+    shouldRestoreAutoScroll,
+    status,
+    strategyPhase,
+    updateScrollState,
+  ]);
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    updateScrollState(container);
+  }, [messages.length, updateScrollState]);
 
   useEffect(() => {
     if (isLoading) return;
@@ -3553,7 +3617,12 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
       )}
 
       {/* Messages */}
-      <div className={`flex-1 p-4 space-y-4 ${messages.length === 0 ? "overflow-hidden" : "overflow-y-auto"}`}>
+      <div className="relative flex-1 min-h-0">
+        <div
+          ref={messagesContainerRef}
+          onScroll={handleMessagesScroll}
+          className={`h-full p-4 space-y-4 ${messages.length === 0 ? "overflow-hidden" : "overflow-y-auto"}`}
+        >
         {messages.length === 0 && (
           <div className="text-center text-neutral-500 text-base flex flex-col items-center justify-center h-full">
             {strategyPhase === "hero" ? (
@@ -4028,7 +4097,23 @@ NEVER use hardcoded colors (bg-blue-500, bg-gray-100, text-gray-600, etc.) as th
           </div>
         )}
 
-        <div ref={messagesEndRef} />
+          <div ref={messagesEndRef} />
+        </div>
+
+        {showJumpToLatest && messages.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setShouldRestoreAutoScroll(true);
+              scrollToLatestMessage("smooth");
+            }}
+            className="absolute bottom-4 right-4 inline-flex h-10 w-10 items-center justify-center rounded-full border border-neutral-200 bg-white text-neutral-600 shadow-md transition-colors hover:bg-neutral-50 hover:text-neutral-900"
+            aria-label="Jump to latest message"
+            title="Jump to latest message"
+          >
+            <ChevronDown className="h-5 w-5" />
+          </button>
+        )}
       </div>
 
       {/* Chat Context Chips */}
