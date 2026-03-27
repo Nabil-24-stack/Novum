@@ -16,6 +16,7 @@ import {
   createDeterministicTraceableId,
   getTraceableText,
   normalizeTraceableTextList,
+  type PartialTraceableTextItem,
   type TraceableTextItem,
 } from "./traceable.ts";
 import {
@@ -23,6 +24,12 @@ import {
   derivePersonaNamesFromJtbds,
   getResolvedFeaturePainPointIds,
 } from "./feature-traceability.ts";
+
+type ManifestoNormalizationInput = Omit<ManifestoData, "painPoints" | "jtbd" | "hmw"> & {
+  painPoints?: Array<TraceableTextItem | PartialTraceableTextItem | string>;
+  jtbd?: Array<(PartialTraceableTextItem & Partial<Pick<JtbdData, "painPointIds" | "personaNames">>) | string>;
+  hmw?: Array<(PartialTraceableTextItem & Partial<Pick<HmwData, "painPointIds" | "jtbdIds">>) | string>;
+};
 
 export interface StrategyArtifactState {
   manifestoData: ManifestoData | null;
@@ -204,7 +211,7 @@ export function normalizeInsightsData(data: InsightsCardData): InsightsCardData 
 }
 
 export function normalizeManifestoData(
-  data: ManifestoData,
+  data: ManifestoNormalizationInput,
   options?: {
     fallbackPainPoints?: TraceableTextItem[] | null | undefined;
     validPersonaNames?: string[] | null | undefined;
@@ -225,14 +232,15 @@ export function normalizeManifestoData(
         : fallbackPainPoints),
   });
   const validPainPointIds = new Set(painPoints.map((painPoint) => painPoint.id));
-  const previousJtbds = buildLinkedItemMap<JtbdData>(data.jtbd as Array<JtbdData | string>);
+  const jtbdValues = data.jtbd ?? [];
+  const previousJtbds = buildLinkedItemMap<JtbdData>(jtbdValues as Array<JtbdData | string>);
   const jtbdBase = normalizeTraceableTextList({
-    values: data.jtbd,
+    values: jtbdValues,
     prefix: "jtbd",
-    previous: data.jtbd,
+    previous: jtbdValues,
   });
   const jtbd = jtbdBase.map((item, index) => {
-    const current = data.jtbd[index] as Partial<JtbdData> | string | undefined;
+    const current = jtbdValues[index] as Partial<JtbdData> | string | undefined;
     const previous = previousJtbds.get(item.id);
     return {
       id: item.id,
@@ -246,14 +254,15 @@ export function normalizeManifestoData(
     };
   });
   const validJtbdIds = new Set(jtbd.map((item) => item.id));
-  const previousHmw = buildLinkedItemMap<HmwData>(data.hmw as Array<HmwData | string>);
+  const hmwValues = data.hmw ?? [];
+  const previousHmw = buildLinkedItemMap<HmwData>(hmwValues as Array<HmwData | string>);
   const hmwBase = normalizeTraceableTextList({
-    values: data.hmw,
+    values: hmwValues,
     prefix: "hmw",
-    previous: data.hmw,
+    previous: hmwValues,
   });
   const hmw = hmwBase.map((item, index) => {
-    const current = data.hmw[index] as Partial<HmwData> | string | undefined;
+    const current = hmwValues[index] as Partial<HmwData> | string | undefined;
     const previous = previousHmw.get(item.id);
     return {
       id: item.id,

@@ -1,5 +1,83 @@
-import type { ManifestoData } from "../../hooks/useStrategyStore.ts";
+import type { HmwData, JtbdData, ManifestoData } from "../../hooks/useStrategyStore.ts";
 import { normalizeManifestoData } from "../strategy/artifact-edit-sync.ts";
+import type { TraceableTextItem } from "../strategy/traceable.ts";
+
+type StreamingPainPoint = Pick<TraceableTextItem, "text"> & Partial<Pick<TraceableTextItem, "id">>;
+type StreamingJtbd = Pick<JtbdData, "text"> & Partial<Pick<JtbdData, "id" | "painPointIds" | "personaNames">>;
+type StreamingHmw = Pick<HmwData, "text"> & Partial<Pick<HmwData, "id" | "painPointIds" | "jtbdIds">>;
+
+type ManifestoObjectArrayKey = "painPoints" | "jtbd" | "hmw";
+
+type StreamingManifestoObjectMap = {
+  painPoints: StreamingPainPoint;
+  jtbd: StreamingJtbd;
+  hmw: StreamingHmw;
+};
+
+type StreamingOverviewData = Omit<Partial<ManifestoData>, "painPoints" | "jtbd" | "hmw"> & {
+  painPoints?: Array<StreamingPainPoint | string>;
+  jtbd?: Array<StreamingJtbd | string>;
+  hmw?: Array<StreamingHmw | string>;
+};
+
+function isObjectWithText(value: unknown): value is { id?: unknown; text: string } {
+  return Boolean(value && typeof value === "object" && "text" in value && typeof value.text === "string");
+}
+
+function getStringArrayField(value: unknown, key: string): string[] | undefined {
+  if (!value || typeof value !== "object") return undefined;
+
+  const field = (value as Record<string, unknown>)[key];
+  return Array.isArray(field) ? field.filter((item): item is string => typeof item === "string") : undefined;
+}
+
+function buildStreamingManifestoObject<K extends ManifestoObjectArrayKey>(
+  key: K,
+  params: {
+    text: string;
+    id?: string;
+    painPointIds?: string[];
+    personaNames?: string[];
+    jtbdIds?: string[];
+  },
+): StreamingManifestoObjectMap[K] {
+  const { text, id, painPointIds, personaNames, jtbdIds } = params;
+
+  if (key === "painPoints") {
+    return { ...(id !== undefined ? { id } : {}), text } as StreamingManifestoObjectMap[K];
+  }
+
+  if (key === "jtbd") {
+    return {
+      ...(id !== undefined ? { id } : {}),
+      text,
+      ...(painPointIds !== undefined ? { painPointIds } : {}),
+      ...(personaNames !== undefined ? { personaNames } : {}),
+    } as StreamingManifestoObjectMap[K];
+  }
+
+  return {
+    ...(id !== undefined ? { id } : {}),
+    text,
+    ...(painPointIds !== undefined ? { painPointIds } : {}),
+    ...(jtbdIds !== undefined ? { jtbdIds } : {}),
+  } as StreamingManifestoObjectMap[K];
+}
+
+function parseStreamingManifestoObject<K extends ManifestoObjectArrayKey>(
+  key: K,
+  value: unknown,
+): StreamingManifestoObjectMap[K] | null {
+  if (!isObjectWithText(value)) return null;
+
+  return buildStreamingManifestoObject(key, {
+    text: value.text,
+    id: typeof value.id === "string" ? value.id : undefined,
+    painPointIds: getStringArrayField(value, "painPointIds"),
+    personaNames: getStringArrayField(value, "personaNames"),
+    jtbdIds: getStringArrayField(value, "jtbdIds"),
+  });
+}
 
 function extractJsonStringValue(content: string, key: string): string | undefined {
   const keyPattern = `"${key}"`;
@@ -83,10 +161,10 @@ function extractJsonArrayItems(content: string, key: string): string[] | undefin
   return items.length > 0 ? items : undefined;
 }
 
-function extractPartialManifestoObjectArray(
+function extractPartialManifestoObjectArray<K extends ManifestoObjectArrayKey>(
   content: string,
-  key: "painPoints" | "jtbd" | "hmw",
-): Array<Record<string, unknown>> | undefined {
+  key: K,
+): Array<StreamingManifestoObjectMap[K]> | undefined {
   const keyPattern = `"${key}"`;
   const keyIdx = content.indexOf(keyPattern);
   if (keyIdx === -1) return undefined;
@@ -96,7 +174,7 @@ function extractPartialManifestoObjectArray(
   if (i >= content.length) return undefined;
   i++;
 
-  const items: Array<Record<string, unknown>> = [];
+  const items: Array<StreamingManifestoObjectMap[K]> = [];
   let depth = 0;
   let inString = false;
   let escape = false;
@@ -128,8 +206,9 @@ function extractPartialManifestoObjectArray(
         const objStr = content.slice(objectStart, i + 1);
         try {
           const parsed = JSON.parse(objStr);
-          if (parsed?.text) {
-            items.push(parsed);
+          const streamingObject = parseStreamingManifestoObject(key, parsed);
+          if (streamingObject) {
+            items.push(streamingObject);
           }
         } catch {
           // Ignore malformed objects here; partial extraction below handles the final object.
@@ -145,39 +224,27 @@ function extractPartialManifestoObjectArray(
     const partialStr = content.slice(objectStart);
     const text = extractJsonStringValue(partialStr, "text");
     if (text) {
-      const partial: Record<string, unknown> = { text };
       const id = extractJsonStringValue(partialStr, "id");
-      if (id !== undefined) partial.id = id;
-
-      if (key !== "painPoints") {
-        const painPointIds = extractJsonArrayItems(partialStr, "painPointIds");
-        if (painPointIds !== undefined) partial.painPointIds = painPointIds;
-      }
-
-      if (key === "jtbd") {
-        const personaNames = extractJsonArrayItems(partialStr, "personaNames");
-        if (personaNames !== undefined) partial.personaNames = personaNames;
-      }
-
-      if (key === "hmw") {
-        const jtbdIds = extractJsonArrayItems(partialStr, "jtbdIds");
-        if (jtbdIds !== undefined) partial.jtbdIds = jtbdIds;
-      }
-
-      items.push(partial);
+      items.push(buildStreamingManifestoObject(key, {
+        text,
+        id,
+        painPointIds: key === "painPoints" ? undefined : extractJsonArrayItems(partialStr, "painPointIds"),
+        personaNames: key === "jtbd" ? extractJsonArrayItems(partialStr, "personaNames") : undefined,
+        jtbdIds: key === "hmw" ? extractJsonArrayItems(partialStr, "jtbdIds") : undefined,
+      }));
     }
   }
 
   return items.length > 0 ? items : undefined;
 }
 
-export function extractPartialOverview(text: string): Partial<ManifestoData> | null {
+export function extractPartialOverview(text: string): StreamingOverviewData | null {
   const marker = '```json type="manifesto"';
   const blockStart = text.indexOf(marker);
   if (blockStart === -1) return null;
 
   const content = text.slice(blockStart + marker.length);
-  const result: Partial<ManifestoData> = {};
+  const result: StreamingOverviewData = {};
 
   const title = extractJsonStringValue(content, "title");
   if (title !== undefined) result.title = title;
@@ -193,31 +260,31 @@ export function extractPartialOverview(text: string): Partial<ManifestoData> | n
 
   const linkedPainPoints = extractPartialManifestoObjectArray(content, "painPoints");
   if (linkedPainPoints !== undefined) {
-    result.painPoints = linkedPainPoints as ManifestoData["painPoints"];
+    result.painPoints = linkedPainPoints;
   } else {
     const painPoints = extractJsonArrayItems(content, "painPoints");
     if (painPoints !== undefined) {
-      result.painPoints = painPoints as unknown as ManifestoData["painPoints"];
+      result.painPoints = painPoints;
     }
   }
 
   const linkedJtbd = extractPartialManifestoObjectArray(content, "jtbd");
   if (linkedJtbd !== undefined) {
-    result.jtbd = linkedJtbd as ManifestoData["jtbd"];
+    result.jtbd = linkedJtbd;
   } else {
     const jtbd = extractJsonArrayItems(content, "jtbd");
     if (jtbd !== undefined) {
-      result.jtbd = jtbd as unknown as ManifestoData["jtbd"];
+      result.jtbd = jtbd;
     }
   }
 
   const linkedHmw = extractPartialManifestoObjectArray(content, "hmw");
   if (linkedHmw !== undefined) {
-    result.hmw = linkedHmw as ManifestoData["hmw"];
+    result.hmw = linkedHmw;
   } else {
     const hmw = extractJsonArrayItems(content, "hmw");
     if (hmw !== undefined) {
-      result.hmw = hmw as unknown as ManifestoData["hmw"];
+      result.hmw = hmw;
     }
   }
 
@@ -225,7 +292,7 @@ export function extractPartialOverview(text: string): Partial<ManifestoData> | n
 }
 
 export function shapeStreamingOverview(
-  partial: Partial<ManifestoData>,
+  partial: StreamingOverviewData,
   previous: Partial<ManifestoData> | null | undefined,
 ): Partial<ManifestoData> {
   const normalized = normalizeManifestoData({

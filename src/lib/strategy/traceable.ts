@@ -3,7 +3,12 @@ export interface TraceableTextItem {
   text: string;
 }
 
-export type TraceableTextLike = TraceableTextItem | string;
+export interface PartialTraceableTextItem {
+  id?: string;
+  text: string;
+}
+
+export type TraceableTextLike = TraceableTextItem | PartialTraceableTextItem | string;
 
 function randomId(): string {
   const uuid = globalThis.crypto?.randomUUID?.();
@@ -65,7 +70,7 @@ export function getTraceableTexts(values: TraceableTextLike[] | null | undefined
 export function normalizeTraceableTextList(params: {
   values: TraceableTextLike[] | null | undefined;
   prefix: string;
-  previous?: TraceableTextItem[] | null | undefined;
+  previous?: TraceableTextLike[] | null | undefined;
 }): TraceableTextItem[] {
   const { values, prefix, previous } = params;
   const previousItems = previous ?? [];
